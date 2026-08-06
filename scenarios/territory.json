@@ -1,0 +1,5 @@
+{
+  "win": "territory",
+  "regions": 16,
+  "max_ticks": 6000
+}

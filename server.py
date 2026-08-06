@@ -1,0 +1,255 @@
+#!/usr/bin/env python3
+"""Flotilla server — the whole package in one process, stdlib only.
+
+    export DO_INFERENCE_KEY=...        # your serverless-inference key
+    python3 server.py                  # http://127.0.0.1:8080
+
+Serves the dashboard + replay player + library, and RUNS games: the dashboard's
+Configure tab (or any agent) POSTs a run-config to /api/run and the server executes
+it with sim/run_config.py, files the results into the library, and refreshes the
+index. Agent-first API (all JSON; same schema as the GUI):
+
+  GET  /config-schema.json   every knob: type, default, bounds, doc
+  GET  /CONFIG.md            the same, human-readable
+  GET  /api/health           {ok, version, queue}
+  POST /api/run              run-config JSON (see sim/run_config.py docstring;
+                             optional "name" labels the result in the library)
+                             -> {job}   jobs queue FIFO, one runs at a time
+  GET  /api/runs             recent jobs with state + log tail
+  POST /api/import           raw replay JSON in the body (?name=...) -> library
+
+Auth: none on the loopback default — put a reverse proxy with auth in front for
+public serving (see deploy/). Bind elsewhere with FLOTILLA_BIND=0.0.0.0:8080.
+"""
+import json
+import os
+import re
+import shutil
+import subprocess
+import sys
+import threading
+import time
+import urllib.parse
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, os.path.join(HERE, "sim"))
+sys.path.insert(0, os.path.join(HERE, "scripts"))
+import config_schema                    # noqa: E402
+from libindex import build_index        # noqa: E402
+
+LIB = os.path.abspath(os.environ.get("FLOTILLA_LIBRARY",
+                                     os.path.join(HERE, "library")))
+BIND = os.environ.get("FLOTILLA_BIND", "127.0.0.1:8080")
+VERSION = open(os.path.join(HERE, "VERSION")).read().strip() \
+    if os.path.exists(os.path.join(HERE, "VERSION")) else "dev"
+
+JOBS = []                               # newest last; dicts, lock-guarded
+JOBS_LOCK = threading.Lock()
+RUN_QUEUE = threading.Semaphore(int(os.environ.get("FLOTILLA_CONCURRENT_RUNS", "1")))
+
+
+def _san(name):
+    return re.sub(r"[^a-zA-Z0-9 _.-]", "", str(name)).strip().replace(" ", "-")[:60]
+
+
+def _job(jid):
+    with JOBS_LOCK:
+        return next((j for j in JOBS if j["id"] == jid), None)
+
+
+def _persist_jobs():
+    with JOBS_LOCK:
+        snap = [dict(j, log=j["log"][-30:]) for j in JOBS[-100:]]
+    with open(os.path.join(LIB, "jobs.json"), "w") as fh:
+        json.dump(snap, fh, indent=1)
+
+
+def _normalize_results(job, outdir):
+    """File a finished run's artifacts into the library under its name."""
+    mode, name = job["mode"], job["name"]
+    if mode == "match":
+        dst = os.path.join(LIB, "matches", f"{name}.json")
+        os.makedirs(os.path.dirname(dst), exist_ok=True)
+        shutil.move(os.path.join(outdir, "match.json"), dst)
+    elif mode == "series":
+        dst = os.path.join(LIB, "series", name)
+        shutil.rmtree(dst, ignore_errors=True)
+        shutil.move(outdir, dst)
+    else:
+        dst = os.path.join(LIB, "tournaments", name)
+        shutil.rmtree(dst, ignore_errors=True)
+        shutil.move(outdir, dst)
+
+
+def _run_job(job, cfg):
+    with RUN_QUEUE:
+        job["state"] = "running"
+        job["started"] = time.time()
+        _persist_jobs()
+        outdir = os.path.join(LIB, "_work", job["id"])
+        os.makedirs(outdir, exist_ok=True)
+        cfg["outdir"] = outdir
+        cfgpath = os.path.join(outdir, "run-config.json")
+        with open(cfgpath, "w") as fh:
+            json.dump(cfg, fh, indent=1)
+        try:
+            p = subprocess.Popen([sys.executable,
+                                  os.path.join(HERE, "sim", "run_config.py"), cfgpath],
+                                 stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                                 text=True, cwd=HERE)
+            for line in p.stdout:
+                job["log"].append(line.rstrip()[:400])
+                if '"winner"' in line:
+                    job["games_done"] += 1
+                _persist_jobs()
+            rc = p.wait()
+            if rc != 0:
+                raise RuntimeError(f"runner exited {rc}: {job['log'][-1] if job['log'] else ''}")
+            _normalize_results(job, outdir)
+            build_index(LIB)
+            job["state"] = "done"
+        except Exception as e:
+            job["state"] = "failed"
+            job["error"] = str(e)[:300]
+        finally:
+            job["finished"] = time.time()
+            shutil.rmtree(os.path.join(LIB, "_work", job["id"]), ignore_errors=True)
+            _persist_jobs()
+
+
+def submit_run(cfg):
+    mode = cfg.get("mode", "match")
+    if mode not in ("match", "series", "tournament"):
+        raise ValueError(f"mode must be match|series|tournament, got {mode!r}")
+    config_schema.resolve(cfg.get("scenario") or {})        # loud validation up front
+    bots = cfg.get("participants" if mode == "tournament" else "bots") or []
+    if not (2 <= len(bots) <= 4) and mode != "tournament":
+        raise ValueError("need 2-4 fleets")
+    if mode == "tournament" and len(bots) < 2:
+        raise ValueError("need >=2 participants")
+    jid = time.strftime("%Y%m%d-%H%M%S") + f"-{os.urandom(2).hex()}"
+    name = _san(cfg.get("name") or f"{mode}-{jid}")
+    exp = 1
+    if mode == "series":
+        exp = int((cfg.get("series") or {}).get("games", 3))
+    job = dict(id=jid, name=name, mode=mode, state="queued", games_done=0,
+               games_expected=exp, submitted=time.time(), started=None,
+               finished=None, error=None, log=[])
+    with JOBS_LOCK:
+        JOBS.append(job)
+    _persist_jobs()
+    threading.Thread(target=_run_job, args=(job, dict(cfg)), daemon=True).start()
+    return job
+
+
+ROUTES_STATIC = {
+    "/": ("dash/dashboard.html", "text/html"),
+    "/index.html": ("dash/dashboard.html", "text/html"),
+    "/player.html": ("viewer/index.html", "text/html"),
+}
+
+
+class H(BaseHTTPRequestHandler):
+    def _send(self, code, body, ctype="application/json"):
+        data = body if isinstance(body, bytes) else \
+            (body if isinstance(body, str) else json.dumps(body)).encode()
+        self.send_response(code)
+        self.send_header("Content-Type", ctype)
+        self.send_header("Content-Length", str(len(data)))
+        self.send_header("Cache-Control", "no-store")
+        self.end_headers()
+        self.wfile.write(data)
+
+    def log_message(self, *a):
+        pass
+
+    def do_GET(self):
+        path = urllib.parse.urlparse(self.path).path
+        if path in ROUTES_STATIC:
+            rel, ct = ROUTES_STATIC[path]
+            return self._send(200, open(os.path.join(HERE, rel), "rb").read(), ct)
+        if path == "/config-schema.json":
+            return self._send(200, config_schema.schema_json())
+        if path == "/CONFIG.md":
+            return self._send(200, config_schema.config_md(), "text/markdown")
+        if path == "/api/health":
+            with JOBS_LOCK:
+                q = sum(1 for j in JOBS if j["state"] in ("queued", "running"))
+            return self._send(200, {"ok": True, "version": VERSION, "queue": q,
+                                    "runs_enabled": bool(os.environ.get("DO_INFERENCE_KEY"))
+                                    or True})
+        if path == "/api/runs":
+            with JOBS_LOCK:
+                out = [dict(j, log=j["log"][-8:]) for j in JOBS[-20:]][::-1]
+            return self._send(200, {"jobs": out})
+        if path == "/index.json":
+            p = os.path.join(LIB, "index.json")
+            if not os.path.exists(p):
+                build_index(LIB)
+            return self._send(200, open(p, "rb").read())
+        # library files: replays/<match.json> | replays/<series>/<g.json> |
+        # tournaments/... | bundles/...
+        m = re.match(r"^/replays/([^/]+)$", path)
+        if m:
+            return self._file(os.path.join(LIB, "matches", m.group(1)))
+        m = re.match(r"^/replays/([^/]+)/([^/]+)$", path)
+        if m:
+            return self._file(os.path.join(LIB, "series", m.group(1), m.group(2)))
+        m = re.match(r"^/(tournaments|bundles)/(.+)$", path)
+        if m:
+            safe = os.path.normpath(m.group(2))
+            if safe.startswith(".."):
+                return self._send(404, {"error": "no"})
+            ct = "text/html" if safe.endswith(".html") else "application/json"
+            return self._file(os.path.join(LIB, m.group(1), safe), ct)
+        return self._send(404, {"error": "not found"})
+
+    def _file(self, p, ctype="application/json"):
+        if not os.path.isfile(p):
+            return self._send(404, {"error": "not found"})
+        return self._send(200, open(p, "rb").read(), ctype)
+
+    def do_POST(self):
+        path = urllib.parse.urlparse(self.path).path
+        try:
+            n = int(self.headers.get("Content-Length", 0))
+            if n > 90_000_000:
+                return self._send(413, {"error": "too large"})
+            body = self.rfile.read(n)
+            if path == "/api/run":
+                cfg = json.loads(body)
+                job = submit_run(cfg)
+                return self._send(202, {"job": dict(job, log=[])})
+            if path == "/api/import":
+                qs = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
+                name = _san((qs.get("name") or ["imported"])[0]) or "imported"
+                rp = json.loads(body)
+                assert "frames" in rp and "result" in rp, "not a flotilla replay"
+                os.makedirs(os.path.join(LIB, "matches"), exist_ok=True)
+                with open(os.path.join(LIB, "matches", f"{name}.json"), "w") as fh:
+                    json.dump(rp, fh, separators=(",", ":"))
+                build_index(LIB)
+                return self._send(200, {"ok": True, "file": f"replays/{name}.json"})
+            return self._send(404, {"error": "not found"})
+        except (ValueError, KeyError, AssertionError) as e:
+            return self._send(400, {"error": str(e)})
+        except Exception as e:
+            return self._send(500, {"error": str(e)[:300]})
+
+
+def main():
+    os.makedirs(LIB, exist_ok=True)
+    for d in ("matches", "series", "tournaments", "bundles"):
+        os.makedirs(os.path.join(LIB, d), exist_ok=True)
+    build_index(LIB)
+    host, port = BIND.rsplit(":", 1)
+    if not os.environ.get("DO_INFERENCE_KEY"):
+        print("NOTE: DO_INFERENCE_KEY not set — scripted-bot runs only until you export it.")
+    srv = ThreadingHTTPServer((host, int(port)), H)
+    print(f"Flotilla server {VERSION} — http://{BIND}  (library: {LIB})")
+    srv.serve_forever()
+
+
+if __name__ == "__main__":
+    main()
