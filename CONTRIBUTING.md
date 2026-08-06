@@ -30,7 +30,9 @@ cd ..
 python3 tests/test_server.py           # HTTP endpoints (in-process server)
 ```
 
-All stdlib, no pytest needed. CI runs exactly these.
+All stdlib, no pytest needed. The CI workflow runs exactly these (note: Actions
+may be disabled on the upstream repo by org policy — it runs fine on forks, and
+every upstream release is gated on the same suite before it ships).
 
 ## The one rule that matters: the schema is the single source of truth
 
