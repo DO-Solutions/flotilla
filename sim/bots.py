@@ -114,12 +114,18 @@ class Corsair:
                 staged = sum(1 for s in you["ships"]
                              if s["squad"] == "E" and s["role"] != "assault")
                 if staged >= 5:
-                    # the wave is massed at the staging point — hoist signals so the flip
-                    # to assault reaches them AT SEA (they never visit port). Next window
-                    # the standing order reverts to staging, so new builds mass again.
+                    # the wave is massed — flip E to assault. In custom signal mode the
+                    # hoist reaches them at sea instantly; otherwise hoist RETURN so the
+                    # wave cycles through the harbor circle, collects the assault order,
+                    # and sails. Pending stays "assault" until ships carry it (staged
+                    # counts E ships whose role isn't assault yet), so the recall loop
+                    # converges; cooldown paces re-hoists.
                     orders["E"] = dict(role="assault", rally=hb, aggression=3,
                                        retreat_hull_pct=15, target_fleet=target)
-                    signal = True
+                    if summary["scenario"].get("signal_mode", "custom") == "custom":
+                        signal = True
+                    else:
+                        signal = {"return": ["E"]}
                     th = f"Signals up: strike wave of {staged} — burn fleet {target}'s flagship!"
                 else:
                     orders["E"] = dict(role="guard", rally=staging, aggression=1,

@@ -12,6 +12,10 @@ index. Agent-first API (all JSON; same schema as the GUI):
   GET  /config-schema.json   every knob: type, default, bounds, doc
   GET  /CONFIG.md            the same, human-readable
   GET  /api/health           {ok, version, queue}
+  GET  /api/models           {models: [...ids from the inference endpoint...],
+                             scripted: [...built-in bots...]}  (cached 10 min)
+  GET  /api/prompts          saved operator prompts {name: text}
+  POST /api/prompts          {"name": ..., "text": ...} saves (empty text deletes)
   POST /api/run              run-config JSON (see sim/run_config.py docstring;
                              optional "name" labels the result in the library)
                              -> {job}   jobs queue FIFO, one runs at a time
@@ -168,6 +172,44 @@ ROUTES_STATIC = {
     "/player.html": ("viewer/index.html", "text/html"),
 }
 
+MODELS_CACHE = {"at": 0.0, "ids": []}
+SCRIPTED_BOTS = ["merchant", "corsair", "admiralty", "turtle"]
+
+
+def _models():
+    """Model ids available on the configured inference endpoint (cached 10 min)."""
+    import urllib.request
+    key = os.environ.get("DO_INFERENCE_KEY", "")
+    now = time.time()
+    if now - MODELS_CACHE["at"] < 600:
+        return MODELS_CACHE["ids"]
+    ids = []
+    if key:
+        try:
+            base = os.environ.get("DO_INFERENCE_BASE", "https://inference.do-ai.run/v1")
+            req = urllib.request.Request(base + "/models",
+                                         headers={"Authorization": f"Bearer {key}"})
+            with urllib.request.urlopen(req, timeout=15) as r:
+                d = json.load(r)
+            ids = sorted(m.get("id", "") for m in d.get("data", []) if m.get("id"))
+        except Exception:
+            ids = []
+    MODELS_CACHE.update(at=now, ids=ids)
+    return ids
+
+
+def _prompts_path():
+    return os.path.join(LIB, "prompts.json")
+
+
+def _load_prompts():
+    try:
+        with open(_prompts_path()) as fh:
+            d = json.load(fh)
+        return d if isinstance(d, dict) else {}
+    except Exception:
+        return {}
+
 
 class H(BaseHTTPRequestHandler):
     def _send(self, code, body, ctype="application/json"):
@@ -198,6 +240,10 @@ class H(BaseHTTPRequestHandler):
             return self._send(200, {"ok": True, "version": VERSION, "queue": q,
                                     "runs_enabled": bool(os.environ.get("DO_INFERENCE_KEY"))
                                     or True})
+        if path == "/api/models":
+            return self._send(200, {"models": _models(), "scripted": SCRIPTED_BOTS})
+        if path == "/api/prompts":
+            return self._send(200, _load_prompts())
         if path == "/api/runs":
             with JOBS_LOCK:
                 out = [dict(j, log=j["log"][-8:]) for j in JOBS[-20:]][::-1]
@@ -259,6 +305,20 @@ class H(BaseHTTPRequestHandler):
                     j["finished"] = time.time()
                 _persist_jobs()
                 return self._send(200, {"ok": True, "state": j["state"]})
+            if path == "/api/prompts":
+                d = json.loads(body)
+                name = _san(str(d.get("name", "")))[:40]
+                text = str(d.get("text", ""))[:8000]
+                if not name:
+                    return self._send(400, {"error": "prompt needs a name"})
+                prompts = _load_prompts()
+                if text.strip():
+                    prompts[name] = text
+                else:
+                    prompts.pop(name, None)
+                with open(_prompts_path(), "w") as fh:
+                    json.dump(prompts, fh, indent=1)
+                return self._send(200, prompts)
             if path == "/api/rename":
                 d = json.loads(body)
                 name = os.path.basename(str(d.get("series", "")))

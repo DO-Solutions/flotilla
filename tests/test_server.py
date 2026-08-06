@@ -110,6 +110,19 @@ ok(st == 400, "cancelling a settled job -> 400")
 st, r = req("/api/import?name=imported-one", rp)
 ok(st == 200 and r["ok"], "import replay")
 
+st, r = req("/api/models")
+ok(st == 200 and r["scripted"] == ["merchant", "corsair", "admiralty", "turtle"]
+   and isinstance(r["models"], list), "models endpoint answers (scripted + list)")
+
+st, r = req("/api/prompts", {"name": "trade first", "text": "Favor trade over war."})
+ok(st == 200 and r.get("trade-first") == "Favor trade over war.", "prompt saved")
+st, r = req("/api/prompts")
+ok(st == 200 and "trade-first" in r, "prompt listed")
+st, r = req("/api/prompts", {"name": "trade first", "text": ""})
+ok(st == 200 and "trade-first" not in r, "empty text deletes the prompt")
+st, r = req("/api/prompts", {"name": "", "text": "x"})
+ok(st == 400, "unnamed prompt rejected")
+
 srv.shutdown()
 shutil.rmtree(TMP, ignore_errors=True)
 print("FAILURES:", fails)

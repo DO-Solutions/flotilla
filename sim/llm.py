@@ -44,9 +44,12 @@ center and current holder.
 MECHANICS
 - Grid map (size in scenario.rules). Your flagship sits in your harbor; if it is \
 destroyed you are OUT and lose all ships.
-- Ships belong to squadrons A-F. Orders are PER-SQUADRON and reach ships only when they \
-visit your harbor — OR hoist a signal (cost/cooldown in scenario.rules) to push current \
-orders to ALL your ships at sea instantly. New ships get the squadron's orders at spawn.
+- Ships belong to squadrons A-F. Orders are PER-SQUADRON and reach ships only inside \
+your harbor circle — once at sea they run on the orders they left with. SIGNAL FLAGS \
+are your only channel to ships at sea, and what a flag can say THIS match (return-only \
+recall / named preset flags / full orders push) is defined in scenario.rules together \
+with the exact hoist JSON shape — read it, the mode VARIES between matches. New ships \
+get the squadron's standing orders at spawn.
 - Build ships (cost + build time in scenario.rules, queue max 3): \
 trader (speed3 hold5 — the cargo hauler), raider (speed4 guns3 — fast hunter), \
 frigate (guns4 armor3 — strong but slow escort), scout (speed5 lookout3 — vision).
@@ -58,7 +61,13 @@ assault (attack target_fleet's FLAGSHIP directly — needs mass to break defense
 3 engage anything. retreat_hull_pct: go home to repair below this hull %.
 - Fog of war: you see only what your ships see. Node "believed" values are your \
 charts' estimates. fish nodes REGENERATE slowly; wrecks are finite; sunk laden ships \
-drop their cargo as wrecks.
+drop their cargo as wrecks. state.enemies is your CONTACT PLOT: entries carry age_s = \
+seconds since your fleet last saw that ship (0 = in sight right now). Stale contacts \
+keep their last-known position/type/load — the ship may have moved or sunk unseen.
+- MEMORY: your prompt carries your CAMPAIGN JOURNAL (every thought you recorded this \
+game) and the FULL PARLEY TRANSCRIPT (every message sent and received). Deals, threats, \
+and promises are all on the record — check the transcript before you act on or against \
+an agreement.
 - Economy truths: a trader pays for itself within a few trips on nearby grounds. \
 Raiding denies rivals AND drops their cargo where you can scoop it. Defenders near \
 your traders stop raids (workers won't flee threats your escorts cover).
@@ -88,7 +97,8 @@ except thoughts):
 
 class LLMAdmiral:
     def __init__(self, model_id, label=None, temperature=0.2, max_tokens=700,
-                 timeout=45, think=False):
+                 timeout=45, think=False, history_chars=8000, memo_chars=1200,
+                 prompt=""):
         self.model_id = model_id
         self.model_label = label or model_id
         self.name = self.model_label
@@ -96,10 +106,49 @@ class LLMAdmiral:
         self.max_tokens = max_tokens
         self.timeout = timeout
         self.think = think
+        self.history_chars = history_chars
+        self.memo_chars = memo_chars
+        self.custom_prompt = str(prompt or "")[:memo_chars]
+        self.system = SYSTEM + (
+            "\n\nOPERATOR DIRECTIVE (from the human who configured you — follow it "
+            "within the rules of the game):\n" + self.custom_prompt
+            if self.custom_prompt else "")
         self.api_key = os.environ.get("DO_INFERENCE_KEY", "")
         self.price = PRICES.get(model_id, (0.0, 0.0))
-        self._last_thoughts = []
+        self._last_thoughts = []         # [(window, thought)] — the campaign journal
         self.notes = ""                  # series mode: strategy memo from prior games
+
+    def _history(self, parley_log):
+        """The append-only memory block: campaign journal + full parley transcript,
+        oldest-first, char-capped (oldest dropped). Append-only ordering keeps the
+        prompt prefix stable across windows for provider-side prompt caching."""
+        if self.history_chars <= 0:
+            return ""
+        budget = self.history_chars
+        plines = [f"w{m['w']} " + (f"to {m['to']}" if "to" in m else f"from {m['frm']}")
+                  + f": {m['text']}" for m in parley_log]
+        jlines = [f"w{w}: {t}" for w, t in self._last_thoughts]
+
+        def fit(lines, cap):
+            out, used = [], 0
+            for ln in reversed(lines):               # keep newest, drop oldest
+                if used + len(ln) + 1 > cap:
+                    out.append("(…older entries dropped…)")
+                    break
+                out.append(ln)
+                used += len(ln) + 1
+            return list(reversed(out)), used
+
+        pfit, pused = fit(plines, budget // 2)
+        jfit, _ = fit(jlines, budget - pused)
+        parts = []
+        if jfit:
+            parts.append("=== YOUR CAMPAIGN JOURNAL (your own past thoughts) ===\n"
+                         + "\n".join(jfit))
+        if pfit:
+            parts.append("=== PARLEY TRANSCRIPT (all messages, both directions) ===\n"
+                         + "\n".join(pfit))
+        return ("\n\n".join(parts) + "\n\n") if parts else ""
 
     # ---------- transport ----------
     def _chat(self, messages):
@@ -152,14 +201,17 @@ class LLMAdmiral:
 
     # ---------- the admiral ----------
     def decide(self, summary, rng):
-        memo = (f"\nYour strategy memo from earlier games in this series:\n{self.notes}\n"
+        summary = dict(summary)
+        plog = summary.pop("parley_log", [])
+        # prompt order: stable → append-only → volatile (cache-friendly prefix)
+        memo = (f"Your strategy memo from earlier games in this series:\n{self.notes}\n\n"
                 if self.notes else "")
-        user = (f"Window {summary['window']}. Game state:\n"
+        user = (memo
+                + self._history(plog)
+                + f"=== CURRENT STATE — window {summary['window']} ===\n"
                 + json.dumps(summary, separators=(",", ":"))
-                + memo
-                + "\nYour recent thoughts: " + json.dumps(self._last_thoughts[-2:])
                 + "\nReply with your decision JSON only.")
-        msgs = [{"role": "system", "content": SYSTEM},
+        msgs = [{"role": "system", "content": self.system},
                 {"role": "user", "content": user}]
         tin = tout = ms = 0
         err = None
@@ -185,7 +237,7 @@ class LLMAdmiral:
             actions = {"thoughts": "(reply was not an object; standing orders continue)"}
         th = str(actions.get("thoughts", ""))[:400]
         if th and not th.startswith("(missed"):
-            self._last_thoughts.append(th)
+            self._last_thoughts.append((summary.get("window", 0), th))
         cost = (tin * self.price[0] + tout * self.price[1]) / 1e6
         actions["_usage"] = dict(model=self.model_label, tin=tin, tout=tout, ms=ms,
                                  cost=round(cost, 6), err=err)
@@ -197,23 +249,31 @@ class LLMAdmiral:
         game. Same fairness rules: every model gets the same debrief framing.
         Not latency-critical: 300s timeout + one retry (the 45s decide() timeout
         cost Qwen and K3 their game-1 memos in the first 4-model series)."""
+        cap = self.memo_chars
         msgs = [
-            {"role": "system", "content": SYSTEM + "\n\nThe game just ended. You are "
-             "between games in a series against the same opponents on the same map. "
+            {"role": "system", "content": self.system + "\n\nThe game just ended. You "
+             "are between games in a series against the same opponents on the same map. "
              "Study the record and write a STRATEGY MEMO to your future self for the "
-             "next game: what worked, what failed, what to do differently. Plain text, "
-             "max 1200 characters. Reply with ONLY the memo text."},
+             "next game: what worked, what failed, what to do differently. Plain text. "
+             f"HARD LIMIT: {cap} characters — your memo is stored VERBATIM and cut at "
+             f"exactly {cap} chars, so finish inside the limit. Terse beats truncated: "
+             "a memo that ends mid-sentence loses its conclusions. "
+             "Reply with ONLY the memo text."},
             {"role": "user", "content": digest
              + ("\n\nYour previous memo:\n" + self.notes if self.notes else "")},
         ]
         keep = self.timeout
+        keep_max = self.max_tokens
         try:
             self.timeout = 300
+            self.max_tokens = max(600, min(4000, cap // 2))  # headroom past the cap
             try:
                 text, tin, tout, ms = self._chat(msgs)
             except Exception:
                 text, tin, tout, ms = self._chat(msgs)   # one retry
-            memo = text.strip()[:1200]
+            memo = text.strip()
+            if len(memo) > cap:
+                memo = memo[:cap - 12] + " …[cut@limit]"
             if memo:
                 self.notes = memo
             cost = (tin * self.price[0] + tout * self.price[1]) / 1e6
@@ -224,3 +284,4 @@ class LLMAdmiral:
                         err=f"{type(e).__name__}: {e}")
         finally:
             self.timeout = keep
+            self.max_tokens = keep_max

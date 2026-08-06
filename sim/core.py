@@ -4,6 +4,7 @@ Determinism contract: integer state only, seeded random.Random, ships iterated i
 order, no wall-clock anywhere. Same seed + same admiral decisions => identical match
 (verified by the harness double-run hash).
 """
+import json
 import random
 from concurrent.futures import ThreadPoolExecutor
 
@@ -62,7 +63,7 @@ def sign(v):
 class Ship:
     __slots__ = ("id", "fleet", "squad", "x", "y", "stats", "hull", "hull_max",
                  "cargo", "move_acc", "volley_cd", "attackers", "wp_i", "preset", "orders",
-                 "intent", "node_id", "haul_home")
+                 "intent", "node_id", "haul_home", "recall")
 
     def __init__(self, sid, fleet, squad, x, y, preset):
         self.id = sid
@@ -78,6 +79,7 @@ class Ship:
         self.volley_cd = 0
         self.attackers = set()
         self.wp_i = 0
+        self.recall = False                 # return-to-port flag hoisted for this ship
         self.orders = dict(DEFAULT_ORDER)   # per-ship copy; refreshed in port / by signal
         self.intent = ""                    # human/agent-readable "what am I doing"
         self.node_id = None                 # committed forage target (stops flip-flopping)
@@ -115,7 +117,9 @@ class Fleet:
         self.build_t = 0
         self.signal_cd = 0
         self.node_mem = {}                 # node id -> (last seen remaining, tick seen)
+        self.contacts = {}                 # enemy ship id -> last-sighting record
         self.inbox = []                    # parley messages, delivered at next window
+        self.parley_log = []               # full transcript, both directions
         self.territory = 0                 # territory-mode control points
         self.recent_hits = 0               # hits taken since last window (bot signal)
 
@@ -155,6 +159,7 @@ class Engine:
         self.cfg = _resolve_cfg(scenario)
         c = self.cfg
         self.W, self.H = c["width"], c["height"]
+        self.hr = c["harbor_r"]
         self.max_ticks = max_ticks if max_ticks is not None else c["max_ticks"]
         if not c["description"]:
             if c["win"] == "territory":
@@ -170,17 +175,51 @@ class Engine:
                     f"Timed match: score = cargo hauled to port + {c['kill_score']}/enemy "
                     f"ship sunk + {c['flag_kill_score']}/flagship destroyed. Highest "
                     "score at the bell wins; losing your flagship eliminates you.")
+        self.signal_presets = {}
+        if c["signal_presets"]:
+            self.signal_presets = json.loads(c["signal_presets"])   # invalid = fail loud
+            if not isinstance(self.signal_presets, dict):
+                raise ValueError("signal_presets must be a JSON object of named flags")
+        sig_rules = (f"SIGNAL FLAGS (cost {c['signal_cost']} cargo, cooldown "
+                     f"{c['signal_cd']} windows): ")
+        if c["signal_mode"] == "return_only":
+            sig_rules += (
+                'the ONLY flag is RETURN TO PORT — hoist {"signal": {"return": "all"}} '
+                'or {"signal": {"return": ["A","C"]}}. Recalled ships sail straight '
+                "home, collect your latest standing orders inside the harbor circle, "
+                "then execute them. There is NO instant orders-push: outside the "
+                "circle, ships run on the orders they left with")
+        elif c["signal_mode"] == "preset":
+            sig_rules += (
+                'RETURN TO PORT ({"signal": {"return": "all" or [squads]}}) plus your '
+                f"pre-defined flags {list(self.signal_presets)} — hoist "
+                '{"signal": {"hoist": "<FlagName>"}} to apply that flag\'s baked-in '
+                "orders to its squads instantly at sea. No other message can be "
+                "signalled")
+        else:
+            sig_rules += (
+                'hoist {"signal": true} to push your CURRENT standing orders to every '
+                'ship at sea instantly, or {"signal": {"return": "all" or [squads]}} '
+                "to recall ships to port")
         c["rules"] = (
             f"map {self.W}x{self.H}; decision window every {c['window'] / 10:g}s; match "
             f"ends t={self.max_ticks}; ships cost {c['ship_cost']} cargo, build in "
-            f"{c['build_ticks'] / 10:g}s (queue max 3); signal hoist costs "
-            f"{c['signal_cost']} cargo, cooldown {c['signal_cd']} windows; gather 1 "
+            f"{c['build_ticks'] / 10:g}s (queue max 3); {sig_rules}; gather 1 "
             f"cargo/{c['gather_period']} ticks; fish shoals regen 1 cargo/"
             f"{c['fish_regen_period'] / 10:g}s; docked repair 2 hull/"
-            f"{c['repair_period']} ticks; flagship hull {c['flag_hull']}.")
+            f"{c['repair_period']} ticks; flagship hull {c['flag_hull']}; your harbor "
+            f"circle (radius {c['harbor_r']}) is your COMMAND RADIUS — any of your ships "
+            "inside it deposits cargo, repairs, and picks up your latest standing orders"
+            + (f"; enemy CONTACTS persist on your plot {c['contact_ttl'] / 10:g}s after "
+               "last sighting — state.enemies entries with age_s>0 are stale last-known "
+               "positions (the ship may have moved or sunk unseen)"
+               if c["contact_ttl"] > 0 else "") + ".")
         self.scenario = dict(win=c["win"], description=c["description"],
                              rules=c["rules"], regions=c["regions"],
-                             max_ticks=self.max_ticks)
+                             max_ticks=self.max_ticks,
+                             signal_mode=c["signal_mode"],
+                             signal_flags=sorted(self.signal_presets)
+                             if c["signal_mode"] == "preset" else [])
         self.t = 0
         self.next_ship_id = 1
         self.next_node_id = 1
@@ -329,13 +368,27 @@ class Engine:
                             hull_pct=(s.hull * 100) // s.hull_max, cargo=s.cargo,
                             role=s.orders["role"]))
         enemies = []
-        for s in self.ships.values():
-            if s.fleet == fleet.id:
-                continue
-            if self._fleet_sees(fleet, s.x, s.y):
-                enemies.append(dict(fleet=s.fleet, admiral=self.fleets[s.fleet].name,
-                                    preset=s.preset, x=s.x, y=s.y,
-                                    cargo_laden=s.cargo > 0))
+        if self.cfg["contact_ttl"] > 0:
+            # the accumulated plot: live sightings (age_s 0) + stale contacts at
+            # their last-known position — everything the FLEET saw since last window
+            for rec in fleet.contacts.values():
+                age = self.t - rec["t"]
+                enemies.append(dict(fleet=rec["fleet"],
+                                    admiral=self.fleets[rec["fleet"]].name,
+                                    preset=rec["preset"], x=rec["x"], y=rec["y"],
+                                    cargo_laden=rec["laden"],
+                                    age_s=round(age / 10, 1)))
+            enemies.sort(key=lambda e: e["age_s"])
+            del enemies[60:]
+        else:
+            for s in self.ships.values():
+                if s.fleet == fleet.id:
+                    continue
+                if self._fleet_sees(fleet, s.x, s.y):
+                    enemies.append(dict(fleet=s.fleet,
+                                        admiral=self.fleets[s.fleet].name,
+                                        preset=s.preset, x=s.x, y=s.y,
+                                        cargo_laden=s.cargo > 0, age_s=0.0))
         for n in self.nodes.values():
             if self._fleet_sees(fleet, n.x, n.y):
                 fleet.node_mem[n.id] = (n.remaining, self.t)
@@ -347,8 +400,9 @@ class Engine:
                                    if self.region_owner[r["id"]] is not None else None))
                        for r in self.regions] if self.regions else None
         out = dict(
-            scenario=dict(win=self.scenario["win"],
-                          description=self.scenario["description"]),
+            # full scenario incl. rules — SYSTEM directs admirals to scenario.rules
+            # for exact numbers (a prior refactor silently dropped it; fixed 2026-08-06)
+            scenario=dict(self.scenario),
             t=self.t, window=self.t // self.cfg['window'], messages=messages, you=dict(
                 fleet=fleet.id, cargo=fleet.cargo, bank=fleet.bank, kills=fleet.kills,
                 flag_hull=fleet.flag_hull, harbor=(fleet.hx, fleet.hy),
@@ -356,6 +410,7 @@ class Engine:
                 recent_hits=fleet.recent_hits,
                 orders={k: dict(v) for k, v in fleet.pending.items()}),
             enemies=enemies, nodes=nodes,
+            parley_log=fleet.parley_log[-200:],
             admirals={f.id: f.name for f in self.fleets.values()},
             scores={f.id: f.score() for f in self.fleets.values()},
             harbors={f.id: (f.hx, f.hy) for f in self.fleets.values() if f.alive},
@@ -375,42 +430,75 @@ class Engine:
         return val
 
     def _fleet_sees(self, fleet, x, y):
-        if cheb(x, y, fleet.hx, fleet.hy) <= HARBOR_R + 4:
+        if cheb(x, y, fleet.hx, fleet.hy) <= self.hr + 4:
             return True
         for s in self.ships.values():
             if s.fleet == fleet.id and cheb(x, y, s.x, s.y) <= s.vision:
                 return True
         return False
 
+    def _update_contacts(self):
+        """Accumulate the admiral's plot every tick: ships see enemies continuously
+        between windows, and the admiral must know what its fleet knew — not just
+        whatever happened to be in sight at the 1-in-window snapshot."""
+        if self.cfg["contact_ttl"] <= 0:
+            return
+        t = self.t
+        ttl = self.cfg["contact_ttl"]
+        own = {f.id: [] for f in self.fleets.values() if f.alive}
+        for s in self.ships.values():
+            if s.fleet in own:
+                own[s.fleet].append(s)
+        for f in self.fleets.values():
+            if not f.alive:
+                continue
+            mine = own[f.id]
+            for s in self.ships.values():
+                if s.fleet == f.id:
+                    continue
+                if cheb(s.x, s.y, f.hx, f.hy) <= self.hr + 4 \
+                        or any(cheb(s.x, s.y, o.x, o.y) <= o.vision for o in mine):
+                    f.contacts[s.id] = dict(fleet=s.fleet, preset=s.preset,
+                                            x=s.x, y=s.y, laden=s.cargo > 0, t=t)
+            for sid in [k for k, v in f.contacts.items() if t - v["t"] > ttl]:
+                del f.contacts[sid]
+
     # ---------- admiral actions ----------
+    def _clean_order(self, fleet, od):
+        """Sanitize one order dict from an admiral (or a signal preset) into a
+        bounded, engine-safe standing order. None = rejected."""
+        if not isinstance(od, dict) or od.get("role") not in ROLES:
+            return None
+        clean = dict(DEFAULT_ORDER)
+        clean["role"] = od["role"]
+        r = od.get("rally")
+        if isinstance(r, (list, tuple)) and len(r) == 2:
+            try:
+                clean["rally"] = (max(0, min(self.W - 1, int(r[0]))),
+                                  max(0, min(self.H - 1, int(r[1]))))
+            except (TypeError, ValueError):
+                pass
+        try:
+            clean["aggression"] = max(0, min(3, int(od.get("aggression",
+                                                           clean["aggression"]))))
+            clean["retreat_hull_pct"] = max(0, min(90, int(od.get("retreat_hull_pct",
+                                                          clean["retreat_hull_pct"]))))
+        except (TypeError, ValueError):
+            pass
+        tf = od.get("target_fleet")
+        if isinstance(tf, str):
+            tf = next((f.id for f in self.fleets.values() if f.name == tf), None)
+        clean["target_fleet"] = tf if isinstance(tf, int) and tf in self.fleets \
+            and tf != fleet.id else None
+        return clean
+
     def _apply_actions(self, fleet, actions):
         if not isinstance(actions, dict):
             return
         for squad, od in (actions.get("orders") or {}).items():
-            if not isinstance(od, dict) or od.get("role") not in ROLES \
-                    or not isinstance(squad, str) or not squad:
+            clean = self._clean_order(fleet, od)
+            if clean is None or not isinstance(squad, str) or not squad:
                 continue
-            clean = dict(DEFAULT_ORDER)
-            clean["role"] = od["role"]
-            r = od.get("rally")
-            if isinstance(r, (list, tuple)) and len(r) == 2:
-                try:
-                    clean["rally"] = (max(0, min(self.W - 1, int(r[0]))),
-                                      max(0, min(self.H - 1, int(r[1]))))
-                except (TypeError, ValueError):
-                    pass
-            try:
-                clean["aggression"] = max(0, min(3, int(od.get("aggression",
-                                                             clean["aggression"]))))
-                clean["retreat_hull_pct"] = max(0, min(90, int(od.get("retreat_hull_pct",
-                                                              clean["retreat_hull_pct"]))))
-            except (TypeError, ValueError):
-                pass
-            tf = od.get("target_fleet")
-            if isinstance(tf, str):
-                tf = next((f.id for f in self.fleets.values() if f.name == tf), None)
-            clean["target_fleet"] = tf if isinstance(tf, int) and tf in self.fleets \
-                and tf != fleet.id else None
             fleet.pending[squad[:1].upper()] = clean
         for b in (actions.get("build") or [])[:4]:
             preset, squad = b.get("preset"), b.get("squad", "A")
@@ -430,21 +518,63 @@ class Engine:
                        and (to == "all" or to == f.id or to == f.name)]
             if not targets:
                 continue
+            w = self.t // self.cfg['window']
             for tf in targets:
                 tf.inbox.append(dict(sender=fleet.id, text=text))
+                tf.parley_log.append(dict(w=w, frm=fleet.name, text=text))
+            fleet.parley_log.append(dict(
+                w=w, to="all" if to == "all" else targets[0].name, text=text))
             self._ev("parley", fleet=fleet.id,
                      to="all" if to == "all" else targets[0].id, text=text)
             sent += 1
-        if actions.get("signal") and fleet.signal_cd == 0 and fleet.cargo >= self.cfg['signal_cost']:
-            fleet.cargo -= self.cfg['signal_cost']
-            fleet.signal_cd = self.cfg['signal_cd']
-            for s in self.ships.values():        # signal reaches every ship AT SEA
-                if s.fleet == fleet.id and s.squad in fleet.pending \
-                        and s.orders != fleet.pending[s.squad]:
-                    s.orders = dict(fleet.pending[s.squad])
-                    self._ev("orders", ship=s.id, fleet=fleet.id, via="signal",
-                             od=self._od_compact(s.orders))
-            self._ev("signal", fleet=fleet.id)
+        sig = actions.get("signal")
+        if sig and fleet.signal_cd == 0 and fleet.cargo >= self.cfg['signal_cost']:
+            mode = self.cfg["signal_mode"]
+            at_sea = [s for s in self.ships.values() if s.fleet == fleet.id
+                      and cheb(s.x, s.y, fleet.hx, fleet.hy) > self.hr]
+            hoisted = None
+            if isinstance(sig, dict) and "return" in sig:
+                # RETURN TO PORT — the one flag every mode understands
+                squads = sig["return"]
+                for s in at_sea:
+                    if squads == "all" or (isinstance(squads, (list, tuple))
+                                           and s.squad in squads):
+                        s.recall = True
+                        self._ev("orders", ship=s.id, fleet=fleet.id,
+                                 via="signal-return", od=dict(role="return"))
+                hoisted = "return"
+            elif mode == "preset" and isinstance(sig, dict) and sig.get("hoist"):
+                p = self.signal_presets.get(str(sig["hoist"]))
+                if p:
+                    for squad, od in p.items():
+                        clean = self._clean_order(fleet, od)
+                        if clean is None:
+                            continue
+                        fleet.pending[squad[:1].upper()] = clean
+                        for s in at_sea:
+                            if s.squad == squad[:1].upper():
+                                s.orders = dict(clean)
+                                self._ev("orders", ship=s.id, fleet=fleet.id,
+                                         via=f"signal:{sig['hoist']}",
+                                         od=self._od_compact(clean))
+                    hoisted = str(sig["hoist"])
+            elif mode == "custom":
+                # classic instant push of current standing orders, payload-capped
+                payload = json.dumps({sq: self._od_compact(od)
+                                      for sq, od in fleet.pending.items()},
+                                     separators=(",", ":"))
+                if len(payload) <= self.cfg["signal_max_chars"]:
+                    for s in at_sea:
+                        if s.squad in fleet.pending \
+                                and s.orders != fleet.pending[s.squad]:
+                            s.orders = dict(fleet.pending[s.squad])
+                            self._ev("orders", ship=s.id, fleet=fleet.id,
+                                     via="signal", od=self._od_compact(s.orders))
+                    hoisted = "orders-push"
+            if hoisted is not None:              # only a valid hoist costs anything
+                fleet.cargo -= self.cfg['signal_cost']
+                fleet.signal_cd = self.cfg['signal_cd']
+                self._ev("signal", fleet=fleet.id, flag=hoisted)
         rec = dict(t=self.t, fleet=fleet.id,
                    thoughts=str(actions.get("thoughts", ""))[:400])
         if isinstance(actions.get("_usage"), dict):
@@ -508,6 +638,9 @@ class Engine:
         """Returns (tx, ty) or None (hold position). Sets ship.intent — the recorded
         'what am I doing and why' that replay review (human or agent) reads."""
         f = self.fleets[ship.fleet]
+        if ship.recall:                     # RETURN flag: home for orders, no detours
+            self._intent(ship, "recalled by signal: making for port to collect orders")
+            return (f.hx, f.hy)
         od = self._order_for(ship)
         role = od["role"]
         ax, ay = self._anchor(ship, od)
@@ -651,8 +784,9 @@ class Engine:
         # ships act (id order = deterministic)
         for s in list(self.ships.values()):
             f = self.fleets[s.fleet]
-            docked = cheb(s.x, s.y, f.hx, f.hy) <= HARBOR_R
+            docked = cheb(s.x, s.y, f.hx, f.hy) <= self.hr
             if docked:
+                s.recall = False
                 if s.cargo:
                     f.cargo += s.cargo
                     f.bank += s.cargo
@@ -740,6 +874,10 @@ class Engine:
                     break
             self._ev("sink", fleet=s.fleet, ship=s.id, x=s.x, y=s.y, preset=s.preset,
                      by=by)
+            for f in self.fleets.values():           # witnessed sinks clear the plot;
+                if f.id != s.fleet and s.id in f.contacts \
+                        and self._fleet_sees(f, s.x, s.y):
+                    del f.contacts[s.id]             # unwitnessed ghosts persist (fog)
             del self.ships[s.id]
         # flagship deaths
         for f in self.fleets.values():
@@ -769,6 +907,7 @@ class Engine:
                 if n.regen_acc >= self.cfg['fish_regen_period']:
                     n.regen_acc = 0
                     n.remaining += 1
+        self._update_contacts()
         if t % FRAME_EVERY == 0:
             self._frame()
         self.t += 1
@@ -786,12 +925,15 @@ class Engine:
     def replay(self, result):
         return dict(
             meta=dict(seed=self.seed, w=self.W, h=self.H, tick_hz=TICKS_PER_SEC,
-                      frame_every=FRAME_EVERY, window=WINDOW, presets=PRESETS, harbor_r=HARBOR_R,
+                      frame_every=FRAME_EVERY, window=WINDOW, presets=PRESETS, harbor_r=self.hr,
                       ship_cost=self.cfg["ship_cost"], scenario=self.scenario,
                       config={k: v for k, v in self.cfg.items() if k != "rules"},
                       regions=self.regions or None),
             fleets=[dict(id=f.id, name=f.name, harbor=(f.hx, f.hy),
-                         model=getattr(f.bot, "model_label", None))
+                         model=getattr(f.bot, "model_label", None),
+                         # operator prompts are stamped for review: a lopsided
+                         # result with custom prompts is not a model comparison
+                         prompt=getattr(f.bot, "custom_prompt", "") or None)
                     for f in self.fleets.values()],
             nodes=[dict(id=n.id, name=n.name, x=n.x, y=n.y, kind=n.kind, cap=n.cap)
                    for n in self.nodes.values()],

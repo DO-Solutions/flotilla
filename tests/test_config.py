@@ -34,7 +34,11 @@ def main():
                   scenario={"signal_cost": 2, "signal_cd": 7})
     f3 = eng3.fleets[0]
     f3.cargo = 10
+    # default mode is return_only: signal:true is not a valid flag there (no charge)…
     eng3._apply_actions(f3, {"signal": True})
+    assert f3.cargo == 10 and f3.signal_cd == 0
+    # …but the RETURN flag is, and charging/cooldown work
+    eng3._apply_actions(f3, {"signal": {"return": "all"}})
     assert f3.cargo == 8 and f3.signal_cd == 7
     print("PASS test_config")
 

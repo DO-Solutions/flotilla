@@ -259,6 +259,15 @@ function load(rp) {
   const scn = rp.meta.scenario || {};
   cfgp.innerHTML = `<h3>scenario</h3><div class="desc">${(scn.description || "")
       .replace(/</g, "&lt;")}</div>`;
+  const prompted = rp.fleets.filter(f => f.prompt);
+  if (prompted.length) {
+    // custom prompts break the identical-framing symmetry — say so loudly
+    cfgp.innerHTML += `<h3>⚠ operator prompts in play</h3>` +
+      `<div class="desc">These admirals carry custom operator directives — this ` +
+      `match is NOT a level-framing model comparison.</div>` +
+      prompted.map(f => `<div class="desc"><b style="color:${COLORS[f.id % 4]}">` +
+        `${f.name}</b>: ${f.prompt.replace(/</g, "&lt;")}</div>`).join("");
+  }
   if (conf) {
     cfgp.innerHTML += `<h3>full configuration</h3>` +
       Object.entries(conf).filter(([k]) => k !== "description").sort()

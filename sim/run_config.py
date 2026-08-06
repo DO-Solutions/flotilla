@@ -39,12 +39,43 @@ def section_defaults(name):
 
 
 def make_bot(spec, adm):
+    """spec: "llm:<model>[:Label]" | "<scripted>" | a dict for per-player config:
+    {"model": <id or scripted name>, "label"?, "prompt"?, and any admirals-section
+    override (temperature/max_tokens/timeout_s/think/history_chars/memo_chars)}."""
+    if isinstance(spec, dict):
+        model = str(spec.get("model", ""))
+        if model.startswith("llm:"):
+            model = model.split(":", 2)[1]
+        if model in BOTS:
+            return BOTS[model]
+        a = {**adm, **{k: spec[k] for k in
+                       ("temperature", "max_tokens", "timeout_s", "think",
+                        "history_chars", "memo_chars") if k in spec}}
+        return LLMAdmiral(model, label=spec.get("label") or None,
+                          temperature=a["temperature"], max_tokens=a["max_tokens"],
+                          timeout=a["timeout_s"], think=a["think"],
+                          history_chars=a["history_chars"], memo_chars=a["memo_chars"],
+                          prompt=str(spec.get("prompt", ""))[:a["memo_chars"]])
     if spec.startswith("llm:"):
         parts = spec.split(":", 2)
         return LLMAdmiral(parts[1], label=parts[2] if len(parts) > 2 else None,
                           temperature=adm["temperature"], max_tokens=adm["max_tokens"],
-                          timeout=adm["timeout_s"], think=adm["think"])
+                          timeout=adm["timeout_s"], think=adm["think"],
+                          history_chars=adm["history_chars"],
+                          memo_chars=adm["memo_chars"])
     return BOTS[spec]
+
+
+def spec_name(spec):
+    if isinstance(spec, dict):
+        label = spec.get("label")
+        if label:
+            return str(label)
+        m = str(spec.get("model", "bot"))
+        return m.split(":", 2)[1] if m.startswith("llm:") else m
+    if spec.startswith("llm:"):
+        return spec.split(":")[2] if spec.count(":") == 2 else spec.split(":")[1]
+    return spec
 
 
 def dedupe(names):
@@ -98,23 +129,28 @@ def debrief_all(named_bots, replay, game_no, total, timeout_s):
 def run_series(named_bots, seed, scenario, ser, outdir, label="series"):
     os.makedirs(outdir, exist_ok=True)
     games = []
+    final_memos = {}
     for g in range(1, ser["games"] + 1):
         gseed = seed + (g - 1 if ser["vary_seeds"] else 0)
         gpath = os.path.join(outdir, f"g{g}.json")
         replay, result, row = play_game(named_bots, gseed, scenario, gpath)
         row["game"] = g
-        if ser["memos"] and g < ser["games"]:
+        # every game gets a debrief, INCLUDING the last: the end-of-series review
+        # is the memo a future self (rematch, next bracket) picks up
+        if ser["memos"]:
             memos = debrief_all(named_bots, replay, g, ser["games"],
                                 ser["debrief_timeout_s"])
             replay["memos"] = memos
             with open(gpath, "w") as fh:
                 json.dump(replay, fh, separators=(",", ":"))
+            if g == ser["games"]:
+                final_memos = memos
         games.append(row)
     with open(os.path.join(outdir, "series.json"), "w") as fh:
         json.dump({"games": [dict(game=r["game"], seed=r["seed"],
                                   file=os.path.basename(r["file"]),
                                   winner=r["winner"]) for r in games],
-                   "memos": {}}, fh, indent=1)
+                   "memos": final_memos}, fh, indent=1)
     return games
 
 
@@ -132,9 +168,7 @@ def run_tournament(cfg, adm, scenario, outdir):
                        if k in ("vary_seeds", "debrief_timeout_s")}}
     ser_defaults["memos"] = t["memo_policy"] != "none"
     specs = cfg["participants"]
-    names = dedupe([s.split(":")[2] if s.startswith("llm:") and s.count(":") == 2
-                    else (s.split(":")[1] if s.startswith("llm:") else s)
-                    for s in specs])
+    names = dedupe([spec_name(s) for s in specs])
     bots = {n: make_bot(s, adm) for n, s in zip(names, specs)}
     rng = random.Random(cfg.get("seed", 42))
     ppm = 2 if t["format"] == "single_elim" else int(t["players_per_match"])
@@ -172,12 +206,9 @@ def run_tournament(cfg, adm, scenario, outdir):
                     bots[n].notes = ""
         named = [(n, bots[n]) for n in group]
         ser = dict(ser_defaults)
-        if t["memo_policy"] == "persistent":
-            pass                                       # notes survive; debriefs run
+        # run_series now debriefs after EVERY game incl. the last, so persistent
+        # memo carry-over needs no extra pass — notes simply survive on the bot
         rows = run_series(named, seed0 + midx * 1000, scenario, ser, mdir)
-        if t["memo_policy"] == "persistent" and ser["memos"]:
-            last = json.load(open(rows[-1]["file"]))
-            debrief_all(named, last, len(rows), len(rows), ser["debrief_timeout_s"])
         w = matchup_winner(rows, group)
         for n in group:
             standings[n]["games"] += len(rows)
@@ -232,9 +263,7 @@ def main():
         run_tournament(cfg, adm, scenario, outdir)
         return
     specs = cfg["bots"]
-    names = dedupe([s.split(":")[2] if s.startswith("llm:") and s.count(":") == 2
-                    else (s.split(":")[1] if s.startswith("llm:") else s)
-                    for s in specs])
+    names = dedupe([spec_name(s) for s in specs])
     named = [(n, make_bot(s, adm)) for n, s in zip(names, specs)]
     os.makedirs(outdir, exist_ok=True)
     if mode == "match":

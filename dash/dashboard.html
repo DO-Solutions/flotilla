@@ -125,10 +125,11 @@
     &nbsp; seed: <input id="cseed" class="sname" style="width:90px" value="42">
   </div>
   <div style="margin-bottom:10px">
-    <span id="cbotslabel">fleets</span> (comma-separated; <code>llm:&lt;model-id&gt;:Label</code>
-    or scripted <code>merchant/corsair/admiralty/turtle</code>):<br>
-    <input id="cbots" class="sname" style="width:100%"
-      value="llm:qwen3.5-397b-a17b:Qwen3.5, llm:anthropic-claude-opus-5:Opus5, llm:kimi-k3:KimiK3, llm:glm-5.2:GLM5.2">
+    <span id="cbotslabel">fleets</span>
+    <a class="btn btn-dl" id="addplayer" href="#">＋ add player</a>
+    <span class="dim">— pick a model per player; blank overrides inherit the
+      admirals section below; custom prompts are stamped into the replay</span>
+    <div id="players" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(360px,1fr));gap:10px;margin-top:8px"></div>
   </div>
   <div id="cform"></div>
   <div style="margin-top:12px">
@@ -405,6 +406,148 @@ document.addEventListener("click", async e => {
   }
 });
 
+// ---- Configure tab: per-player tiles ----
+let MODELS = { models: [], scripted: ["merchant", "corsair", "admiralty", "turtle"] };
+let PROMPTS = {};
+let PLAYERS = [
+  { model: "qwen3.5-397b-a17b", label: "Qwen3.5" },
+  { model: "anthropic-claude-opus-5", label: "Opus5" },
+  { model: "kimi-k3", label: "KimiK3" },
+  { model: "glm-5.2", label: "GLM5.2" },
+];
+const OVR = [["temperature", "temp"], ["max_tokens", "max tok"],
+             ["timeout_s", "timeout s"]];
+
+function localPrompts() {
+  try { return JSON.parse(localStorage.getItem("flotilla-prompts") || "{}"); }
+  catch { return {}; }
+}
+function modelOptions(cur) {
+  const ids = [...new Set([...(MODELS.models || []), cur].filter(Boolean))];
+  return `<optgroup label="LLM admirals">` +
+    ids.map(m => `<option ${m === cur ? "selected" : ""}>${m}</option>`).join("") +
+    `</optgroup><optgroup label="scripted bots">` +
+    MODELS.scripted.map(m => `<option ${m === cur ? "selected" : ""}>${m}</option>`).join("") +
+    `</optgroup>`;
+}
+function renderPlayers() {
+  const el = $("players");
+  el.innerHTML = "";
+  PLAYERS.forEach((p, i) => {
+    const scripted = MODELS.scripted.includes(p.model);
+    const promptNames = Object.keys(PROMPTS);
+    const tile = document.createElement("div");
+    tile.className = "tile";
+    tile.innerHTML =
+      `<h3>player ${i + 1}` +
+      (PLAYERS.length > 2 ? ` <a href="#" class="prm" data-i="${i}" ` +
+        `style="float:right;color:#ff6b6b">✕</a>` : "") + `</h3>` +
+      `<label><span>model</span><select class="pf" data-i="${i}" data-f="model" ` +
+      `style="max-width:230px">${modelOptions(p.model)}</select></label>` +
+      `<label><span>label</span><input class="sname pf" style="width:130px" ` +
+      `data-i="${i}" data-f="label" value="${(p.label || "").replace(/"/g, "&quot;")}" ` +
+      `placeholder="display name"></label>` +
+      (scripted ? `<div class="dim">scripted bot — no LLM settings</div>` :
+        `<div style="display:flex;gap:8px;flex-wrap:wrap">` +
+        OVR.map(([f, lab]) =>
+          `<label style="flex:0"><span class="dim">${lab}</span>` +
+          `<input class="sname pf" style="width:64px" data-i="${i}" data-f="${f}" ` +
+          `value="${p[f] ?? ""}" placeholder="—"></label>`).join("") +
+        `<label style="flex:0"><span class="dim">think</span>` +
+        `<select class="pf" data-i="${i}" data-f="think">` +
+        `<option value="" ${p.think === undefined ? "selected" : ""}>inherit</option>` +
+        `<option value="true" ${p.think === true ? "selected" : ""}>on</option>` +
+        `<option value="false" ${p.think === false ? "selected" : ""}>off</option>` +
+        `</select></label></div>` +
+        `<label style="display:block"><span class="dim">operator prompt ` +
+        `(optional, cap = memo_chars)</span></label>` +
+        `<textarea class="pf" data-i="${i}" data-f="prompt" rows="2" maxlength="8000" ` +
+        `style="width:100%;background:#0a1b33;color:var(--ink);` +
+        `border:1px solid var(--line);border-radius:6px;font:inherit;font-size:12px" ` +
+        `placeholder="e.g. Always favor trade over war.">${p.prompt || ""}</textarea>` +
+        `<div style="display:flex;gap:6px;align-items:center;margin-top:4px">` +
+        `<select class="pload" data-i="${i}" style="max-width:120px">` +
+        `<option value="">📂 load…</option>` +
+        promptNames.map(n => `<option>${n}</option>`).join("") + `</select>` +
+        `<input class="sname psavename" data-i="${i}" style="width:110px" ` +
+        `placeholder="save as…">` +
+        `<a href="#" class="btn btn-dl psave" data-i="${i}">💾</a></div>`);
+    el.appendChild(tile);
+  });
+}
+async function refreshPrompts() {
+  if (SERVER) {
+    try { PROMPTS = await (await fetch("api/prompts")).json(); return; } catch {}
+  }
+  PROMPTS = localPrompts();
+}
+document.addEventListener("input", e => {
+  const t = e.target;
+  if (!t.classList || !t.classList.contains("pf")) return;
+  const p = PLAYERS[+t.dataset.i], f = t.dataset.f;
+  if (!p) return;
+  let v = t.value;
+  if (f === "think") v = v === "" ? undefined : v === "true";
+  else if (["temperature"].includes(f)) v = v === "" ? undefined : parseFloat(v);
+  else if (["max_tokens", "timeout_s"].includes(f)) {
+    v = v === "" ? undefined : parseInt(v);
+  }
+  if (v === undefined || v === "" || Number.isNaN(v)) delete p[f]; else p[f] = v;
+  if (f === "model") renderPlayers();          // scripted<->llm switches the tile body
+});
+document.addEventListener("change", async e => {
+  const t = e.target;
+  if (t.classList && t.classList.contains("pload") && t.value) {
+    const p = PLAYERS[+t.dataset.i];
+    p.prompt = PROMPTS[t.value] || "";
+    renderPlayers();
+  }
+});
+document.addEventListener("click", async e => {
+  const t = e.target.closest("a");
+  if (!t) return;
+  if (t.id === "addplayer") {
+    e.preventDefault();
+    const cap = $("cmode").value === "tournament" ? 16 : 4;
+    if (PLAYERS.length < cap) {
+      PLAYERS.push({ model: MODELS.scripted[PLAYERS.length % 4] });
+      renderPlayers();
+    }
+  }
+  if (t.classList.contains("prm")) {
+    e.preventDefault();
+    PLAYERS.splice(+t.dataset.i, 1);
+    renderPlayers();
+  }
+  if (t.classList.contains("psave")) {
+    e.preventDefault();
+    const i = +t.dataset.i;
+    const name = document.querySelector(`.psavename[data-i="${i}"]`).value.trim();
+    const text = PLAYERS[i].prompt || "";
+    if (!name || !text) return;
+    if (SERVER) {
+      try {
+        PROMPTS = await (await fetch("api/prompts", {
+          method: "POST", body: JSON.stringify({ name, text }) })).json();
+      } catch {}
+    } else {
+      PROMPTS = localPrompts(); PROMPTS[name] = text;
+      localStorage.setItem("flotilla-prompts", JSON.stringify(PROMPTS));
+    }
+    renderPlayers();
+  }
+});
+function playerSpec(p) {
+  if (MODELS.scripted.includes(p.model)) return p.model;
+  const extras = ["prompt", "temperature", "max_tokens", "timeout_s", "think"]
+    .filter(f => p[f] !== undefined && p[f] !== "");
+  if (!extras.length) return `llm:${p.model}` + (p.label ? `:${p.label}` : "");
+  const d = { model: p.model };
+  if (p.label) d.label = p.label;
+  for (const f of extras) d[f] = p[f];
+  return d;
+}
+
 // ---- Configure tab: form generated from the schema (never drifts from the engine) ----
 let CSCHEMA = null;
 const SECTION_MODE = { world: null, economy: null, combat: null, pacing: null,
@@ -449,8 +592,7 @@ function renderConfigForm() {
 function buildConfig() {
   const mode = $("cmode").value;
   const cfg = { mode, seed: parseInt($("cseed").value) || 42 };
-  const bots = $("cbots").value.split(",").map(s => s.trim()).filter(Boolean);
-  cfg[mode === "tournament" ? "participants" : "bots"] = bots;
+  cfg[mode === "tournament" ? "participants" : "bots"] = PLAYERS.map(playerSpec);
   const buckets = { scenario: {}, admirals: {}, series: {}, tournament: {} };
   const engineSecs = ["world", "economy", "combat", "pacing", "scenario"];
   for (const el of document.querySelectorAll("#cform [data-sec]")) {
@@ -508,15 +650,19 @@ fetch("config-schema.json").then(r => r.json()).then(s => {
 
 // ---- server-side launching: only offered when a live server answers ----
 let SERVER = false;
-fetch("api/health").then(r => r.json()).then(h => {
+fetch("api/health").then(r => r.json()).then(async h => {
   if (h && h.ok) {
     SERVER = true;
     $("claunch").style.display = "";
     $("jobscard").style.display = "";
     pollJobs();
     setInterval(pollJobs, 5000);
+    try { MODELS = await (await fetch("api/models")).json(); } catch {}
+    await refreshPrompts();
+    renderPlayers();
   }
 }).catch(() => {});
+refreshPrompts().then(renderPlayers);
 let LASTDONE = 0;
 async function pollJobs() {
   try {
