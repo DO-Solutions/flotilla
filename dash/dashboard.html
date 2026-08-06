@@ -67,6 +67,8 @@
   .job { font-size:12px; padding:4px 0; border-bottom:1px solid var(--line); }
   .job .st-run { color:#fbbf24; } .job .st-done { color:#34d399; }
   .job .st-failed { color:#ff6b6b; } .job .st-queued { color:var(--dim); }
+  .job .st-cancelled { color:var(--dim); text-decoration:line-through; }
+  .jcancel { color:#ff6b6b; border-color:#ff6b6b55; margin-left:8px; }
 </style>
 </head>
 <body>
@@ -245,20 +247,55 @@ document.addEventListener("click", async e => {
   if (t.classList.contains("dls")) {
     e.preventDefault();
     const s = IDX.series.find(x => x.name === t.dataset.series);
+    const nm = displayName(s);
     t.textContent = "building…";
+    if (SERVER) {                       // build server-side: no 46MB client fetch loop
+      try {
+        const r = await (await fetch("api/bundle", {
+          method: "POST", body: JSON.stringify({ series: s.name, name: nm }) })).json();
+        if (r.ok) {
+          const a = document.createElement("a");
+          a.href = r.file;
+          a.download = `${safeFile(nm)}.html`;
+          a.click();
+          t.textContent = "⬇ Download";
+          return;
+        }
+      } catch (err) { /* fall through to the client-side build */ }
+    }
     const games = [];
     for (const g of s.games) {
       games.push({ game: g.game, replay: await (await fetch(g.file)).json() });
     }
-    const nm = displayName(s);
     const payload = JSON.stringify({ series: { name: nm, games } });
     blobDl(await selfContained(payload), `${safeFile(nm)}.html`);
     t.textContent = "⬇ Download";
   }
+  if (t.classList.contains("jcancel")) {
+    e.preventDefault();
+    await fetch("api/cancel", { method: "POST",
+                                body: JSON.stringify({ id: t.dataset.id }) });
+    pollJobs();
+  }
 });
-document.addEventListener("change", e => {
-  if (e.target.classList && e.target.classList.contains("sname")) {
-    setCustomName(e.target.dataset.series, e.target.value);
+document.addEventListener("change", async e => {
+  if (e.target.classList && e.target.classList.contains("sname") &&
+      e.target.dataset.series) {
+    const series = e.target.dataset.series, val = e.target.value;
+    if (SERVER) {                       // persist server-side; localStorage = fallback
+      try {
+        const r = await (await fetch("api/rename", {
+          method: "POST",
+          body: JSON.stringify({ series, display_name: val }) })).json();
+        if (r.ok) {
+          setCustomName(series, "");    // canonical name now lives in series.json
+          IDX = await (await fetch("index.json")).json();
+          renderSeriesTable();
+          return;
+        }
+      } catch (err) { /* server went away — keep the local override */ }
+    }
+    setCustomName(series, val);
     renderSeriesTable();                       // refresh watch links w/ new title
   }
 });
@@ -490,6 +527,8 @@ async function pollJobs() {
         ` · game ${Math.min(j.games_done + (j.state === "done" ? 0 : 1), j.games_expected)}/${j.games_expected}`;
       return `<div class="job"><b>${j.name}</b> <span class="dim">(${j.mode})</span> ` +
         `<span class="st-${j.state === "running" ? "run" : j.state}">${j.state}</span>${prog}` +
+        (["queued", "running"].includes(j.state) ?
+          ` <a class="btn btn-dl jcancel" href="#" data-id="${j.id}">✕ cancel</a>` : "") +
         (j.error ? ` <span class="st-failed">${j.error}</span>` : "") +
         (j.state === "running" && j.log && j.log.length ?
           `<div class="dim" style="font-size:11px">${(j.log.at(-1) || "").replace(/</g, "&lt;").slice(0, 140)}</div>` : "") +

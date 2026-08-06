@@ -16,6 +16,12 @@ index. Agent-first API (all JSON; same schema as the GUI):
                              optional "name" labels the result in the library)
                              -> {job}   jobs queue FIFO, one runs at a time
   GET  /api/runs             recent jobs with state + log tail
+  POST /api/cancel           {"id": <job id>} -> cancel a queued/running job
+  POST /api/rename           {"series": <name>, "display_name": <text>} -> persist a
+                             series display name (empty display_name clears it)
+  POST /api/bundle           {"series": <name>, "name": <title>?} -> build a
+                             self-contained spoiler-free HTML bundle server-side
+                             -> {file: "bundles/<x>.html"}
   POST /api/import           raw replay JSON in the body (?name=...) -> library
 
 Auth: none on the loopback default — put a reverse proxy with auth in front for
@@ -37,6 +43,7 @@ sys.path.insert(0, os.path.join(HERE, "sim"))
 sys.path.insert(0, os.path.join(HERE, "scripts"))
 import config_schema                    # noqa: E402
 from libindex import build_index        # noqa: E402
+from make_bundle import build_bundle    # noqa: E402
 
 LIB = os.path.abspath(os.environ.get("FLOTILLA_LIBRARY",
                                      os.path.join(HERE, "library")))
@@ -46,6 +53,7 @@ VERSION = open(os.path.join(HERE, "VERSION")).read().strip() \
 
 JOBS = []                               # newest last; dicts, lock-guarded
 JOBS_LOCK = threading.Lock()
+PROCS = {}                              # job id -> live Popen (never serialized)
 RUN_QUEUE = threading.Semaphore(int(os.environ.get("FLOTILLA_CONCURRENT_RUNS", "1")))
 
 
@@ -84,6 +92,11 @@ def _normalize_results(job, outdir):
 
 def _run_job(job, cfg):
     with RUN_QUEUE:
+        if job.get("cancel"):                     # cancelled while queued
+            job["state"] = "cancelled"
+            job["finished"] = time.time()
+            _persist_jobs()
+            return
         job["state"] = "running"
         job["started"] = time.time()
         _persist_jobs()
@@ -98,21 +111,27 @@ def _run_job(job, cfg):
                                   os.path.join(HERE, "sim", "run_config.py"), cfgpath],
                                  stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                                  text=True, cwd=HERE)
+            PROCS[job["id"]] = p
             for line in p.stdout:
                 job["log"].append(line.rstrip()[:400])
                 if '"winner"' in line:
                     job["games_done"] += 1
                 _persist_jobs()
             rc = p.wait()
-            if rc != 0:
+            if job.get("cancel"):
+                job["state"] = "cancelled"
+            elif rc != 0:
                 raise RuntimeError(f"runner exited {rc}: {job['log'][-1] if job['log'] else ''}")
-            _normalize_results(job, outdir)
-            build_index(LIB)
-            job["state"] = "done"
+            else:
+                _normalize_results(job, outdir)
+                build_index(LIB)
+                job["state"] = "done"
         except Exception as e:
-            job["state"] = "failed"
-            job["error"] = str(e)[:300]
+            job["state"] = "cancelled" if job.get("cancel") else "failed"
+            if job["state"] == "failed":
+                job["error"] = str(e)[:300]
         finally:
+            PROCS.pop(job["id"], None)
             job["finished"] = time.time()
             shutil.rmtree(os.path.join(LIB, "_work", job["id"]), ignore_errors=True)
             _persist_jobs()
@@ -221,6 +240,54 @@ class H(BaseHTTPRequestHandler):
                 cfg = json.loads(body)
                 job = submit_run(cfg)
                 return self._send(202, {"job": dict(job, log=[])})
+            if path == "/api/cancel":
+                jid = json.loads(body or b"{}").get("id", "")
+                j = _job(jid)
+                if not j:
+                    return self._send(404, {"error": "no such job"})
+                if j["state"] not in ("queued", "running"):
+                    return self._send(400, {"error": f"job already {j['state']}"})
+                j["cancel"] = True
+                p = PROCS.get(jid)
+                if p:
+                    try:
+                        p.terminate()
+                    except Exception:
+                        pass
+                elif j["state"] == "queued":       # not started yet: settle it now
+                    j["state"] = "cancelled"
+                    j["finished"] = time.time()
+                _persist_jobs()
+                return self._send(200, {"ok": True, "state": j["state"]})
+            if path == "/api/rename":
+                d = json.loads(body)
+                name = os.path.basename(str(d.get("series", "")))
+                disp = str(d.get("display_name", "")).strip()[:120]
+                spath = os.path.join(LIB, "series", name, "series.json")
+                if not name or not os.path.isfile(spath):
+                    return self._send(404, {"error": "no such series"})
+                s = json.load(open(spath))
+                if disp:
+                    s["display_name"] = disp
+                else:
+                    s.pop("display_name", None)
+                with open(spath, "w") as fh:
+                    json.dump(s, fh, indent=1)
+                build_index(LIB)
+                return self._send(200, {"ok": True, "display_name": disp or None})
+            if path == "/api/bundle":
+                d = json.loads(body)
+                name = os.path.basename(str(d.get("series", "")))
+                sdir = os.path.join(LIB, "series", name)
+                if not name or not os.path.isfile(os.path.join(sdir, "series.json")):
+                    return self._send(404, {"error": "no such series"})
+                title = str(d.get("name") or "").strip() or name
+                safe = _san(title) or name
+                os.makedirs(os.path.join(LIB, "bundles"), exist_ok=True)
+                out = os.path.join(LIB, "bundles", f"{safe}.html")
+                build_bundle(sdir, title, out)
+                build_index(LIB)
+                return self._send(200, {"ok": True, "file": f"bundles/{safe}.html"})
             if path == "/api/import":
                 qs = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
                 name = _san((qs.get("name") or ["imported"])[0]) or "imported"
