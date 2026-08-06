@@ -28,6 +28,9 @@ PRICES = {
     "kimi-k3": (3.0, 15.0),
     "glm-5.2": (0.70, 2.20),
     "openai-gpt-oss-120b": (0.055, 0.385),
+    "openai-gpt-5.6-sol": (5.0, 30.0),
+    "openai-gpt-5.6-terra": (2.0, 12.0),
+    "openai-gpt-5.6-luna": (0.2, 1.2),
 }
 PRICES.update(json.loads(os.environ.get("FLOTILLA_PRICES", "{}")))
 
@@ -160,8 +163,12 @@ class LLMAdmiral:
         # call by default — measured 2026-08-05; enable_thinking=false -> ~1.2s.
         # Thinking stays available as an explicit per-admiral config (fairness:
         # default matches run all models in direct-answer mode).
-        if not self.think and any(t in self.model_id for t in ("qwen", "deepseek", "kimi", "glm")):
-            payload["chat_template_kwargs"] = {"enable_thinking": False}
+        if not self.think:
+            if any(t in self.model_id for t in ("qwen", "deepseek", "kimi", "glm")):
+                payload["chat_template_kwargs"] = {"enable_thinking": False}
+            elif self.model_id.startswith("openai-gpt-5"):
+                # gpt-5.x thinking models: measured 2026-08-06, minimal ≈ 2s vs 3.7s
+                payload["reasoning_effort"] = "minimal"
         body = json.dumps(payload).encode()
         req = urllib.request.Request(
             API_BASE + "/chat/completions", data=body,

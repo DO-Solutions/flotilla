@@ -11,9 +11,9 @@ jobs:
       - name: sim tests
         working-directory: sim
         run: |
-          python ../tests/test_config.py
-          python ../tests/test_elimination.py
-          python ../tests/test_parley.py
-          python ../tests/test_territory.py
+          for t in ../tests/test_*.py; do
+            [ "$(basename "$t")" = "test_server.py" ] && continue
+            python "$t"
+          done
       - name: server endpoint tests
         run: python tests/test_server.py
