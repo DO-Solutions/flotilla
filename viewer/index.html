@@ -115,6 +115,9 @@
       <option value="1">1×</option><option value="2" selected>2×</option>
       <option value="4">4×</option><option value="8">8×</option>
     </select>
+    <select id="pov" title="watch through one admiral's fog of war">
+      <option value="-1">👁 all-seeing</option>
+    </select>
     <input id="scrub" type="range" min="0" max="0" value="0">
     <span id="clock">00:00</span>
     <button id="dl" title="download a self-contained page of this replay">⬇ replay</button>
@@ -180,7 +183,8 @@ const TAIL = 14;
 const S = { rp: null, fi: 0, playing: false, last: 0, acc: 0, sel: null,
             bundle: null, gameIdx: 0, spoiler: false, nodePos: {},
             cat: {}, sinkAt: {}, byShip: {}, frameMaps: [], screenPos: {},
-            heading: {}, smooth: {}, tl: [], pmode: "fleet" };
+            heading: {}, smooth: {}, tl: [], pmode: "fleet",
+            pov: -1, povCache: null };
 const $ = id => document.getElementById(id);
 const canvas = $("sea"), ctx = canvas.getContext && canvas.getContext("2d");
 const tlc = $("timeline"), tctx = tlc.getContext && tlc.getContext("2d");
@@ -205,6 +209,10 @@ async function loadBundle(b, idx) {
 function load(rp) {
   S.rp = rp; S.fi = 0; S.playing = false; S.acc = 0; S.sel = null;
   S.cat = {}; S.sinkAt = {}; S.byShip = {}; S.heading = {}; S.smooth = {};
+  S.pov = -1; S.povCache = null;
+  $("pov").innerHTML = `<option value="-1">👁 all-seeing</option>` +
+    rp.fleets.map(f => `<option value="${f.id}">⚓ ${f.name}'s fog</option>`).join("");
+  $("pov").value = "-1";
   for (const e of rp.events) {
     if (e.k === "spawn") S.cat[e.ship] = { preset: e.preset, squad: e.squad, fleet: e.fleet };
     if (e.k === "sink") S.sinkAt[e.ship] = e.t;
@@ -316,6 +324,52 @@ function latestThought(fleetId, t) {
 
 function nodeName(nd) { return nd.name || ("Isle " + nd.id); }
 
+// ---- POV fog of war: EXACT replica of the engine's visibility rules ----
+// A fleet sees a cell within harbor_r+4 (Chebyshev) of its harbor, or within
+// 4 + lookout*2 of any of its ships (core.py _fleet_sees). Node stocks under
+// fog use the same believed() model: last-seen value + projected fish regen.
+function shipVision(sid) {
+  const st = ((S.rp.meta.presets || {})[(S.cat[sid] || {}).preset]) || {};
+  return 4 + (st.lookout || 1) * 2;
+}
+function computePov(fid) {
+  const rp = S.rp;
+  const fl = rp.fleets.find(f => f.id === fid);
+  const hr4 = (rp.meta.harbor_r || 3) + 4;
+  const regen = (rp.meta.config || {}).fish_regen_period || 50;
+  const mem = {};                              // node id -> [last seen value, t seen]
+  const vis = [], believed = [], nodeSeen = [];
+  for (const fr of rp.frames) {
+    const own = fr.s.filter(s => s[1] === fid);
+    const sees = (x, y) => {
+      if (Math.max(Math.abs(x - fl.harbor[0]), Math.abs(y - fl.harbor[1])) <= hr4) return true;
+      for (const o of own) {
+        if (Math.max(Math.abs(x - o[2]), Math.abs(y - o[3])) <= shipVision(o[0])) return true;
+      }
+      return false;
+    };
+    const v = new Set();
+    for (const s of fr.s) if (s[1] !== fid && sees(s[2], s[3])) v.add(s[0]);
+    vis.push(v);
+    const nrem = Object.fromEntries(fr.n);
+    const bel = {}, ns = new Set();
+    for (const nd of rp.nodes) {
+      if (sees(nd.x, nd.y)) { mem[nd.id] = [nrem[nd.id] ?? 0, fr.t]; ns.add(nd.id); }
+      const m = mem[nd.id] || [0, 0];
+      let val = m[0];
+      if (nd.kind === "fish") {
+        val = Math.min(nd.cap, val + Math.floor((fr.t - m[1]) / regen));
+      }
+      bel[nd.id] = val;
+    }
+    believed.push(bel); nodeSeen.push(ns);
+  }
+  return { fleet: fid, vis, believed, nodeSeen };
+}
+function povHidden(sid, fleetId, fi) {
+  return S.povCache && fleetId !== S.pov && !S.povCache.vis[fi].has(sid);
+}
+
 function updateInspector(fr) {
   const box = $("inspector");
   if (S.sel === null) { box.className = ""; return; }
@@ -342,6 +396,21 @@ function updateInspector(fr) {
     box.className = "on";
     box.innerHTML = `<h3>ship ${sid} — ${cat.preset || "?"}</h3>` +
       `<div class="intent">☠ sunk at ${fmtTime(S.sinkAt[sid] ?? 0)}</div>`;
+    return;
+  }
+  if (S.pov >= 0 && S.povCache && row[1] !== S.pov) {
+    // enemy ship under POV: only what the engine's summary exposes —
+    // preset, position, laden-or-not. No hull, no intent, no orders.
+    const vis = S.povCache.vis[S.fi].has(sid);
+    box.className = "on";
+    box.style.borderColor = COLORS[row[1] % 4];
+    box.innerHTML =
+      `<h3 style="color:${COLORS[row[1] % 4]}">${cat.preset || "?"} #${sid}` +
+      ` · ${S.rp.result.names[row[1]]}</h3>` +
+      (vis ? `<div>position (${row[2]}, ${row[3]}) · ` +
+             `${row[5] > 0 ? "riding low — laden" : "riding high — empty"}</div>` +
+             `<div class="intent">⛯ intent unknown (enemy vessel)</div>`
+           : `<div class="intent">🌫 lost from sight</div>`);
     return;
   }
   const it = lastEvt(sid, "intent", fr.t);
@@ -588,11 +657,15 @@ function draw(fr, prev, alpha) {
       ctx.fillText(r.name, (r.x + .5) * cw - 24, (r.y + .5) * ch - 6);
     }
   }
+  const PV = S.pov >= 0 ? S.povCache : null;
   const nrem = Object.fromEntries(fr.n);
   S.nodePos = {};
   for (const nd of rp.nodes) {
-    const rem = nrem[nd.id] ?? 0;
+    // under POV: the admiral's BELIEVED stock (last seen + projected fish regen),
+    // dimmed when the island is currently out of sight (stale intel)
+    const rem = PV ? (PV.believed[S.fi][nd.id] ?? 0) : (nrem[nd.id] ?? 0);
     if (rem <= 0) continue;
+    const stale = PV && !PV.nodeSeen[S.fi].has(nd.id);
     const x = (nd.x + .5) * cw, y = (nd.y + .5) * ch;
     const r = 3 + Math.min(9, rem / 6);
     S.nodePos[nd.id] = [x, y, r];
@@ -600,11 +673,13 @@ function draw(fr, prev, alpha) {
       ctx.strokeStyle = "#ffffffcc";
       ctx.beginPath(); ctx.arc(x, y, r + 5, 0, 7); ctx.stroke();
     }
+    if (stale) ctx.globalAlpha = .45;
     ctx.beginPath();
     if (nd.kind === "fish") { ctx.fillStyle = "rgba(45,212,191,.5)"; ctx.arc(x, y, r, 0, 7); }
     else { ctx.fillStyle = "rgba(251,191,36,.55)";
            ctx.moveTo(x, y - r); ctx.lineTo(x + r, y); ctx.lineTo(x, y + r); ctx.lineTo(x - r, y); }
     ctx.fill();
+    ctx.globalAlpha = 1;
   }
 
   const flagRow = Object.fromEntries(fr.f.map(r => [r[0], r]));
@@ -635,6 +710,7 @@ function draw(fr, prev, alpha) {
     packWidth[a[0]] = 2 + Math.min(4.5, n * 1.1);
   }
   for (const s of fr.s) {                            // fading wakes — same midpoint-
+    if (PV && povHidden(s[0], s[1], S.fi)) continue;
     const pts = [];                                  // quadratic smoothing as the hulls
     for (let k = TAIL; k >= 0; k--) {
       const m = S.frameMaps[S.fi - k];
@@ -666,19 +742,27 @@ function draw(fr, prev, alpha) {
     if (e.k !== "sink") continue;
     const age = fr.t - e.t;
     if (age < 0 || age > 30) continue;
+    if (PV && e.fleet !== S.pov) {                   // only ripples the admiral saw
+      const fiE = Math.max(0, Math.min(S.frameMaps.length - 1,
+        Math.floor(e.t / (rp.meta.frame_every || 2))));
+      if (!PV.vis[fiE].has(e.ship) && !(PV.vis[fiE - 1] && PV.vis[fiE - 1].has(e.ship))) {
+        continue;
+      }
+    }
     const x = (e.x + .5) * cw, y = (e.y + .5) * ch;
     ctx.strokeStyle = `rgba(230,237,247,${.5 * (1 - age / 30)})`;
     ctx.beginPath(); ctx.arc(x, y, 3 + age * .8, 0, 7); ctx.stroke();
   }
 
+  const drawn = PV ? fr.s.filter(s => !povHidden(s[0], s[1], S.fi)) : fr.s;
   const cellGroups = new Map();
-  for (const s of fr.s) {
+  for (const s of drawn) {
     const key = s[2] + "," + s[3];
     (cellGroups.get(key) || cellGroups.set(key, []).get(key)).push(s);
   }
   const clashes = [];
   const inClash = new Set();
-  for (const a of fr.s) for (const b of fr.s) {
+  for (const a of drawn) for (const b of drawn) {
     if (a[0] >= b[0] || a[1] === b[1]) continue;
     if (Math.max(Math.abs(a[2] - b[2]), Math.abs(a[3] - b[3])) <= 1) {
       clashes.push([a, b]); inClash.add(a[0]); inClash.add(b[0]);
@@ -785,6 +869,30 @@ function draw(fr, prev, alpha) {
       ctx.beginPath(); ctx.arc(x, y, 13, 0, 7); ctx.stroke();
     }
   }
+
+  if (PV) {                                          // fog veil with punched vision
+    const fog = S.fogCanvas || (S.fogCanvas = document.createElement("canvas"));
+    fog.width = canvas.width; fog.height = canvas.height;
+    const fx = fog.getContext && fog.getContext("2d");
+    if (fx) {
+      fx.fillStyle = "rgba(3,8,18,.62)";
+      fx.fillRect(0, 0, fog.width, fog.height);
+      fx.globalCompositeOperation = "destination-out";
+      // Chebyshev range = a SQUARE of side 2r+1 — the fog holes are the actual
+      // sensor footprints, not an artistic approximation
+      const punch = (cx2, cy2, r) => {
+        fx.fillStyle = "rgba(0,0,0,.45)";            // soft outer rim
+        fx.fillRect((cx2 - r - 1) * cw, (cy2 - r - 1) * ch,
+                    (2 * r + 3) * cw, (2 * r + 3) * ch);
+        fx.fillStyle = "rgba(0,0,0,1)";
+        fx.fillRect((cx2 - r) * cw, (cy2 - r) * ch, (2 * r + 1) * cw, (2 * r + 1) * ch);
+      };
+      for (const s of fr.s) if (s[1] === S.pov) punch(s[2], s[3], shipVision(s[0]));
+      const fl = rp.fleets.find(f => f.id === S.pov);
+      punch(fl.harbor[0], fl.harbor[1], hr + 4);
+      ctx.drawImage(fog, 0, 0);
+    }
+  }
 }
 
 function seek(fi) {
@@ -849,6 +957,12 @@ $("play").addEventListener("click", () => {
   setPlay(!S.playing);
 });
 $("scrub").addEventListener("input", e => { setPlay(false); seek(+e.target.value); });
+$("pov").addEventListener("change", () => {
+  S.pov = parseInt($("pov").value);
+  S.povCache = S.pov >= 0 ? computePov(S.pov) : null;
+  S.sel = null;                        // drop any selection made with other eyes
+  if (S.rp) seek(S.fi);
+});
 $("nextg").addEventListener("click", () => {
   if (S.bundle && S.gameIdx < S.bundle.games.length - 1) {
     loadBundle(S.bundle, S.gameIdx + 1);
