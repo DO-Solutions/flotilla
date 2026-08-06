@@ -55,6 +55,15 @@
                border-radius:8px; padding:7px 9px; font-size:11px; color:#c9d6ea;
                line-height:1.4; }
   .info:hover .pop { display:block; }
+  .brkt { display:flex; gap:22px; align-items:stretch; overflow-x:auto; padding:4px 0; }
+  .brkt .rnd { display:flex; flex-direction:column; gap:14px; justify-content:space-around; }
+  .rlabel { color:var(--dim); font-size:11px; text-align:center; text-transform:uppercase;
+            letter-spacing:1px; }
+  .mu { background:#0d1526; border:1px solid var(--line); border-radius:8px;
+        padding:6px 10px; min-width:180px; }
+  .mu .p { display:flex; justify-content:space-between; gap:10px; padding:2px 0; }
+  .mu .adv { color:#34d399; font-weight:600; }
+  .champ { color:#fbbf24; font-weight:600; }
   .job { font-size:12px; padding:4px 0; border-bottom:1px solid var(--line); }
   .job .st-run { color:#fbbf24; } .job .st-done { color:#34d399; }
   .job .st-failed { color:#ff6b6b; } .job .st-queued { color:var(--dim); }
@@ -68,6 +77,7 @@
 <div class="tabs">
   <button class="tab on" data-tab="series">⛵ Series View <span class="dim">(spoiler-free)</span></button>
   <button class="tab" data-tab="games">🎬 Individual Games <span class="warn">⚠ contains spoilers</span></button>
+  <button class="tab" data-tab="tourn">🏆 Tournaments</button>
   <button class="tab" data-tab="config">🛠 Configure a Run</button>
 </div>
 <div class="card" id="seriestab">
@@ -86,6 +96,15 @@
     <th>when (UTC)</th><th>type</th><th>seed</th><th>players → scores</th>
     <th>winner</th><th>length</th><th>LLM cost</th><th style="width:150px"></th>
   </tr></thead><tbody></tbody></table>
+</div>
+<div class="card" id="tourntab" style="display:none">
+  <div class="dim" id="tempty" style="display:none">No tournaments yet — configure one
+    under 🛠 Configure a Run (mode: tournament), or run
+    <code>python3 sim/run_config.py your-tournament.json</code>.</div>
+  <table id="tt"><thead><tr>
+    <th>tournament</th><th>format</th><th>matchups</th><th style="width:110px"></th>
+  </tr></thead><tbody></tbody></table>
+  <div id="tdetail" style="margin-top:10px"></div>
 </div>
 <div class="card" id="configtab" style="display:none">
   <div class="dim" style="margin-bottom:10px">
@@ -215,6 +234,7 @@ document.addEventListener("click", async e => {
     for (const b of document.querySelectorAll(".tab")) b.classList.toggle("on", b === t);
     $("seriestab").style.display = t.dataset.tab === "series" ? "" : "none";
     $("gamestab").style.display = t.dataset.tab === "games" ? "" : "none";
+    $("tourntab").style.display = t.dataset.tab === "tourn" ? "" : "none";
     $("configtab").style.display = t.dataset.tab === "config" ? "" : "none";
   }
   if (t.classList.contains("dlh")) {
@@ -240,6 +260,111 @@ document.addEventListener("change", e => {
   if (e.target.classList && e.target.classList.contains("sname")) {
     setCustomName(e.target.dataset.series, e.target.value);
     renderSeriesTable();                       // refresh watch links w/ new title
+  }
+});
+
+// ---- Tournaments tab: spoiler-free bracket/leaderboard (results behind a reveal) ----
+let TOURN_OPEN = null;                        // name of the expanded tournament
+const TCACHE = {};                            // name -> tournament.json
+const TREV = {};                              // name -> results revealed?
+
+function renderTournList() {
+  const tb = document.querySelector("#tt tbody");
+  tb.innerHTML = "";
+  const list = IDX.tournaments || [];
+  $("tempty").style.display = list.length ? "none" : "";
+  document.getElementById("tt").style.display = list.length ? "" : "none";
+  for (const t of list) {
+    const tr = document.createElement("tr");
+    tr.innerHTML =
+      `<td>${t.name}</td><td class="dim">${t.format}</td>` +
+      `<td class="dim">${t.matchups}</td>` +
+      `<td><a class="btn btn-watch topen" href="#" data-t="${t.name}">` +
+      `${TOURN_OPEN === t.name ? "▼ Close" : "▶ Open"}</a></td>`;
+    tb.appendChild(tr);
+  }
+  renderTournDetail();
+}
+
+function renderTournDetail() {
+  const el = $("tdetail");
+  const name = TOURN_OPEN;
+  if (!name || !TCACHE[name]) { el.innerHTML = ""; return; }
+  const tj = TCACHE[name], rev = !!TREV[name];
+  const tcfg = (tj.config && tj.config.tournament) || {};
+  const rounds = {};
+  for (const m of tj.matchups || []) (rounds[m.round] = rounds[m.round] || []).push(m);
+  const rkeys = Object.keys(rounds).sort((a, b) => a - b);
+  const elim = (tcfg.format || "round_robin") === "single_elim";
+  let h = `<div class="dim" style="margin-bottom:8px">` +
+    `format <b>${tcfg.format || "round_robin"}</b> · ` +
+    `${tcfg.games_per_match || 1} game(s)/matchup · memos ${tcfg.memo_policy || "none"} ` +
+    `<a class="btn btn-dl treveal" data-t="${name}" href="#">` +
+    `${rev ? "🙈 Hide results" : "👁 Reveal results (spoilers)"}</a></div>`;
+  h += `<div class="brkt">`;
+  for (const r of rkeys) {
+    h += `<div class="rnd">`;
+    if (rkeys.length > 1) {
+      const last = elim && r === rkeys[rkeys.length - 1];
+      h += `<div class="rlabel">${last ? "final" : "round " + r}</div>`;
+    }
+    for (const m of rounds[r]) {
+      h += `<div class="mu">`;
+      for (const p of m.players) {
+        const tot = rev ? m.games.reduce((s, g) => s + (g.scores[p] || 0), 0) : "";
+        h += `<div class="p"><span class="${rev && m.winner === p ? "adv" : ""}">${p}</span>` +
+             `<span class="dim">${tot}</span></div>`;
+      }
+      h += `<div>` + m.games.map(g =>
+        `<a class="btn btn-dl" style="padding:1px 8px" href="player.html?replay=` +
+        encodeURIComponent(`tournaments/${name}/${g.file}`) + `">▶ g${g.game}</a>`).join("") +
+        `</div></div>`;
+    }
+    h += `</div>`;
+  }
+  if (rev && elim) {
+    h += `<div class="rnd" style="justify-content:center">` +
+         `<div class="rlabel">champion</div>` +
+         `<div class="mu"><span class="champ">🏆 ${tj.champion}</span></div></div>`;
+  }
+  h += `</div>`;
+  if (rev) {
+    const rows = Object.entries(tj.standings || {})
+      .sort((a, b) => b[1].wins - a[1].wins || b[1].score - a[1].score);
+    h += `<div style="margin-top:12px" class="champ">🏆 champion: ${tj.champion}</div>` +
+      `<table style="margin-top:6px;max-width:460px" id="tstand"><thead><tr>` +
+      `<th>player</th><th>wins</th><th>games</th><th>total score</th></tr></thead><tbody>` +
+      rows.map(([n, s]) =>
+        `<tr><td class="${n === tj.champion ? "win" : ""}">${n}</td>` +
+        `<td>${s.wins}</td><td>${s.games}</td><td>${s.score}</td></tr>`).join("") +
+      `</tbody></table>`;
+    const mf = tj.memos_final || {};
+    if (Object.keys(mf).length) {
+      h += `<div class="dim" style="margin-top:8px">final memos carried by ` +
+        `${Object.keys(mf).join(", ")} — full text in tournament.json</div>`;
+    }
+  }
+  el.innerHTML = h;
+}
+
+document.addEventListener("click", async e => {
+  const t = e.target.closest("a");
+  if (!t) return;
+  if (t.classList.contains("topen")) {
+    e.preventDefault();
+    const name = t.dataset.t;
+    if (TOURN_OPEN === name) { TOURN_OPEN = null; renderTournList(); return; }
+    if (!TCACHE[name]) {
+      const row = (IDX.tournaments || []).find(x => x.name === name);
+      TCACHE[name] = await (await fetch(row.file)).json();
+    }
+    TOURN_OPEN = name;
+    renderTournList();
+  }
+  if (t.classList.contains("treveal")) {
+    e.preventDefault();
+    TREV[t.dataset.t] = !TREV[t.dataset.t];
+    renderTournDetail();
   }
 });
 
@@ -377,13 +502,16 @@ async function pollJobs() {
       IDX = idx;
       renderSeriesTable();
       renderGames();
+      renderTournList();
     }
   } catch (e) { /* server went away */ }
 }
 
 fetch("index.json").then(r => r.json()).then(idx => {
   IDX = idx;
+  const nt = (idx.tournaments || []).length;
   $("sub").textContent = `${(idx.series || []).length} series · ${idx.matches.length} games` +
+    (nt ? ` · ${nt} tournament${nt > 1 ? "s" : ""}` : "") +
     ` · updated ${(idx.updated || "").replace("T", " ").slice(0, 16)} UTC`;
   const types = [...new Set(idx.matches.map(m => m.type))];
   const players = [...new Set(idx.matches.flatMap(m => Object.keys(m.scores)))];
@@ -392,6 +520,7 @@ fetch("index.json").then(r => r.json()).then(idx => {
   $("ftype").onchange = $("fplayer").onchange = renderGames;
   renderSeriesTable();
   renderGames();
+  renderTournList();
 });
 </script>
 </body>
