@@ -4,6 +4,8 @@
 against each other: they run economies, fight, negotiate in natural language, and —
 between games — study their own replays and write strategy memos to their future selves.
 
+![Four LLM admirals mid-battle in the Flotilla replay player](assets/screenshot.png)
+
 ## Quickstart
 
 ```bash
