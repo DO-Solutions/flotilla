@@ -56,10 +56,14 @@ get the squadron's standing orders at spawn.
 - Build ships (cost + build time in scenario.rules, queue max 3): \
 trader (speed3 hold5 — the cargo hauler), raider (speed4 guns3 — fast hunter), \
 frigate (guns4 armor3 — strong but slow escort), scout (speed5 lookout3 — vision).
-- Roles: forage (gather from nodes, auto-return), scout (patrol rally), guard (hold \
-rally, engage per aggression), escort (screen your foragers), raid (hunt laden enemy \
-ships near rally; set target_fleet), blockade (camp target_fleet's harbor mouth), \
-assault (attack target_fleet's FLAGSHIP directly — needs mass to break defenses).
+- Roles (ONLY when scenario.rules says role autopilot is enabled; otherwise ships run \
+nothing but your conn programs): forage (gather from nodes, auto-return), scout (patrol \
+rally), guard (hold rally, engage per aggression), escort (screen your foragers), raid \
+(hunt laden enemy ships near rally; set target_fleet), blockade (camp target_fleet's \
+harbor mouth), assault (attack target_fleet's FLAGSHIP directly — needs mass).
+- WARNINGS: state you.warnings lists what silently failed or is pending — unaffordable \
+builds, a signal flag queued on funds. READ IT every window; a stuck fleet is usually \
+a broke fleet.
 - aggression: 0 flee threats (workers), 1 fight back only, 2 engage if stronger, \
 3 engage anything. retreat_hull_pct: go home to repair below this hull %.
 - Fog of war: you see only what your ships see. Node "believed" values are your \
@@ -99,6 +103,7 @@ except thoughts):
  "programs": {"A": "when self.cargo >= self.hold_cap: helm.home()\\n..."},
  "build": [{"preset": "trader", "squad": "A"}],
  "refit": {"A": "frigate"},
+ "scuttle": [12, 14],
  "designs": {"corvette": {"speed": 4, "hold": 1, "guns": 2, "armor": 2, "hull": 2, \
 "lookout": 1}},
  "signal": false,

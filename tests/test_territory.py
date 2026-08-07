@@ -40,7 +40,7 @@ def main():
     def h(seed):
         from bots import BOTS
         e = Engine([(n, BOTS[n]) for n in ["merchant", "corsair"]], seed=seed,
-                   max_ticks=2000, scenario=sc)
+                   max_ticks=2000, scenario={**sc, "role_fallback": True})
         res = e.run()
         return hashlib.sha256(json.dumps(e.replay(res), sort_keys=True,
                                          separators=(",", ":")).encode()).hexdigest()

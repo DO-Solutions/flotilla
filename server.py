@@ -31,6 +31,7 @@ index. Agent-first API (all JSON; same schema as the GUI):
 Auth: none on the loopback default — put a reverse proxy with auth in front for
 public serving (see deploy/). Bind elsewhere with FLOTILLA_BIND=0.0.0.0:8080.
 """
+import hashlib
 import json
 import os
 import re
@@ -212,6 +213,78 @@ ROUTES_STATIC = {
     "/player.html": ("viewer/index.html", "text/html"),
 }
 
+def _showcase_cfg():
+    """Showcase publishing config: env first (self-hosters), else the stored file
+    (set once via POST /api/showcase-config; never served by any route)."""
+    env = {k.lower().replace("showcase_", ""): os.environ[k]
+           for k in ("SHOWCASE_ACCESS_KEY", "SHOWCASE_SECRET_KEY",
+                     "SHOWCASE_ENDPOINT", "SHOWCASE_BUCKET", "SHOWCASE_REGION")
+           if os.environ.get(k)}
+    if {"access_key", "secret_key", "endpoint", "bucket"} <= set(env):
+        env.setdefault("region", "nyc3")
+        return env
+    try:
+        with open(os.path.join(LIB, "showcase.json")) as fh:
+            d = json.load(fh)
+        if {"access_key", "secret_key", "endpoint", "bucket"} <= set(d):
+            d.setdefault("region", "nyc3")
+            return d
+    except Exception:
+        pass
+    return None
+
+
+def _s3_put_public(cfg, key, data, content_type="text/html"):
+    """Minimal SigV4 S3 PUT with public-read ACL — stdlib only, no boto."""
+    import datetime as _dt
+    import hmac
+    import urllib.request as _rq
+    host = f"{cfg['bucket']}.{cfg['endpoint']}"
+    now = _dt.datetime.now(_dt.timezone.utc)
+    amzdate = now.strftime("%Y%m%dT%H%M%SZ")
+    datestamp = now.strftime("%Y%m%d")
+    region = cfg.get("region", "nyc3")
+    payload_hash = hashlib.sha256(data).hexdigest()
+    uri = "/" + urllib.parse.quote(key)
+    headers = {"host": host, "x-amz-acl": "public-read",
+               "x-amz-content-sha256": payload_hash, "x-amz-date": amzdate,
+               "content-type": content_type}
+    signed = ";".join(sorted(headers))
+    canonical = ("PUT\n" + uri + "\n\n"
+                 + "".join(f"{k}:{headers[k]}\n" for k in sorted(headers))
+                 + "\n" + signed + "\n" + payload_hash)
+    scope = f"{datestamp}/{region}/s3/aws4_request"
+    sts = ("AWS4-HMAC-SHA256\n" + amzdate + "\n" + scope + "\n"
+           + hashlib.sha256(canonical.encode()).hexdigest())
+
+    def _hm(k, m):
+        return hmac.new(k, m.encode(), hashlib.sha256).digest()
+
+    sk = _hm(_hm(_hm(_hm(("AWS4" + cfg["secret_key"]).encode(), datestamp),
+                     region), "s3"), "aws4_request")
+    sig = hmac.new(sk, sts.encode(), hashlib.sha256).hexdigest()
+    auth = (f"AWS4-HMAC-SHA256 Credential={cfg['access_key']}/{scope}, "
+            f"SignedHeaders={signed}, Signature={sig}")
+    req = _rq.Request(f"https://{host}{uri}", data=data, method="PUT",
+                      headers={**{k: v for k, v in headers.items() if k != "host"},
+                               "Authorization": auth})
+    with _rq.urlopen(req, timeout=180) as r:
+        return r.status
+
+
+def _showcase_list_path():
+    return os.path.join(LIB, "showcase-list.json")
+
+
+def _showcase_list():
+    try:
+        with open(_showcase_list_path()) as fh:
+            d = json.load(fh)
+        return d if isinstance(d, list) else []
+    except Exception:
+        return []
+
+
 MODELS_CACHE = {"at": 0.0, "ids": []}
 SCRIPTED_BOTS = ["merchant", "corsair", "admiralty", "turtle"]
 
@@ -278,6 +351,7 @@ class H(BaseHTTPRequestHandler):
             with JOBS_LOCK:
                 q = sum(1 for j in JOBS if j["state"] in ("queued", "running"))
             return self._send(200, {"ok": True, "version": VERSION, "queue": q,
+                                    "showcase": _showcase_cfg() is not None,
                                     "runs_enabled": bool(os.environ.get("DO_INFERENCE_KEY"))
                                     or True})
         if path == "/api/stats":
@@ -306,6 +380,9 @@ class H(BaseHTTPRequestHandler):
             return self._send(200, {"models": _models(), "scripted": SCRIPTED_BOTS})
         if path == "/api/prompts":
             return self._send(200, _load_prompts())
+        if path == "/api/showcase":
+            return self._send(200, {"enabled": _showcase_cfg() is not None,
+                                    "published": _showcase_list()})
         if path == "/api/runs":
             with JOBS_LOCK:
                 out = [dict(j, log=j["log"][-8:]) for j in JOBS[-20:]][::-1]
@@ -415,6 +492,72 @@ class H(BaseHTTPRequestHandler):
                 with open(_prompts_path(), "w") as fh:
                     json.dump(prompts, fh, indent=1)
                 return self._send(200, prompts)
+            if path == "/api/showcase-config":
+                d = json.loads(body)
+                need = {"access_key", "secret_key", "endpoint", "bucket"}
+                if not need <= set(d):
+                    return self._send(400, {"error": f"need {sorted(need)}"})
+                p = os.path.join(LIB, "showcase.json")
+                with open(p, "w") as fh:
+                    json.dump({k: str(d[k]) for k in
+                               ("access_key", "secret_key", "endpoint", "bucket",
+                                "region") if k in d}, fh)
+                os.chmod(p, 0o600)
+                return self._send(200, {"ok": True, "showcase": True})
+            if path == "/api/showcase":
+                cfg = _showcase_cfg()
+                if cfg is None:
+                    return self._send(400, {"error": "showcase not configured — "
+                                            "POST /api/showcase-config or set "
+                                            "SHOWCASE_* env"})
+                d = json.loads(body)
+                title = str(d.get("name") or "").strip()
+                if d.get("series"):
+                    sname = os.path.basename(str(d["series"]))
+                    sdir = os.path.join(LIB, "series", sname)
+                    if not os.path.isfile(os.path.join(sdir, "series.json")):
+                        return self._send(404, {"error": "no such series"})
+                    title = title or sname
+                    tmp = os.path.join(LIB, "_work", f"showcase-{_san(title)}.html")
+                    os.makedirs(os.path.dirname(tmp), exist_ok=True)
+                    build_bundle(sdir, title, tmp)
+                    with open(tmp, "rb") as fh:
+                        payload = fh.read()
+                    os.remove(tmp)
+                elif d.get("match"):
+                    mfile = os.path.join(LIB, "matches",
+                                         os.path.basename(str(d["match"])))
+                    if not os.path.isfile(mfile):
+                        # series game path: replays/<series>/<g>.json
+                        parts = str(d["match"]).split("/")
+                        mfile = os.path.join(LIB, "series", *[os.path.basename(p)
+                                                              for p in parts[-2:]])
+                    if not os.path.isfile(mfile):
+                        return self._send(404, {"error": "no such replay"})
+                    title = title or os.path.basename(mfile).rsplit(".", 1)[0]
+                    with open(os.path.join(HERE, "viewer", "index.html")) as fh:
+                        tpl = fh.read()
+                    with open(mfile) as fh:
+                        payload = tpl.replace("/*" + "EMBED_REPLAY" + "*/null",
+                                              fh.read(), 1).encode()
+                else:
+                    return self._send(400, {"error": "give series or match"})
+                key = f"showcase/{_san(title) or 'match'}.html"
+                try:
+                    _s3_put_public(cfg, key, payload)
+                except Exception as e:
+                    return self._send(502, {"error": f"upload failed: "
+                                            f"{type(e).__name__}: {e}"[:200]})
+                url = f"https://{cfg['bucket']}.{cfg['endpoint']}/{key}"
+                pub = _showcase_list()
+                pub = [x for x in pub if x.get("url") != url]
+                pub.append({"name": title, "url": url,
+                            "bytes": len(payload), "when": time.strftime(
+                                "%Y-%m-%dT%H:%M:%SZ", time.gmtime())})
+                with open(_showcase_list_path(), "w") as fh:
+                    json.dump(pub, fh, indent=1)
+                return self._send(200, {"ok": True, "url": url,
+                                        "bytes": len(payload)})
             if path == "/api/rename":
                 d = json.loads(body)
                 name = os.path.basename(str(d.get("series", "")))

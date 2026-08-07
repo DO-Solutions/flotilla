@@ -135,6 +135,8 @@ class Fleet:
         self.pending_refits = {}           # squad -> class name (standing directive)
         self.designs = {}                  # this fleet's custom ship classes
         self.reports_pending = []          # voyage reports awaiting the next window
+        self.queued_signal = None          # hoist waiting on funds
+        self.warnings = []                 # per-window admiral warnings (funds etc.)
         self.territory = 0                 # territory-mode control points
         self.recent_hits = 0               # hits taken since last window (bot signal)
 
@@ -190,6 +192,13 @@ class Engine:
                     f"Timed match: score = cargo hauled to port + {c['kill_score']}/enemy "
                     f"ship sunk + {c['flag_kill_score']}/flagship destroyed. Highest "
                     "score at the bell wins; losing your flagship eliminates you.")
+        self.roles_allowed = set(ROLES)
+        if c["roles_allowed"].strip():
+            self.roles_allowed = {r.strip() for r in c["roles_allowed"].split(",")
+                                  if r.strip()}
+            bad = self.roles_allowed - set(ROLES)
+            if bad:
+                raise ValueError(f"roles_allowed contains unknown roles: {sorted(bad)}")
         self.shared_designs = {}           # operator classes, symmetric for all fleets
         if c["ship_designs"]:
             raw = json.loads(c["ship_designs"])          # invalid = fail loud
@@ -227,6 +236,9 @@ class Engine:
                 'hoist {"signal": true} to push your CURRENT standing orders to every '
                 'ship at sea instantly, or {"signal": {"return": "all" or [squads]}} '
                 "to recall ships to port")
+        sig_rules += ("; an UNAFFORDABLE hoist is QUEUED and raises itself the moment "
+                      "funds allow — you.warnings tells you every window; cancel with "
+                      '{"signal": {"cancel": true}}')
         c["rules"] = (
             f"map {self.W}x{self.H}; decision window every {c['window'] / 10:g}s; match "
             f"ends t={self.max_ticks}; ships cost {c['ship_cost']} cargo, build in "
@@ -263,6 +275,17 @@ class Engine:
                "system prompt); a programmed ship ignores its role and runs your code"
                if c["programs"] else
                "; conn programs are DISABLED this match — standing-order roles only")
+            + (("; ROLE AUTOPILOT ENABLED for unprogrammed ships — roles available: "
+                + ",".join(sorted(self.roles_allowed)))
+               if c["role_fallback"] else
+               "; ROLE AUTOPILOT DISABLED: ships execute ONLY your conn programs — an "
+               "unprogrammed ship sits IDLE in port (deposits/repairs still work); "
+               "standing orders serve purely as orders.* parameters for your code")
+            + (f"; SCUTTLE: \"scuttle\": [ship ids] sinks your own ships anywhere for "
+               f"{c['scuttle_value']} treasury each (a laden ship's cargo becomes a "
+               "wreck)" if c["scuttle"] else "")
+            + (f"; passive income: every fleet receives +{c['income_amount']} treasury "
+               f"per {c['income_period'] / 10:g}s" if c["income_amount"] > 0 else "")
             + ".")
         self.scenario = dict(win=c["win"], description=c["description"],
                              rules=c["rules"], regions=c["regions"],
@@ -450,6 +473,13 @@ class Engine:
                       believed=self.believed(fleet, n)) for n in self.nodes.values()]
         messages, fleet.inbox = fleet.inbox, []
         reports, fleet.reports_pending = fleet.reports_pending[:12], []
+        warnings, fleet.warnings = list(fleet.warnings), []
+        if fleet.queued_signal is not None:
+            warnings.append(
+                f"⚠ signal flag QUEUED, not yet hoisted — waiting on funds "
+                f"(cost {self.cfg['signal_cost']}, treasury {fleet.cargo}); it "
+                'raises automatically when affordable, or cancel with '
+                '{"signal": {"cancel": true}}')
         region_view = [dict(id=r["id"], name=r["name"], x=r["x"], y=r["y"],
                             owner=(self.fleets[self.region_owner[r["id"]]].name
                                    if self.region_owner[r["id"]] is not None else None))
@@ -467,7 +497,8 @@ class Engine:
                 programs={sq: p.text
                           for sq, p in fleet.pending_programs.items()},
                 designs=dict(fleet.designs),
-                refits=dict(fleet.pending_refits)),
+                refits=dict(fleet.pending_refits),
+                warnings=warnings[:10]),
             enemies=enemies, nodes=nodes, reports=reports,
             parley_log=fleet.parley_log[-200:],
             admirals={f.id: f.name for f in self.fleets.values()},
@@ -549,7 +580,7 @@ class Engine:
     def _clean_order(self, fleet, od):
         """Sanitize one order dict from an admiral (or a signal preset) into a
         bounded, engine-safe standing order. None = rejected."""
-        if not isinstance(od, dict) or od.get("role") not in ROLES:
+        if not isinstance(od, dict) or od.get("role") not in self.roles_allowed:
             return None
         clean = dict(DEFAULT_ORDER)
         clean["role"] = od["role"]
@@ -626,8 +657,16 @@ class Engine:
                 fleet.pending_refits[sq] = cls
         for b in (actions.get("build") or [])[:4]:
             preset, squad = b.get("preset"), b.get("squad", "A")
-            if isinstance(preset, str) and self.class_stats(fleet, preset) is not None \
-                    and fleet.cargo >= self.cfg['ship_cost'] and len(fleet.build_q) < 3:
+            if not isinstance(preset, str) \
+                    or self.class_stats(fleet, preset) is None:
+                continue
+            if fleet.cargo < self.cfg['ship_cost']:
+                fleet.warnings.append(
+                    f"build {preset} DROPPED — insufficient funds "
+                    f"(cost {self.cfg['ship_cost']}, treasury {fleet.cargo})")
+            elif len(fleet.build_q) >= 3:
+                fleet.warnings.append(f"build {preset} DROPPED — build queue full (3)")
+            else:
                 fleet.cargo -= self.cfg['ship_cost']
                 fleet.build_q.append((preset, squad))
         sent = 0
@@ -652,8 +691,39 @@ class Engine:
             self._ev("parley", fleet=fleet.id,
                      to="all" if to == "all" else targets[0].id, text=text)
             sent += 1
+        if self.cfg["scuttle"]:
+            for sid in (actions.get("scuttle") or [])[:20]:
+                try:
+                    s = self.ships.get(int(sid))
+                except (TypeError, ValueError):
+                    continue
+                if s is None or s.fleet != fleet.id:
+                    continue
+                fleet.cargo += self.cfg["scuttle_value"]
+                if s.cargo > 0:            # her cargo goes down with her
+                    self._add_node(s.x, s.y, "wreck", s.cargo, s.cargo)
+                self._ev("sink", fleet=s.fleet, ship=s.id, x=s.x, y=s.y,
+                         preset=s.preset, by=None, cause="scuttle")
+                for f2 in self.fleets.values():
+                    f2.contacts.pop(s.id, None)
+                del self.ships[s.id]
         sig = actions.get("signal")
-        if sig and fleet.signal_cd == 0 and fleet.cargo >= self.cfg['signal_cost']:
+        if isinstance(sig, dict) and sig.get("cancel"):
+            fleet.queued_signal = None
+            sig = None
+        if sig:
+            if fleet.signal_cd > 0:
+                fleet.warnings.append(
+                    f"signal NOT hoisted — cooldown ({fleet.signal_cd} windows left)")
+            elif fleet.cargo < self.cfg["signal_cost"]:
+                fleet.queued_signal = sig      # raises itself the moment funds exist
+            else:
+                self._exec_signal(fleet, sig)
+        self._record_decision(fleet, actions)
+
+    def _exec_signal(self, fleet, sig):
+        """Execute a hoist (funds + cooldown already cleared by the caller)."""
+        if True:
             mode = self.cfg["signal_mode"]
             at_sea = [s for s in self.ships.values() if s.fleet == fleet.id
                       and cheb(s.x, s.y, fleet.hx, fleet.hy) > self.hr]
@@ -707,6 +777,9 @@ class Engine:
                 fleet.cargo -= self.cfg['signal_cost']
                 fleet.signal_cd = self.cfg['signal_cd']
                 self._ev("signal", fleet=fleet.id, flag=hoisted)
+            return hoisted is not None
+
+    def _record_decision(self, fleet, actions):
         rec = dict(t=self.t, fleet=fleet.id,
                    thoughts=str(actions.get("thoughts", ""))[:400])
         if actions.get("scratchpad") is not None:    # replay review sees pad rewrites
@@ -878,6 +951,9 @@ class Engine:
             r = self._run_program(ship)
             if r is not NotImplemented:     # NotImplemented = runtime fault -> role
                 return r
+        if not self.cfg["role_fallback"]:   # hard mode: your code IS the fleet
+            self._intent(ship, "idle: no conn program (role autopilot disabled)")
+            return None
         od = self._order_for(ship)
         role = od["role"]
         ax, ay = self._anchor(ship, od)
@@ -1036,6 +1112,17 @@ class Engine:
             for (f, _, _), actions in zip(jobs, results):
                 self._apply_actions(f, actions)
                 f.recent_hits = 0
+        # passive income + queued signals (both fire the tick funds allow)
+        if self.cfg["income_amount"] > 0 and t > 0 \
+                and t % self.cfg["income_period"] == 0:
+            for f in self.fleets.values():
+                if f.alive:
+                    f.cargo += self.cfg["income_amount"]
+        for f in self.fleets.values():
+            if f.alive and f.queued_signal is not None and f.signal_cd == 0 \
+                    and f.cargo >= self.cfg["signal_cost"]:
+                sig, f.queued_signal = f.queued_signal, None
+                self._exec_signal(f, sig)
         # builds
         for f in self.fleets.values():
             if not f.alive or not f.build_q:

@@ -16,11 +16,13 @@ python3 server.py               # -> http://127.0.0.1:8080
 ```
 
 That's it — no dependencies beyond Python 3.10+. Open the dashboard, hit
-**🛠 Configure a Run**, pick your models and knobs, and **🚀 Launch**. Replays,
-series (with memos), and tournaments appear in the library as they finish.
+**🧭 Chart a Course**, pick your models and knobs, and **⛵ Set sail**. Games
+stream into the library live as they run.
 
 Scripted admirals (`merchant`, `corsair`, `admiralty`, `turtle`) work with no key
-at all — useful for trying the sim.
+at all — useful for trying the sim. Note: by default ships obey ONLY conn programs
+(the coding challenge); scripted bots need the role autopilot, so give scripted
+runs `"scenario": {"role_fallback": true}`.
 
 ## Agent-first by design
 

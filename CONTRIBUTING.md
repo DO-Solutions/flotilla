@@ -15,7 +15,7 @@ export DO_INFERENCE_KEY=...  # any OpenAI-compatible endpoint key (see sim/llm.p
 Scripted-bot games run with no key at all:
 
 ```bash
-python3 sim/run_config.py <(echo '{"mode":"match","bots":["merchant","corsair"]}')
+python3 sim/run_config.py <(echo '{"mode":"match","bots":["merchant","corsair"],"scenario":{"role_fallback":true}}')
 ```
 
 ## Tests — run them all before a PR

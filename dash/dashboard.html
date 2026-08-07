@@ -153,7 +153,9 @@
     name to rename it (saved on the server; renames also name your downloads).
     <b>▶ Watch</b> opens the spoiler-free player in a new tab; <b>⬇ Download</b>
     builds a single self-contained HTML file you can send to anyone — it works
-    offline, no server needed.</div>
+    offline, no server needed. <b>🌐</b> (when publishing is configured) uploads
+    that same file to a public bucket and hands you a link anyone can open in a
+    browser — no login, no download.</div>
   <div class="helpsec">
     <b>🎬 Individual Games</b> — every match with final scores and winners
     (spoilers, by design). Filter by type or player.</div>
@@ -304,7 +306,10 @@ function renderSeriesTable() {
       `<td><a class="btn btn-watch" target="_blank" ` +
       `href="player.html?series=${encodeURIComponent(s.name)}` +
       `&title=${encodeURIComponent(displayName(s))}">▶ Watch</a>` +
-      `<a class="btn btn-dl dls" href="#" data-series="${s.name}">⬇ Download</a></td>`;
+      `<a class="btn btn-dl dls" href="#" data-series="${s.name}">⬇ Download</a>` +
+      (SHOWCASE ? `<a class="btn btn-dl shpub" href="#" data-series="${s.name}" ` +
+        `title="publish a spoiler-free public link — no login needed to view">🌐</a>` : "") +
+      `</td>`;
     tb.appendChild(tr);
   }
 }
@@ -326,7 +331,9 @@ function renderGames() {
       `<td><a class="btn btn-watch" target="_blank" ` +
       `href="player.html?replay=${encodeURIComponent(m.file)}">▶ Watch</a>` +
       `<a class="btn btn-dl dlh" href="#" data-file="${m.file}" ` +
-      `data-name="${m.type}-s${m.seed}">⬇</a></td>`;
+      `data-name="${m.type}-s${m.seed}">⬇</a>` +
+      (SHOWCASE ? `<a class="btn btn-dl shpub" href="#" data-match="${m.file}" ` +
+        `title="publish a public link">🌐</a>` : "") + `</td>`;
     tb.appendChild(tr);
   }
 }
@@ -373,6 +380,21 @@ document.addEventListener("click", async e => {
     const payload = JSON.stringify({ series: { name: nm, games } });
     blobDl(await selfContained(payload), `${safeFile(nm)}.html`);
     t.textContent = "⬇ Download";
+  }
+  if (t.classList.contains("shpub")) {
+    e.preventDefault();
+    t.textContent = "…";
+    const body = t.dataset.series
+      ? { series: t.dataset.series,
+          name: displayName(IDX.series.find(x => x.name === t.dataset.series)) }
+      : { match: t.dataset.match };
+    try {
+      const r = await (await fetch("api/showcase", {
+        method: "POST", body: JSON.stringify(body) })).json();
+      t.textContent = "🌐";
+      if (r.ok) window.prompt("Public link (copy it — anyone can watch, no login):", r.url);
+      else window.alert("publish failed: " + r.error);
+    } catch (err) { t.textContent = "🌐"; window.alert("publish failed: " + err); }
   }
   if (t.classList.contains("jcancel")) {
     e.preventDefault();
@@ -752,9 +774,11 @@ fetch("config-schema.json").then(r => r.json()).then(s => {
 
 // ---- server-side launching: only offered when a live server answers ----
 let SERVER = false;
+let SHOWCASE = false;
 fetch("api/health").then(r => r.json()).then(async h => {
   if (h && h.ok) {
     SERVER = true;
+    SHOWCASE = !!h.showcase;
     $("claunch").style.display = "";
     $("jobscard").style.display = "";
     pollJobs();

@@ -48,7 +48,7 @@ bot = Scripted([
     dict(orders={"B": dict(role="guard", rally=[20, 20], aggression=1)},    # w2: new pending
          signal={"return": ["B"]}),                                         #     + recall
 ])
-eng = Engine([("R", bot), ("X", Idle())], seed=11, scenario={"signal_mode": "return_only"})
+eng = Engine([("R", bot), ("X", Idle())], seed=11, scenario={"signal_mode": "return_only", "role_fallback": True})
 for _ in range(210):                     # through w2's hoist
     eng.tick()
 f0 = eng.fleets[0]
@@ -67,7 +67,7 @@ ok(all(s.orders["role"] == "guard" for s in b_ships),
 # return_only refuses the classic push
 eng2 = Engine([("R", Scripted([dict(orders={"B": dict(role="guard", rally=[5, 5])},
                                     signal=True)])), ("X", Idle())],
-              seed=11, scenario={"signal_mode": "return_only"})
+              seed=11, scenario={"signal_mode": "return_only", "role_fallback": True})
 c0 = eng2.fleets[0].cargo
 eng2.tick()
 ok(eng2.fleets[0].cargo == c0, "return_only: signal:true is refused (no charge)")
@@ -80,7 +80,7 @@ eng3 = Engine([("P", Scripted([
     {},
     dict(signal={"hoist": "Strike"}),
 ])), ("X", Idle())], seed=11,
-    scenario={"signal_mode": "preset", "signal_presets": presets})
+    scenario={"signal_mode": "preset", "signal_presets": presets, "role_fallback": True})
 for _ in range(210):
     eng3.tick()
 sea_b3 = [s for s in at_sea(eng3, 0) if s.squad == "B"]
@@ -101,7 +101,7 @@ eng4 = Engine([("C", Scripted([
     dict(orders={"B": dict(role="scout", rally=[60, 30], aggression=0)}),
     {},
     dict(orders={"B": dict(role="guard", rally=[10, 10])}, signal=True),
-])), ("X", Idle())], seed=11, scenario={"signal_mode": "custom"})
+])), ("X", Idle())], seed=11, scenario={"signal_mode": "custom", "role_fallback": True})
 for _ in range(210):
     eng4.tick()
 sea_b4 = [s for s in at_sea(eng4, 0) if s.squad == "B"]
@@ -112,7 +112,7 @@ ok(any(e.get("k") == "signal" and e.get("flag") == "orders-push"
 
 # rules digest reflects the mode
 r_ro = Engine([("A", Idle()), ("B", Idle())], seed=1,
-              scenario={"signal_mode": "return_only"}).scenario["rules"]
+              scenario={"signal_mode": "return_only", "role_fallback": True}).scenario["rules"]
 ok("RETURN TO PORT" in r_ro and "NO instant orders-push" in r_ro,
    "rules digest documents return_only")
 r_cu = eng4.scenario["rules"]

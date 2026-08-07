@@ -84,7 +84,8 @@ with open(os.path.join(TMP, "index.json")) as fh:
 
 # cancel: run 1 occupies the single slot; run 2 queues behind it
 st, r1 = req("/api/run", {"mode": "match", "seed": 5, "bots": ["merchant", "corsair"],
-                          "scenario": {"max_ticks": 6000}, "name": "cancel-run"})
+                          "scenario": {"max_ticks": 6000, "role_fallback": True},
+                          "name": "cancel-run"})
 ok(st == 202, "run 1 submitted")
 st, r2 = req("/api/run", {"mode": "match", "seed": 6, "bots": ["merchant", "corsair"],
                           "name": "cancel-queued"})
@@ -122,6 +123,23 @@ st, r = req("/api/prompts", {"name": "trade first", "text": ""})
 ok(st == 200 and "trade-first" not in r, "empty text deletes the prompt")
 st, r = req("/api/prompts", {"name": "", "text": "x"})
 ok(st == 400, "unnamed prompt rejected")
+
+# showcase: unconfigured 400 -> config roundtrip -> graceful upload failure
+st, r = req("/api/showcase", {"series": "test-series"})
+ok(st == 400 and "not configured" in r["error"], "showcase unconfigured -> 400")
+st, r = req("/api/showcase-config", {"access_key": "AK", "secret_key": "SK",
+                                     "endpoint": "127.0.0.1:9", "bucket": "b"})
+ok(st == 200 and r["showcase"], "showcase config stored")
+ok(oct(os.stat(os.path.join(TMP, "showcase.json")).st_mode & 0o777) == "0o600",
+   "showcase config file is 0600")
+st, h2 = req("/api/health")
+ok(h2.get("showcase") is True, "health reports showcase enabled")
+st, r = req("/api/showcase", {"series": "nope"})
+ok(st == 404, "unknown series -> 404")
+st, r = req("/api/showcase", {"series": "test-series"})
+ok(st == 502 and "upload failed" in r["error"],
+   "unreachable bucket fails gracefully (bundle built, upload 502)")
+os.remove(os.path.join(TMP, "showcase.json"))
 
 # live per-game publishing: a series game lands in the library before the job ends
 wd = os.path.join(TMP, "_work", "livetest")

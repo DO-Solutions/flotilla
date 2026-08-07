@@ -15,7 +15,7 @@ class Idle:
 
 
 def main():
-    eng = Engine([("corsair", BOTS["corsair"]), ("idle", Idle())], seed=7)
+    eng = Engine([("corsair", BOTS["corsair"]), ("idle", Idle())], seed=7, scenario={"role_fallback": True})
     tgt = eng.fleets[1]
     for s in [s for s in eng.ships.values() if s.fleet == 1]:
         del eng.ships[s.id]
