@@ -98,6 +98,9 @@ except thoughts):
 "retreat_hull_pct": 40, "target_fleet": null}},
  "programs": {"A": "when self.cargo >= self.hold_cap: helm.home()\\n..."},
  "build": [{"preset": "trader", "squad": "A"}],
+ "refit": {"A": "frigate"},
+ "designs": {"corvette": {"speed": 4, "hold": 1, "guns": 2, "armor": 2, "hull": 2, \
+"lookout": 1}},
  "signal": false,
  "scratchpad": "full replacement text for your scratchpad (optional)",
  "parley": [{"to": "all", "text": "..."}]}

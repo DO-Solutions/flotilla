@@ -92,7 +92,7 @@
   <button class="tab on" data-tab="series">⛵ Series View <span class="dim">(spoiler-free)</span></button>
   <button class="tab" data-tab="games">🎬 Individual Games <span class="warn">⚠ contains spoilers</span></button>
   <button class="tab" data-tab="tourn">🏆 Tournaments</button>
-  <button class="tab" data-tab="config">🛠 Configure a Run</button>
+  <button class="tab" data-tab="config">🧭 Chart a Course</button>
   <button class="tab" data-tab="help">❓ Help</button>
 </div>
 <div class="card" id="seriestab">
@@ -114,7 +114,7 @@
 </div>
 <div class="card" id="tourntab" style="display:none">
   <div class="dim" id="tempty" style="display:none">No tournaments yet — configure one
-    under 🛠 Configure a Run (mode: tournament), or run
+    under 🧭 Chart a Course (mode: tournament), or run
     <code>python3 sim/run_config.py your-tournament.json</code>.</div>
   <table id="tt"><thead><tr>
     <th>tournament</th><th>format</th><th>matchups</th><th style="width:110px"></th>
@@ -161,12 +161,12 @@
     <b>🏆 Tournaments</b> — brackets and leaderboards. Results stay hidden until
     you hit <i>Reveal</i>, so you can watch the games unspoiled first.</div>
   <div class="helpsec">
-    <b>🛠 Configure a Run</b> — every knob that can affect a game, generated from
+    <b>🧭 Chart a Course</b> — every knob that can affect a game, generated from
     the same schema the engine runs on (the ⓘ hover text is byte-identical to what
     an agent reads in <a href="config-schema.json">config-schema.json</a>). Pick a
     model per player tile, optionally override its settings or give it an operator
-    prompt (saved prompts live on the server), and 🚀 Launch — runs execute right
-    here and appear in the library when done.</div>
+    prompt (saved prompts live on the server), and ⛵ Set sail — runs execute right
+    here and land in the library game by game as they finish.</div>
   <div class="helpsec">
     <b>The player page</b> — ▶ Play, scrub, speed. Right side: Fleets (live
     scores + each admiral's latest thinking), Admirals (decisions + spend),
@@ -230,7 +230,7 @@
   <div id="cform"></div>
   <div style="margin-top:12px">
     run name: <input id="cname" class="sname" style="width:220px" placeholder="my-experiment">
-    <a class="btn btn-watch" id="claunch" href="#" style="display:none">🚀 Launch on this server</a>
+    <a class="btn btn-watch" id="claunch" href="#" style="display:none">⛵ Set sail on this server</a>
     <a class="btn btn-dl" id="cdl" href="#">⬇ Download config.json</a>
     <a class="btn btn-dl" id="ccopy" href="#">📋 Copy JSON</a>
     <span class="dim" id="cmsg"></span>

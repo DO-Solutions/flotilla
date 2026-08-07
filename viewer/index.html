@@ -144,6 +144,7 @@
       <span>⬟ bright-ringed + gun studs = frigate</span>
       <span>› sliver = scout</span>
       <span>● teal = fish shoal · ◆ amber = wreck</span>
+      <span>custom classes: shape follows stats (length=speed, beam=hold, studs=guns, mast=lookout)</span>
       <span>✦ = combat (tinted toward the likely survivor)</span>
       <span>click a ship to inspect · click the timeline to jump</span>
     </div>
@@ -216,6 +217,9 @@ function load(rp) {
   $("pov").value = "-1";
   for (const e of rp.events) {
     if (e.k === "spawn") S.cat[e.ship] = { preset: e.preset, squad: e.squad, fleet: e.fleet };
+    if (e.k === "refit" && S.cat[e.ship]) {
+      (S.cat[e.ship].refits = S.cat[e.ship].refits || []).push([e.t, e.to]);
+    }
     if (e.k === "sink") S.sinkAt[e.ship] = e.t;
     if (e.k === "intent" || e.k === "orders") {
       (S.byShip[e.ship] = S.byShip[e.ship] || []).push(e);
@@ -334,12 +338,29 @@ function latestThought(fleetId, t) {
 
 function nodeName(nd) { return nd.name || ("Isle " + nd.id); }
 
+// class resolution: refits change a ship's class MID-GAME, so always resolve
+// against the frame time; stats come from built-ins/operator classes (meta.presets)
+// or the owning fleet's custom designs
+function classAt(sid, t) {
+  const c = S.cat[sid] || {};
+  let p = c.preset;
+  for (const [rt, to] of c.refits || []) {
+    if (rt <= t) p = to; else break;
+  }
+  return p;
+}
+function statsOf(preset, fleetId) {
+  return (S.rp.meta.presets || {})[preset] ||
+    (((S.rp.fleets.find(f => f.id === fleetId) || {}).designs || {})[preset]) || null;
+}
+
 // ---- POV fog of war: EXACT replica of the engine's visibility rules ----
 // A fleet sees a cell within harbor_r+4 (Chebyshev) of its harbor, or within
 // 4 + lookout*2 of any of its ships (core.py _fleet_sees). Node stocks under
 // fog use the same believed() model: last-seen value + projected fish regen.
-function shipVision(sid) {
-  const st = ((S.rp.meta.presets || {})[(S.cat[sid] || {}).preset]) || {};
+function shipVision(sid, t) {
+  const cat = S.cat[sid] || {};
+  const st = statsOf(classAt(sid, t == null ? Infinity : t), cat.fleet) || {};
   return 4 + (st.lookout || 1) * 2;
 }
 function computePov(fid) {
@@ -354,7 +375,7 @@ function computePov(fid) {
     const sees = (x, y) => {
       if (Math.max(Math.abs(x - fl.harbor[0]), Math.abs(y - fl.harbor[1])) <= hr4) return true;
       for (const o of own) {
-        if (Math.max(Math.abs(x - o[2]), Math.abs(y - o[3])) <= shipVision(o[0])) return true;
+        if (Math.max(Math.abs(x - o[2]), Math.abs(y - o[3])) <= shipVision(o[0], fr.t)) return true;
       }
       return false;
     };
@@ -401,7 +422,8 @@ function updateInspector(fr) {
   const sid = S.sel.id;
   const row = S.frameMaps[S.fi].get(sid);
   const cat = S.cat[sid] || {};
-  const stats = (S.rp.meta.presets || {})[cat.preset] || {};
+  cat.preset = classAt(sid, fr.t) || cat.preset;   // refit-aware display class
+  const stats = statsOf(cat.preset, cat.fleet) || {};
   if (!row) {
     box.className = "on";
     box.innerHTML = `<h3>ship ${sid} — ${cat.preset || "?"}</h3>` +
@@ -584,7 +606,7 @@ function updatePanels(fr) {
   updateInspector(fr);
 }
 
-function drawShipShape(preset, color, cargo, sel) {
+function drawShipShape(preset, color, cargo, sel, stats) {
   // SHAPE CONTRACT: every silhouette is authored with its FRONT at +x. draw()
   // rotates the canvas so +x points along the direction of travel (or the orbit
   // tangent in port) — a shape that violates this will visibly sail sideways.
@@ -614,13 +636,46 @@ function drawShipShape(preset, color, cargo, sel) {
     }
     return;
   }
-  let pts;
-  if (preset === "raider") pts = [[8, 0], [-5, 2.6], [-3, 0], [-5, -2.6]];
-  else pts = [[6, 0], [-4, 1.8], [-4, -1.8]];        // scout
+  if (preset === "raider") {
+    const pts = [[8, 0], [-5, 2.6], [-3, 0], [-5, -2.6]];
+    ctx.fillStyle = color;
+    ctx.beginPath(); ctx.moveTo(pts[0][0], pts[0][1]);
+    for (const [px, py] of pts.slice(1)) ctx.lineTo(px, py);
+    ctx.closePath(); ctx.fill();
+    return;
+  }
+  if (preset === "scout" || !stats) {
+    const pts = [[6, 0], [-4, 1.8], [-4, -1.8]];
+    ctx.fillStyle = color;
+    ctx.beginPath(); ctx.moveTo(pts[0][0], pts[0][1]);
+    for (const [px, py] of pts.slice(1)) ctx.lineTo(px, py);
+    ctx.closePath(); ctx.fill();
+    return;
+  }
+  // CUSTOM CLASS: the silhouette is DERIVED from its stats — same legibility rule
+  // as the built-ins (shape tells you capability). Length ~ speed, beam ~ hold,
+  // gun studs = guns, doubled outline = armor, mast = lookout.
+  const L = 4.5 + stats.speed * 0.9, B = 1.6 + stats.hold * 0.55;
   ctx.fillStyle = color;
-  ctx.beginPath(); ctx.moveTo(pts[0][0], pts[0][1]);
-  for (const [px, py] of pts.slice(1)) ctx.lineTo(px, py);
-  ctx.closePath(); ctx.fill();
+  ctx.beginPath();
+  ctx.moveTo(L, 0); ctx.lineTo(L * 0.3, B); ctx.lineTo(-L * 0.8, B * 0.85);
+  ctx.lineTo(-L * 0.8, -B * 0.85); ctx.lineTo(L * 0.3, -B); ctx.closePath();
+  ctx.fill();
+  if (stats.armor >= 3) {                         // armored: doubled bright outline
+    ctx.strokeStyle = "#ffffffdd"; ctx.lineWidth = 1.6; ctx.stroke(); ctx.lineWidth = 1;
+  } else {
+    ctx.strokeStyle = "#ffffff55"; ctx.stroke();
+  }
+  ctx.fillStyle = "#ffffffcc";                    // one stud per gun, alternating sides
+  for (let g = 0; g < Math.min(6, stats.guns); g++) {
+    const sy = (g % 2 ? 1 : -1), gx = L * 0.25 - Math.floor(g / 2) * 2.4;
+    ctx.fillRect(gx, sy * (B + 0.5) - 0.8, 1.8, 1.6);
+  }
+  if (stats.lookout >= 2) {                       // lookout mast amidships
+    ctx.strokeStyle = "#ffffffbb";
+    ctx.beginPath(); ctx.moveTo(-1, 0); ctx.lineTo(-1, -(B + 2 + stats.lookout));
+    ctx.stroke();
+  }
 }
 
 function lerpAngle(a, b, k) {
@@ -841,12 +896,13 @@ function draw(fr, prev, alpha) {
       S.screenPos[s[0]] = [sm.x, sm.y];
       if (inClash.has(s[0])) return;
       const cat = S.cat[s[0]] || {};
+      const cls = classAt(s[0], fr.t);
       ctx.save(); ctx.translate(sm.x, sm.y); ctx.rotate(sm.a);
       ctx.globalAlpha = .4 + .6 * (s[4] / 100);
-      drawShipShape(cat.preset, COLORS[s[1] % 4], s[5], false);
+      drawShipShape(cls, COLORS[s[1] % 4], s[5], false, statsOf(cls, s[1]));
       ctx.restore();
       ctx.globalAlpha = 1;
-      if (s[5] > 0 && cat.preset !== "trader") {
+      if (s[5] > 0 && cls !== "trader") {
         ctx.fillStyle = "#ffd76a"; ctx.fillRect(sm.x - 1.5, sm.y - 9, 3, 3);
       }
       if (S.sel && S.sel.k === "s" && s[0] === S.sel.id) {
@@ -897,7 +953,7 @@ function draw(fr, prev, alpha) {
         fx.fillStyle = "rgba(0,0,0,1)";
         fx.fillRect((cx2 - r) * cw, (cy2 - r) * ch, (2 * r + 1) * cw, (2 * r + 1) * ch);
       };
-      for (const s of fr.s) if (s[1] === S.pov) punch(s[2], s[3], shipVision(s[0]));
+      for (const s of fr.s) if (s[1] === S.pov) punch(s[2], s[3], shipVision(s[0], fr.t));
       const fl = rp.fleets.find(f => f.id === S.pov);
       punch(fl.harbor[0], fl.harbor[1], hr + 4);
       ctx.drawImage(fog, 0, 0);

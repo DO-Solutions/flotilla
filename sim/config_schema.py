@@ -31,6 +31,7 @@ SCHEMA = {
         "signal_max_chars": dict(d=400, t="int", lo=40, hi=4000, doc="custom mode: max JSON characters of standing orders one hoist may push; an oversized hoist is refused."),
         "signal_presets": dict(d="", t="str", doc='preset mode: JSON object of named flags, e.g. {"Strike": {"E": {"role": "assault", "target_fleet": 1}}, "Regroup": {"D": {"role": "guard", "rally": [20, 20]}}}. Hoisting a flag applies its orders to those squads instantly at sea AND sets them as the squads\' standing orders. Invalid JSON fails loudly at match start.'),
         "repair_period": dict(d=5,  t="int", lo=1,  hi=50,  doc="Ticks per +2 hull repaired while docked."),
+        "refit_cost":  dict(d=8,    t="int", lo=0,  hi=100, doc="Cargo cost to REFIT a docked ship to another class. Refit directives are per-squadron standing orders (\"refit\": {\"A\": \"frigate\"}); ships convert as they dock until the directive is cleared (null)."),
     },
     "combat": {
         "volley":      dict(d=5,    t="int", lo=1,  hi=50,  doc="Ticks between shots for every gun."),
@@ -46,6 +47,9 @@ SCHEMA = {
     "scenario": {
         "parley":      dict(d=True, t="bool", doc="Admiral-to-admiral messaging (diplomacy). Off = no communication between fleets: pure play skill, no negotiation."),
         "voyage_reports": dict(d=True, t="bool", doc="Ships file a one-line voyage report when they return to the harbor circle (time out, cargo delivered, gathered, hits taken, range) — delivered in the admiral's next state.reports and recorded for post-game review."),
+        "allow_designs": dict(d=True, t="bool", doc="Admirals may DESIGN custom ship classes mid-game (\"designs\": {\"name\": {speed,hold,guns,armor,hull,lookout}}): every stat >=1, total == design_points, max 4 classes/fleet. Built and refitted by name like built-ins; the viewer derives each class's silhouette from its stats."),
+        "design_points": dict(d=12, t="int", lo=6, hi=30, doc="Stat-point budget every ship class must total — built-ins use 12."),
+        "ship_designs": dict(d="", t="str", doc='Operator-defined EXTRA classes available to ALL fleets from the start (symmetric): JSON like {"corvette": {"speed":4,"hold":1,"guns":2,"armor":2,"hull":2,"lookout":1}}. Same validation as live designs; invalid JSON fails loudly at match start.'),
         "programs":    dict(d=True, t="bool", doc="Ship programming: admirals may write conn-language control programs per squadron (the real coding challenge — the API reference is injected into their prompts). Off = standing-order roles only."),
         "program_chars": dict(d=1500, t="int", lo=200, hi=8000, doc="Max characters per squadron program; oversized programs are rejected at delivery."),
         "win":         dict(d="timed_score", t="enum", opts=["timed_score", "territory"],

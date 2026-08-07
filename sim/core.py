@@ -67,13 +67,13 @@ class Ship:
                  "intent", "node_id", "haul_home", "recall", "program", "pmem",
                  "trip_start", "trip_gathered", "trip_hits", "trip_far")
 
-    def __init__(self, sid, fleet, squad, x, y, preset):
+    def __init__(self, sid, fleet, squad, x, y, preset, stats=None):
         self.id = sid
         self.fleet = fleet
         self.squad = squad
         self.x, self.y = x, y
         self.preset = preset
-        self.stats = dict(PRESETS[preset])
+        self.stats = dict(stats if stats is not None else PRESETS[preset])
         self.hull_max = 20 + self.stats["hull"] * 10
         self.hull = self.hull_max
         self.cargo = 0
@@ -129,6 +129,8 @@ class Fleet:
         self.inbox = []                    # parley messages, delivered at next window
         self.parley_log = []               # full transcript, both directions
         self.pending_programs = {}         # squad -> compiled conn Program
+        self.pending_refits = {}           # squad -> class name (standing directive)
+        self.designs = {}                  # this fleet's custom ship classes
         self.reports_pending = []          # voyage reports awaiting the next window
         self.territory = 0                 # territory-mode control points
         self.recent_hits = 0               # hits taken since last window (bot signal)
@@ -185,6 +187,17 @@ class Engine:
                     f"Timed match: score = cargo hauled to port + {c['kill_score']}/enemy "
                     f"ship sunk + {c['flag_kill_score']}/flagship destroyed. Highest "
                     "score at the bell wins; losing your flagship eliminates you.")
+        self.shared_designs = {}           # operator classes, symmetric for all fleets
+        if c["ship_designs"]:
+            raw = json.loads(c["ship_designs"])          # invalid = fail loud
+            if not isinstance(raw, dict):
+                raise ValueError("ship_designs must be a JSON object of classes")
+            for name, st in raw.items():
+                clean = self._clean_design(name, st)
+                if clean is None:
+                    raise ValueError(f"ship_designs[{name!r}] invalid: every stat "
+                                     f">=1, total == {c['design_points']}")
+                self.shared_designs[name] = clean
         self.signal_presets = {}
         if c["signal_presets"]:
             self.signal_presets = json.loads(c["signal_presets"])   # invalid = fail loud
@@ -229,6 +242,18 @@ class Engine:
                "any parley you send is discarded")
             + ("; returning ships file voyage reports — read state.reports each window"
                if c["voyage_reports"] else "")
+            + (f"; REFIT (cost {c['refit_cost']} cargo/ship): "
+               '"refit": {"A": "frigate"} converts that squadron\'s ships to the '
+               "named class as they dock — a STANDING directive until cleared "
+               "with null")
+            + (f"; SHIP DESIGN enabled: \"designs\": {{\"<name>\": {{six stats}}}} "
+               f"creates a custom class — speed/hold/guns/armor/hull/lookout, each "
+               f">=1, total EXACTLY {c['design_points']} points, max 4 classes; "
+               "then build or refit it by name"
+               + (f"; operator classes available to all: "
+                  + ", ".join(f"{n} {v}" for n, v in sorted(self.shared_designs.items()))
+                  if self.shared_designs else "")
+               if c["allow_designs"] else "")
             + (f"; CONN PROGRAMS enabled (the conn language, max "
                f"{c['program_chars']} chars/squadron — full API reference in your "
                "system prompt); a programmed ship ignores its role and runs your code"
@@ -354,7 +379,8 @@ class Engine:
         return n
 
     def _spawn(self, fleet, preset, squad):
-        s = Ship(self.next_ship_id, fleet.id, squad, fleet.hx, fleet.hy, preset)
+        s = Ship(self.next_ship_id, fleet.id, squad, fleet.hx, fleet.hy, preset,
+                 stats=self.class_stats(fleet, preset))
         self.next_ship_id += 1
         self.ships[s.id] = s
         self._ev("spawn", fleet=fleet.id, ship=s.id, preset=preset, squad=squad)
@@ -433,7 +459,9 @@ class Engine:
                 recent_hits=fleet.recent_hits,
                 orders={k: dict(v) for k, v in fleet.pending.items()},
                 programs={sq: p.text
-                          for sq, p in fleet.pending_programs.items()}),
+                          for sq, p in fleet.pending_programs.items()},
+                designs=dict(fleet.designs),
+                refits=dict(fleet.pending_refits)),
             enemies=enemies, nodes=nodes, reports=reports,
             parley_log=fleet.parley_log[-200:],
             admirals={f.id: f.name for f in self.fleets.values()},
@@ -487,6 +515,29 @@ class Engine:
                                             x=s.x, y=s.y, laden=s.cargo > 0, t=t)
             for sid in [k for k, v in f.contacts.items() if t - v["t"] > ttl]:
                 del f.contacts[sid]
+
+    # ---------- ship classes ----------
+    STAT_KEYS = ("speed", "hold", "guns", "armor", "hull", "lookout")
+
+    def _clean_design(self, name, st):
+        """Validate a custom class: proper name, all six stats >=1 ints, budget."""
+        if not isinstance(name, str) or not (1 <= len(name) <= 14) \
+                or not name.replace("-", "").replace("_", "").isalnum() \
+                or name in PRESETS or not isinstance(st, dict):
+            return None
+        try:
+            clean = {k: int(st[k]) for k in self.STAT_KEYS}
+        except (KeyError, TypeError, ValueError):
+            return None
+        if any(v < 1 for v in clean.values()) \
+                or sum(clean.values()) != self.cfg["design_points"]:
+            return None
+        return clean
+
+    def class_stats(self, fleet, name):
+        """Resolve a class name for a fleet: built-in, operator, or own design."""
+        return PRESETS.get(name) or self.shared_designs.get(name) \
+            or fleet.designs.get(name)
 
     # ---------- admiral actions ----------
     def _clean_order(self, fleet, od):
@@ -546,9 +597,31 @@ class Engine:
                     continue
                 fleet.pending_programs[sq] = prog
                 self._ev("program", fleet=fleet.id, squad=sq, text=text)
+        if self.cfg["allow_designs"]:
+            for name, st in (actions.get("designs") or {}).items():
+                clean = self._clean_design(name, st)
+                if clean is None or (name not in fleet.designs
+                                     and len(fleet.designs) >= 4) \
+                        or name in self.shared_designs:
+                    self._ev("design_rejected", fleet=fleet.id, name=str(name)[:20],
+                             reason="stats must be 6 ints >=1 summing to "
+                                    f"{self.cfg['design_points']}; max 4 classes; "
+                                    "name unused+alphanumeric")
+                    continue
+                fleet.designs[name] = clean
+                self._ev("design", fleet=fleet.id, name=name, stats=clean)
+        for squad, cls in (actions.get("refit") or {}).items():
+            if not isinstance(squad, str) or not squad:
+                continue
+            sq = squad[:1].upper()
+            if cls is None or cls == "":
+                fleet.pending_refits.pop(sq, None)
+            elif isinstance(cls, str) and self.class_stats(fleet, cls) is not None:
+                fleet.pending_refits[sq] = cls
         for b in (actions.get("build") or [])[:4]:
             preset, squad = b.get("preset"), b.get("squad", "A")
-            if preset in PRESETS and fleet.cargo >= self.cfg['ship_cost'] and len(fleet.build_q) < 3:
+            if isinstance(preset, str) and self.class_stats(fleet, preset) is not None \
+                    and fleet.cargo >= self.cfg['ship_cost'] and len(fleet.build_q) < 3:
                 fleet.cargo -= self.cfg['ship_cost']
                 fleet.build_q.append((preset, squad))
         sent = 0
@@ -996,6 +1069,16 @@ class Engine:
                 elif s.program is not None:          # program was cleared fleet-side
                     s.program = None
                     s.pmem = {}
+                rf = f.pending_refits.get(s.squad)
+                if rf and rf != s.preset and f.cargo >= self.cfg["refit_cost"]:
+                    st = self.class_stats(f, rf)
+                    if st is not None:
+                        f.cargo -= self.cfg["refit_cost"]
+                        s.preset = rf
+                        s.stats = dict(st)
+                        s.hull_max = 20 + st["hull"] * 10
+                        s.hull = min(s.hull, s.hull_max)
+                        self._ev("refit", fleet=f.id, ship=s.id, to=rf)
                 if s.hull < s.hull_max and t % self.cfg['repair_period'] == 0:
                     s.hull = min(s.hull_max, s.hull + 2)
             else:
@@ -1130,12 +1213,14 @@ class Engine:
     def replay(self, result):
         return dict(
             meta=dict(seed=self.seed, w=self.W, h=self.H, tick_hz=TICKS_PER_SEC,
-                      frame_every=FRAME_EVERY, window=WINDOW, presets=PRESETS, harbor_r=self.hr,
+                      frame_every=FRAME_EVERY, window=WINDOW,
+                      presets={**PRESETS, **self.shared_designs}, harbor_r=self.hr,
                       ship_cost=self.cfg["ship_cost"], scenario=self.scenario,
                       config={k: v for k, v in self.cfg.items() if k != "rules"},
                       regions=self.regions or None),
             fleets=[dict(id=f.id, name=f.name, harbor=(f.hx, f.hy),
                          model=getattr(f.bot, "model_label", None),
+                         designs=dict(f.designs),
                          # operator prompts are stamped for review: a lopsided
                          # result with custom prompts is not a model comparison
                          prompt=getattr(f.bot, "custom_prompt", "") or None)
