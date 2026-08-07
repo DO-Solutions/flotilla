@@ -193,8 +193,11 @@ class LLMAdmiral:
         if not self.think:
             if any(t in self.model_id for t in ("qwen", "deepseek", "kimi", "glm")):
                 payload["chat_template_kwargs"] = {"enable_thinking": False}
-            elif self.model_id.startswith("openai-gpt-5"):
-                # gpt-5.x thinking models: measured 2026-08-06, minimal ≈ 2s vs 3.7s
+            elif self.model_id.startswith(("openai-gpt-5", "anthropic-")):
+                # thinking models where hidden reasoning counts against max_tokens.
+                # Anthropic thinks ADAPTIVELY by default on DO's gateway — trivial
+                # prompts pass, hard-mode game states burned the whole budget with
+                # zero visible chars (field data 2026-08-07). minimal ≈ 2s both.
                 payload["reasoning_effort"] = "minimal"
         body = json.dumps(payload).encode()
         req = urllib.request.Request(
