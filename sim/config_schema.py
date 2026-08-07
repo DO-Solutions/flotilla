@@ -66,7 +66,7 @@ SCHEMA = {
     },
     "admirals": {
         "temperature": dict(d=0.2,  t="float", lo=0.0, hi=1.5, doc="LLM sampling temperature for decisions."),
-        "max_tokens":  dict(d=700,  t="int", lo=100, hi=4000, doc="Max tokens per decision response."),
+        "max_tokens":  dict(d=2500, t="int", lo=100, hi=8000, doc="Max tokens per decision response. Needs headroom in programs-on games (multi-squadron conn programs are long) AND for gpt-5.x, whose hidden reasoning counts against this cap — too low = truncated/empty replies = missed windows."),
         "timeout_s":   dict(d=90,   t="int", lo=5,  hi=600, doc="Seconds an admiral gets to answer a decision window; slower = orders stand (missed window)."),
         "think":       dict(d=False, t="bool", doc="Allow reasoning models their hidden thinking (slower, possibly smarter). Off = fair fast default."),
         "history_chars": dict(d=8000, t="int", lo=0, hi=60000, doc="Character budget for the admiral's full-game memory in every prompt: its campaign journal (every past thought) + the complete parley transcript. Oldest entries drop first when over budget. 0 disables in-game history."),

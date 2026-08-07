@@ -34,6 +34,12 @@ PRICES = {
 }
 PRICES.update(json.loads(os.environ.get("FLOTILLA_PRICES", "{}")))
 
+class TruncatedReply(ValueError):
+    def __init__(self, msg, text):
+        super().__init__(msg)
+        self.text = text
+
+
 SYSTEM = """You are an admiral in FLOTILLA, a naval real-time-strategy game. You issue \
 orders every decision window (10s of game time); between windows your ships execute \
 deterministic role programs. You are judged on final score.
@@ -209,7 +215,16 @@ class LLMAdmiral:
                 raise
         ms = int((time.time() - t0) * 1000)
         u = d.get("usage") or {}
-        text = d["choices"][0]["message"]["content"] or ""
+        choice = d["choices"][0]
+        text = choice["message"]["content"] or ""
+        if choice.get("finish_reason") == "length":
+            # LOUD truncation instead of a mystery "unbalanced JSON" (or, for
+            # reasoning models, an empty reply). Carries the partial text so
+            # debrief/plan can keep a cut memo rather than lose it.
+            raise TruncatedReply(
+                f"response hit max_tokens={self.max_tokens} "
+                f"(finish_reason=length; visible chars={len(text)}) — raise "
+                "admirals.max_tokens", text)
         return text, u.get("prompt_tokens", 0), u.get("completion_tokens", 0), ms
 
     @staticmethod
@@ -316,8 +331,13 @@ class LLMAdmiral:
             self.max_tokens = max(600, min(4000, cap // 2))
             try:
                 text, tin, tout, ms = self._chat(msgs)
+            except TruncatedReply as e:
+                text, tin, tout, ms = e.text, 0, 0, 0    # a cut plan beats none
             except Exception:
-                text, tin, tout, ms = self._chat(msgs)   # one retry
+                try:
+                    text, tin, tout, ms = self._chat(msgs)   # one retry
+                except TruncatedReply as e:
+                    text, tin, tout, ms = e.text, 0, 0, 0
             text = text.strip()
             if len(text) > cap:
                 text = text[:cap - 12] + " …[cut@limit]"
@@ -361,8 +381,13 @@ class LLMAdmiral:
             self.max_tokens = max(600, min(4000, cap // 2))  # headroom past the cap
             try:
                 text, tin, tout, ms = self._chat(msgs)
+            except TruncatedReply as e:
+                text, tin, tout, ms = e.text, 0, 0, 0    # a cut memo beats none
             except Exception:
-                text, tin, tout, ms = self._chat(msgs)   # one retry
+                try:
+                    text, tin, tout, ms = self._chat(msgs)   # one retry
+                except TruncatedReply as e:
+                    text, tin, tout, ms = e.text, 0, 0, 0
             memo = text.strip()
             if len(memo) > cap:
                 memo = memo[:cap - 12] + " …[cut@limit]"
