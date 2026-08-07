@@ -70,6 +70,24 @@ for _ in range(WINDOW + 5):
 ok(not any(e["k"] == "refit" for e in engpoor.events),
    "no cargo, no refit (ships wait)")
 
+# --- delayed refit: drydock hold, completes on time, paid up front ---
+engd = Engine([("R", Scripted([{"refit": {"A": "frigate"}}])), ("X", Idle())],
+              seed=7, scenario={"refit_ticks": 200})
+engd.fleets[0].cargo = 100
+for _ in range(WINDOW + 5):
+    engd.tick()
+starts = [e for e in engd.events if e["k"] == "refit_start"]
+ok(len(starts) >= 1 and not any(e["k"] == "refit" for e in engd.events),
+   "delayed refit: work starts, conversion pending")
+holding = [s for s in engd.ships.values() if s.refit_to == "frigate"]
+ok(holding and all("drydock" in s.intent for s in holding),
+   "refitting ships hold in drydock with visible intent")
+for _ in range(220):
+    engd.tick()
+done = [e for e in engd.events if e["k"] == "refit"]
+ok(len(done) == len(starts), "drydock works complete after refit_ticks")
+ok(all(s.refit_to is None for s in engd.ships.values()), "drydock state clears")
+
 # --- designs: create, build, refit into; validation + caps ---
 CORVETTE = {"speed": 4, "hold": 1, "guns": 2, "armor": 2, "hull": 2, "lookout": 1}
 bot3 = Scripted([

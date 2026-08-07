@@ -32,6 +32,7 @@ SCHEMA = {
         "signal_presets": dict(d="", t="str", doc='preset mode: JSON object of named flags, e.g. {"Strike": {"E": {"role": "assault", "target_fleet": 1}}, "Regroup": {"D": {"role": "guard", "rally": [20, 20]}}}. Hoisting a flag applies its orders to those squads instantly at sea AND sets them as the squads\' standing orders. Invalid JSON fails loudly at match start.'),
         "repair_period": dict(d=5,  t="int", lo=1,  hi=50,  doc="Ticks per +2 hull repaired while docked."),
         "refit_cost":  dict(d=8,    t="int", lo=0,  hi=100, doc="Cargo cost to REFIT a docked ship to another class. Refit directives are per-squadron standing orders (\"refit\": {\"A\": \"frigate\"}); ships convert as they dock until the directive is cleared (null)."),
+        "refit_ticks": dict(d=0,    t="int", lo=0,  hi=2000, doc="Drydock time per refit: the ship is held in port this many ticks before the conversion completes (paid up front). 0 = immediate."),
     },
     "combat": {
         "volley":      dict(d=5,    t="int", lo=1,  hi=50,  doc="Ticks between shots for every gun."),

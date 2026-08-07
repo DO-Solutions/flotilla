@@ -65,7 +65,8 @@ class Ship:
     __slots__ = ("id", "fleet", "squad", "x", "y", "stats", "hull", "hull_max",
                  "cargo", "move_acc", "volley_cd", "attackers", "wp_i", "preset", "orders",
                  "intent", "node_id", "haul_home", "recall", "program", "pmem",
-                 "trip_start", "trip_gathered", "trip_hits", "trip_far")
+                 "trip_start", "trip_gathered", "trip_hits", "trip_far",
+                 "refit_to", "refit_at")
 
     def __init__(self, sid, fleet, squad, x, y, preset, stats=None):
         self.id = sid
@@ -82,6 +83,8 @@ class Ship:
         self.attackers = set()
         self.wp_i = 0
         self.recall = False                 # return-to-port flag hoisted for this ship
+        self.refit_to = None                # class this ship is converting to
+        self.refit_at = 0                   # tick the drydock work completes
         self.trip_start = None              # None = in port; else departure tick
         self.trip_gathered = 0
         self.trip_hits = 0
@@ -242,8 +245,9 @@ class Engine:
                "any parley you send is discarded")
             + ("; returning ships file voyage reports — read state.reports each window"
                if c["voyage_reports"] else "")
-            + (f"; REFIT (cost {c['refit_cost']} cargo/ship): "
-               '"refit": {"A": "frigate"} converts that squadron\'s ships to the '
+            + (f"; REFIT (cost {c['refit_cost']} cargo/ship"
+               + (f", {c['refit_ticks'] / 10:g}s in drydock" if c["refit_ticks"] else "")
+               + '): "refit": {"A": "frigate"} converts that squadron\'s ships to the '
                "named class as they dock — a STANDING directive until cleared "
                "with null")
             + (f"; SHIP DESIGN enabled: \"designs\": {{\"<name>\": {{six stats}}}} "
@@ -858,6 +862,9 @@ class Engine:
         """Returns (tx, ty) or None (hold position). Sets ship.intent — the recorded
         'what am I doing and why' that replay review (human or agent) reads."""
         f = self.fleets[ship.fleet]
+        if ship.refit_to is not None:       # in the drydock: hold until works finish
+            self._intent(ship, f"in drydock: refitting to {ship.refit_to}")
+            return None
         if ship.recall:                     # RETURN flag: home for orders, no detours
             self._intent(ship, "recalled by signal: making for port to collect orders")
             return (f.hx, f.hy)
@@ -1069,16 +1076,33 @@ class Engine:
                 elif s.program is not None:          # program was cleared fleet-side
                     s.program = None
                     s.pmem = {}
+                if s.refit_to is not None:           # in drydock: finish the works
+                    if t >= s.refit_at:
+                        st = self.class_stats(f, s.refit_to)
+                        if st is not None:
+                            s.preset = s.refit_to
+                            s.stats = dict(st)
+                            s.hull_max = 20 + st["hull"] * 10
+                            s.hull = min(s.hull, s.hull_max)
+                            self._ev("refit", fleet=f.id, ship=s.id, to=s.refit_to)
+                        s.refit_to = None
                 rf = f.pending_refits.get(s.squad)
-                if rf and rf != s.preset and f.cargo >= self.cfg["refit_cost"]:
+                if rf and rf != s.preset and s.refit_to is None \
+                        and f.cargo >= self.cfg["refit_cost"]:
                     st = self.class_stats(f, rf)
                     if st is not None:
-                        f.cargo -= self.cfg["refit_cost"]
-                        s.preset = rf
-                        s.stats = dict(st)
-                        s.hull_max = 20 + st["hull"] * 10
-                        s.hull = min(s.hull, s.hull_max)
-                        self._ev("refit", fleet=f.id, ship=s.id, to=rf)
+                        f.cargo -= self.cfg["refit_cost"]     # paid up front
+                        if self.cfg["refit_ticks"] <= 0:
+                            s.preset = rf
+                            s.stats = dict(st)
+                            s.hull_max = 20 + st["hull"] * 10
+                            s.hull = min(s.hull, s.hull_max)
+                            self._ev("refit", fleet=f.id, ship=s.id, to=rf)
+                        else:                        # held in the drydock
+                            s.refit_to = rf
+                            s.refit_at = t + self.cfg["refit_ticks"]
+                            self._ev("refit_start", fleet=f.id, ship=s.id, to=rf,
+                                     ready=s.refit_at)
                 if s.hull < s.hull_max and t % self.cfg['repair_period'] == 0:
                     s.hull = min(s.hull_max, s.hull + 2)
             else:
