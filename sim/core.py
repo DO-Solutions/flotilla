@@ -605,16 +605,27 @@ class Engine:
             and tf != fleet.id else None
         return clean
 
+    @staticmethod
+    def _as_list(v):
+        return v if isinstance(v, list) else []
+
+    @staticmethod
+    def _as_dict(v):
+        return v if isinstance(v, dict) else {}
+
     def _apply_actions(self, fleet, actions):
+        # LLM output is hostile input: every field gets type-normalized (a model
+        # once sent "build" as an object — dict[:4] is a KeyError, and this ran
+        # outside the never-crash guard: it killed a whole game. 2026-08-07)
         if not isinstance(actions, dict):
             return
-        for squad, od in (actions.get("orders") or {}).items():
+        for squad, od in self._as_dict(actions.get("orders")).items():
             clean = self._clean_order(fleet, od)
             if clean is None or not isinstance(squad, str) or not squad:
                 continue
             fleet.pending[squad[:1].upper()] = clean
         if self.cfg["programs"]:
-            for squad, text in (actions.get("programs") or {}).items():
+            for squad, text in self._as_dict(actions.get("programs")).items():
                 if not isinstance(squad, str) or not squad or not isinstance(text, str):
                     continue
                 sq = squad[:1].upper()
@@ -635,7 +646,7 @@ class Engine:
                 fleet.pending_programs[sq] = prog
                 self._ev("program", fleet=fleet.id, squad=sq, text=text)
         if self.cfg["allow_designs"]:
-            for name, st in (actions.get("designs") or {}).items():
+            for name, st in self._as_dict(actions.get("designs")).items():
                 clean = self._clean_design(name, st)
                 if clean is None or (name not in fleet.designs
                                      and len(fleet.designs) >= 4) \
@@ -647,7 +658,7 @@ class Engine:
                     continue
                 fleet.designs[name] = clean
                 self._ev("design", fleet=fleet.id, name=name, stats=clean)
-        for squad, cls in (actions.get("refit") or {}).items():
+        for squad, cls in self._as_dict(actions.get("refit")).items():
             if not isinstance(squad, str) or not squad:
                 continue
             sq = squad[:1].upper()
@@ -655,7 +666,7 @@ class Engine:
                 fleet.pending_refits.pop(sq, None)
             elif isinstance(cls, str) and self.class_stats(fleet, cls) is not None:
                 fleet.pending_refits[sq] = cls
-        for b in (actions.get("build") or [])[:4]:
+        for b in self._as_list(actions.get("build"))[:4]:
             preset, squad = b.get("preset"), b.get("squad", "A")
             if not isinstance(preset, str) \
                     or self.class_stats(fleet, preset) is None:
@@ -670,7 +681,7 @@ class Engine:
                 fleet.cargo -= self.cfg['ship_cost']
                 fleet.build_q.append((preset, squad))
         sent = 0
-        for pm in (actions.get("parley") or []) if self.cfg["parley"] else []:
+        for pm in self._as_list(actions.get("parley")) if self.cfg["parley"] else []:
             if sent >= 2 or not isinstance(pm, dict):
                 continue
             text = str(pm.get("text", "")).replace("\n", " ").strip()[:280]
@@ -692,7 +703,7 @@ class Engine:
                      to="all" if to == "all" else targets[0].id, text=text)
             sent += 1
         if self.cfg["scuttle"]:
-            for sid in (actions.get("scuttle") or [])[:20]:
+            for sid in self._as_list(actions.get("scuttle"))[:20]:
                 try:
                     s = self.ships.get(int(sid))
                 except (TypeError, ValueError):
@@ -1110,7 +1121,13 @@ class Engine:
             else:
                 results = [_decide(j) for j in jobs]
             for (f, _, _), actions in zip(jobs, results):
-                self._apply_actions(f, actions)
+                try:
+                    self._apply_actions(f, actions)
+                except Exception as e:      # NOTHING an admiral emits kills the sim
+                    self.decisions.append(dict(
+                        t=self.t, fleet=f.id,
+                        thoughts=f"(actions rejected — {type(e).__name__}: "
+                                 f"{e}; standing orders continue)"[:400]))
                 f.recent_hits = 0
         # passive income + queued signals (both fire the tick funds allow)
         if self.cfg["income_amount"] > 0 and t > 0 \

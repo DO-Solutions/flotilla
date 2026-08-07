@@ -141,5 +141,31 @@ for _ in range(101):
     eng8.tick()
 ok(eng8.fleets[0].cargo == s8, "income off by default")
 
+# --- hostile-actions fuzz: no admiral output shape may crash the sim ---
+class Hostile(Scripted):
+    name = "hostile"
+
+
+HOSTILE_ACTIONS = [
+    {"build": {"preset": "trader"}},                  # the field-crash shape
+    {"build": "trader", "scuttle": {"id": 1}},
+    {"orders": ["forage"], "programs": ["when"], "refit": ["A"]},
+    {"designs": "corvette", "parley": {"to": "all"}},
+    {"signal": ["return"], "scratchpad": ["x"]},
+    {"orders": {"A": "forage"}, "build": [None, 5, {"preset": None}]},
+    {"parley": [None, "hi", {"to": None, "text": None}]},
+    {"scuttle": ["abc", None, [1]], "refit": {"A": ["frigate"]}},
+    None, "not a dict", 42,
+]
+engh = Engine([("H", Hostile(list(HOSTILE_ACTIONS))), ("X", Idle())], seed=9,
+              max_ticks=WINDOW * (len(HOSTILE_ACTIONS) + 1))
+try:
+    engh.run()
+    ok(True, f"sim survives {len(HOSTILE_ACTIONS)} hostile action shapes")
+except Exception as e:
+    ok(False, f"sim crashed on hostile actions: {type(e).__name__}: {e}")
+rej = [d for d in engh.decisions if "(actions rejected" in d.get("thoughts", "")]
+print(f"      (rejected-action records: {len(rej)} — belt-and-suspenders path)")
+
 print("FAILURES:", fails)
 sys.exit(1 if fails else 0)
