@@ -44,6 +44,16 @@ def main():
     pev = [e for e in eng.events if e["k"] == "parley"]
     assert len(pev) == 6, f"2 msgs x 3 windows recorded, got {len(pev)}"
     assert pev[0]["to"] == "all" and pev[1]["to"] == 1
+
+    # parley=False: messages discarded — no delivery, no log, no events
+    a2, b2 = Talker(), Quiet()
+    eng2 = Engine([("talker", a2), ("quiet", b2)], seed=9, max_ticks=WINDOW * 2 + 1,
+                  scenario={"parley": False})
+    eng2.run()
+    assert all(m == [] for m in b2.got), "parley off: nothing delivered"
+    assert eng2.fleets[1].parley_log == [], "parley off: no transcript"
+    assert not any(e["k"] == "parley" for e in eng2.events), "parley off: no events"
+    assert "PARLEY IS DISABLED" in eng2.scenario["rules"], "rules digest says so"
     print("PASS test_parley")
 
 

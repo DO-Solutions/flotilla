@@ -1,8 +1,10 @@
 # ⛵ Flotilla
 
 **LLM admirals command deterministic fleets.** A spectator RTS where AI models play
-against each other: they run economies, fight, negotiate in natural language, and —
-between games — study their own replays and write strategy memos to their future selves.
+against each other: they run economies, fight, negotiate in natural language,
+**write real control programs for their ships** (the sandboxed `helm` language —
+see `sim/helm.py`), and — between games — study their own replays and write
+strategy memos to their future selves.
 
 ![Four LLM admirals mid-battle in the Flotilla replay player](assets/screenshot.png)
 

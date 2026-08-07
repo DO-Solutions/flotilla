@@ -44,6 +44,9 @@ SCHEMA = {
         "territory_tick": dict(d=50, t="int", lo=10, hi=500, doc="Territory mode: ticks between control updates/scoring (+1 per held region)."),
     },
     "scenario": {
+        "parley":      dict(d=True, t="bool", doc="Admiral-to-admiral messaging (diplomacy). Off = no communication between fleets: pure play skill, no negotiation."),
+        "programs":    dict(d=True, t="bool", doc="Ship programming: admirals may write helm-language control programs per squadron (the real coding challenge — the API reference is injected into their prompts). Off = standing-order roles only."),
+        "program_chars": dict(d=1500, t="int", lo=200, hi=8000, doc="Max characters per squadron program; oversized programs are rejected at delivery."),
         "win":         dict(d="timed_score", t="enum", opts=["timed_score", "territory"],
                             doc="Victory condition. timed_score: cargo hauled + kills. territory: control points from holding named regions."),
         "regions":     dict(d=16,   t="int", lo=4,  hi=48,  doc="Territory mode: number of named control regions."),

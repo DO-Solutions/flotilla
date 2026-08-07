@@ -93,9 +93,12 @@ except thoughts):
 {"thoughts": "your strategic reasoning, <=280 chars, shown to spectators",
  "orders": {"A": {"role": "forage", "rally": [x, y], "aggression": 0, \
 "retreat_hull_pct": 40, "target_fleet": null}},
+ "programs": {"A": "when self.cargo >= self.hold_cap: helm.home()\\n..."},
  "build": [{"preset": "trader", "squad": "A"}],
  "signal": false,
- "parley": [{"to": "all", "text": "..."}]}"""
+ "parley": [{"to": "all", "text": "..."}]}
+("programs" only when scenario.rules says ship programs are enabled — see the \
+SHIP PROGRAMMING reference appended below when active.)"""
 
 
 class LLMAdmiral:
@@ -207,7 +210,18 @@ class LLMAdmiral:
         raise ValueError("unbalanced JSON in response")
 
     # ---------- the admiral ----------
+    def _system_for(self, summary):
+        """System message, with the helm API reference appended when programs are
+        on — stable per match, so the cached-prefix property holds."""
+        want = bool((summary.get("scenario") or {}).get("programs"))
+        if getattr(self, "_sys_progs", None) != want:
+            self._sys_progs = want
+            from helm import api_reference
+            self._sys_full = self.system + (api_reference() if want else "")
+        return self._sys_full
+
     def decide(self, summary, rng):
+        system = self._system_for(summary)
         summary = dict(summary)
         plog = summary.pop("parley_log", [])
         # prompt order: stable → append-only → volatile (cache-friendly prefix)
@@ -218,7 +232,7 @@ class LLMAdmiral:
                 + f"=== CURRENT STATE — window {summary['window']} ===\n"
                 + json.dumps(summary, separators=(",", ":"))
                 + "\nReply with your decision JSON only.")
-        msgs = [{"role": "system", "content": self.system},
+        msgs = [{"role": "system", "content": system},
                 {"role": "user", "content": user}]
         tin = tout = ms = 0
         err = None

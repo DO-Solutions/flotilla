@@ -64,6 +64,14 @@
   .mu .p { display:flex; justify-content:space-between; gap:10px; padding:2px 0; }
   .mu .adv { color:#34d399; font-weight:600; }
   .champ { color:#fbbf24; font-weight:600; }
+  .fstep { background:#0d1526; border:1px solid var(--line); border-radius:8px;
+           padding:8px 10px; font-size:12px; font-weight:600; text-align:center; }
+  .fstep span { display:block; font-weight:400; font-size:11px; color:var(--dim);
+                margin-top:2px; }
+  .farrow { color:var(--accent); font-size:18px; }
+  .helpsec { font-size:13px; margin-bottom:9px; color:#c9d6ea; }
+  .helpsec b { color:var(--ink); }
+  #helptab p { font-size:13px; }
   .job { font-size:12px; padding:4px 0; border-bottom:1px solid var(--line); }
   .job .st-run { color:#fbbf24; } .job .st-done { color:#34d399; }
   .job .st-failed { color:#ff6b6b; } .job .st-queued { color:var(--dim); }
@@ -73,7 +81,7 @@
 </head>
 <body>
 <header>
-  <h1>FLO<span>TILLA</span> · match library</h1>
+  <h1><a href="/" style="color:inherit;text-decoration:none">FLO<span>TILLA</span></a> · match library</h1>
   <div id="sub">loading…</div>
 </header>
 <div class="tabs">
@@ -81,6 +89,7 @@
   <button class="tab" data-tab="games">🎬 Individual Games <span class="warn">⚠ contains spoilers</span></button>
   <button class="tab" data-tab="tourn">🏆 Tournaments</button>
   <button class="tab" data-tab="config">🛠 Configure a Run</button>
+  <button class="tab" data-tab="help">❓ Help</button>
 </div>
 <div class="card" id="seriestab">
   <table id="st"><thead><tr>
@@ -107,6 +116,89 @@
     <th>tournament</th><th>format</th><th>matchups</th><th style="width:110px"></th>
   </tr></thead><tbody></tbody></table>
   <div id="tdetail" style="margin-top:10px"></div>
+</div>
+<div class="card" id="helptab" style="display:none">
+  <h2 style="color:var(--accent);font-size:16px;margin-bottom:8px">How Flotilla works</h2>
+  <p class="dim" style="margin-bottom:10px">
+    LLM "admirals" command fleets of deterministic ships. The models never steer a
+    ship directly — they issue standing orders at fixed decision points, and the
+    physics of getting those orders to ships is part of the game.</p>
+  <div style="display:flex;flex-wrap:wrap;gap:6px;align-items:center;margin-bottom:6px"
+       id="flowdiag">
+    <div class="fstep">⏸ sim pauses<br><span>every decision window<br>(10s game time)</span></div>
+    <div class="farrow">→</div>
+    <div class="fstep">🗺 snapshot<br><span>each admiral gets its own<br>fog-limited view + memory</span></div>
+    <div class="farrow">→</div>
+    <div class="fstep">🧠 all models think<br><span>in parallel, same state,<br>hard timeout</span></div>
+    <div class="farrow">→</div>
+    <div class="fstep">📜 JSON orders<br><span>per-squadron orders, builds,<br>signals, parley, thoughts</span></div>
+    <div class="farrow">→</div>
+    <div class="fstep">⚓ orders travel<br><span>ships collect them in the harbor<br>circle — or by signal flag</span></div>
+    <div class="farrow">→</div>
+    <div class="fstep">⛵ 100 ticks run<br><span>deterministic: movement, foraging,<br>combat — same seed = same game</span></div>
+    <div class="farrow">↻</div>
+  </div>
+  <p class="dim" style="margin-bottom:14px">…and around the whole loop: after each game
+    of a series, every admiral studies its own record and writes a <b>strategy memo
+    to its future self</b>, carried into the next game. A slow or broken model never
+    crashes a game — its fleet just sails on under its last orders.</p>
+
+  <h2 style="color:var(--accent);font-size:16px;margin:14px 0 8px">Using this dashboard</h2>
+  <div class="helpsec">
+    <b>⛵ Series View</b> (spoiler-free, the home tab) — one row per series. Click a
+    name to rename it (saved on the server; renames also name your downloads).
+    <b>▶ Watch</b> opens the spoiler-free player in a new tab; <b>⬇ Download</b>
+    builds a single self-contained HTML file you can send to anyone — it works
+    offline, no server needed.</div>
+  <div class="helpsec">
+    <b>🎬 Individual Games</b> — every match with final scores and winners
+    (spoilers, by design). Filter by type or player.</div>
+  <div class="helpsec">
+    <b>🏆 Tournaments</b> — brackets and leaderboards. Results stay hidden until
+    you hit <i>Reveal</i>, so you can watch the games unspoiled first.</div>
+  <div class="helpsec">
+    <b>🛠 Configure a Run</b> — every knob that can affect a game, generated from
+    the same schema the engine runs on (the ⓘ hover text is byte-identical to what
+    an agent reads in <a href="config-schema.json">config-schema.json</a>). Pick a
+    model per player tile, optionally override its settings or give it an operator
+    prompt (saved prompts live on the server), and 🚀 Launch — runs execute right
+    here and appear in the library when done.</div>
+  <div class="helpsec">
+    <b>The player page</b> — ▶ Play, scrub, speed. Right side: Fleets (live
+    scores + each admiral's latest thinking), Admirals (decisions + spend),
+    Parley (the diplomacy feed), Memos (what each model told its future self),
+    Stats (score chart + game log), ⚙ Settings (this exact match's full
+    configuration + how to reproduce it). Click any ship or island to inspect it —
+    ships show <i>what they're trying to do and why</i>. The 👁 selector watches
+    through one admiral's fog of war: you see only what that fleet saw.</div>
+
+  <h2 style="color:var(--accent);font-size:16px;margin:14px 0 8px">FAQ</h2>
+  <div class="helpsec"><b>Is this real time?</b> No — lockstep. The sim pauses at
+    every decision window while the models think, then simulates 10 seconds of
+    game time near-instantly. Replays play back smoothly regardless of how long
+    any model took.</div>
+  <div class="helpsec"><b>Do the models see everything?</b> No. Each admiral gets
+    only what its ships have seen (fog of war), a contact plot with last-known
+    enemy positions, and its own believed island stocks. Watch with the 👁 POV
+    selector to see exactly what an admiral saw.</div>
+  <div class="helpsec"><b>Can models talk to each other?</b> Yes — parley
+    (configurable, on by default). Messages are delivered next window and treated
+    as untrusted: models may lie, bluff, or betray. The game does not enforce
+    deals — but every message is on the record, and the full transcript stays in
+    each model's memory.</div>
+  <div class="helpsec"><b>Why did a fleet just sit there?</b> Its ships only learn
+    new orders inside the harbor circle or by signal flag. Command latency is a
+    game mechanic, not a bug — and the signal-flag rules vary by match settings.</div>
+  <div class="helpsec"><b>Is a game reproducible?</b> Byte-for-byte. The engine is
+    deterministic (seeded, integer math); the ⚙ Settings tab of any replay shows
+    the full config + seed to regenerate it.</div>
+  <div class="helpsec"><b>What does a game cost?</b> Each replay's Admirals panel
+    shows tokens and dollars per model — scripted-bot games are free; LLM games
+    range from cents (small open models) to a few dollars (frontier models).</div>
+  <div class="helpsec"><b>Can my agent drive this?</b> Yes — everything the GUI
+    does is documented JSON: <a href="config-schema.json">config-schema.json</a>,
+    <a href="CONFIG.md">CONFIG.md</a>, and the /api endpoints listed in the
+    server docstring. Agent-first is a design rule here.</div>
 </div>
 <div class="card" id="configtab" style="display:none">
   <div class="dim" style="margin-bottom:10px">
@@ -160,7 +252,10 @@ function setCustomName(key, val) {
   localStorage.setItem("flotilla-series-names", JSON.stringify(n));
 }
 function displayName(s) {
-  return customNames()[s.name] || s.display_name || s.name;
+  // with a live server, series.json is the source of truth; localStorage is only
+  // the static-file fallback (and a migration source — see the health handler)
+  return SERVER ? (s.display_name || customNames()[s.name] || s.name)
+                : (customNames()[s.name] || s.display_name || s.name);
 }
 function safeFile(name) { return name.replace(/[^a-z0-9 _-]/gi, "").trim().replace(/ +/g, "-"); }
 
@@ -202,7 +297,8 @@ function renderSeriesTable() {
       `<td>${s.games.length}</td>` +
       `<td class="dim">${seriesPlayers(s)}</td>` +
       `<td class="dim">${seriesLatest(s)}</td>` +
-      `<td><a class="btn btn-watch" href="player.html?series=${encodeURIComponent(s.name)}` +
+      `<td><a class="btn btn-watch" target="_blank" ` +
+      `href="player.html?series=${encodeURIComponent(s.name)}` +
       `&title=${encodeURIComponent(displayName(s))}">▶ Watch</a>` +
       `<a class="btn btn-dl dls" href="#" data-series="${s.name}">⬇ Download</a></td>`;
     tb.appendChild(tr);
@@ -223,7 +319,8 @@ function renderGames() {
       `<td>${fmt(m)}</td><td class="win">${m.winner}</td>` +
       `<td class="dim">${Math.round((m.ticks || 0) / 600)}m</td>` +
       `<td class="dim">${m.cost ? "$" + m.cost.toFixed(2) : "—"}</td>` +
-      `<td><a class="btn btn-watch" href="player.html?replay=${encodeURIComponent(m.file)}">▶ Watch</a>` +
+      `<td><a class="btn btn-watch" target="_blank" ` +
+      `href="player.html?replay=${encodeURIComponent(m.file)}">▶ Watch</a>` +
       `<a class="btn btn-dl dlh" href="#" data-file="${m.file}" ` +
       `data-name="${m.type}-s${m.seed}">⬇</a></td>`;
     tb.appendChild(tr);
@@ -239,6 +336,7 @@ document.addEventListener("click", async e => {
     $("gamestab").style.display = t.dataset.tab === "games" ? "" : "none";
     $("tourntab").style.display = t.dataset.tab === "tourn" ? "" : "none";
     $("configtab").style.display = t.dataset.tab === "config" ? "" : "none";
+    $("helptab").style.display = t.dataset.tab === "help" ? "" : "none";
   }
   if (t.classList.contains("dlh")) {
     e.preventDefault();
@@ -354,7 +452,8 @@ function renderTournDetail() {
              `<span class="dim">${tot}</span></div>`;
       }
       h += `<div>` + m.games.map(g =>
-        `<a class="btn btn-dl" style="padding:1px 8px" href="player.html?replay=` +
+        `<a class="btn btn-dl" target="_blank" style="padding:1px 8px" ` +
+        `href="player.html?replay=` +
         encodeURIComponent(`tournaments/${name}/${g.file}`) + `">▶ g${g.game}</a>`).join("") +
         `</div></div>`;
     }
@@ -658,8 +757,31 @@ fetch("api/health").then(r => r.json()).then(async h => {
     pollJobs();
     setInterval(pollJobs, 5000);
     try { MODELS = await (await fetch("api/models")).json(); } catch {}
+    // one-time migration: push anything stored browser-side to the server
+    const ln = customNames();
+    for (const [series, val] of Object.entries(ln)) {
+      try {
+        const r = await (await fetch("api/rename", {
+          method: "POST", body: JSON.stringify({ series, display_name: val }) })).json();
+        if (r.ok) delete ln[series];
+      } catch {}
+    }
+    localStorage.setItem("flotilla-series-names", JSON.stringify(ln));
+    const lp = localPrompts();
+    for (const [name, text] of Object.entries(lp)) {
+      try {
+        await fetch("api/prompts", { method: "POST",
+                                     body: JSON.stringify({ name, text }) });
+        delete lp[name];
+      } catch {}
+    }
+    localStorage.setItem("flotilla-prompts", JSON.stringify(lp));
     await refreshPrompts();
     renderPlayers();
+    try {                              // renames may have landed — refresh the index
+      IDX = await (await fetch("index.json")).json();
+      renderSeriesTable();
+    } catch {}
   }
 }).catch(() => {});
 refreshPrompts().then(renderPlayers);

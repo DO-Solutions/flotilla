@@ -104,7 +104,8 @@
 </head>
 <body>
 <header>
-  <h1>FLO<span>TILLA</span></h1>
+  <h1><a href="/" id="homelink" style="color:inherit;text-decoration:none"
+         title="back to the match library">FLO<span>TILLA</span></a></h1>
   <div id="meta">no replay loaded</div>
 </header>
 <div id="bar">
@@ -1034,6 +1035,9 @@ document.body.addEventListener("drop", e => {
 });
 
 window.__flotilla = { seek, seekFrac, state: () => S, load, loadBundle, setPlay, select };
+if (!location.protocol.startsWith("http")) {   // downloaded bundle: no home to go to
+  $("homelink").removeAttribute("href");
+}
 const qs = new URLSearchParams(location.search);
 if (qs.get("replay")) {
   fetch(qs.get("replay")).then(r => r.json()).then(load)
