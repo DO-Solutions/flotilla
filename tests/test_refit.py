@@ -142,6 +142,34 @@ try:
 except Exception:
     ok(True, "invalid operator class fails loudly")
 
+# --- flex_design: variable point totals, cost scales with size ---
+CUTTER = {"speed": 1, "hold": 1, "guns": 1, "armor": 1, "hull": 1, "lookout": 1}
+DREAD = {"speed": 4, "hold": 2, "guns": 6, "armor": 6, "hull": 4, "lookout": 2}
+engf = Engine([("F", Scripted([{"designs": {"cutter": CUTTER, "dread": DREAD},
+                                "build": [{"preset": "cutter", "squad": "A"},
+                                          {"preset": "dread", "squad": "B"}]}])),
+               ("X", Idle())], seed=7,
+              scenario={"flex_design": True, "design_points_max": 24})
+ff = engf.fleets[0]
+ff.cargo = 100
+engf.tick()
+ok(ff.designs.get("cutter") == CUTTER and ff.designs.get("dread") == DREAD,
+   "flex: 6-point and 24-point classes both accepted")
+ok(engf.class_cost(ff, "cutter") == round(15 * 6 / 12)
+   and engf.class_cost(ff, "dread") == round(15 * 24 / 12),
+   f"flex: cost scales with points (cutter {engf.class_cost(ff, 'cutter')}, "
+   f"dread {engf.class_cost(ff, 'dread')})")
+ok(ff.cargo == 100 - engf.class_cost(ff, "cutter") - engf.class_cost(ff, "dread"),
+   "flex: builds charged the scaled costs")
+ok(engf._clean_design("toofat", {**DREAD, "hull": 5}) is None,
+   "flex: over design_points_max rejected")
+ok("scales with the total" in engf.scenario["rules"], "digest documents flex pricing")
+engnf = Engine([("F", Idle()), ("X", Idle())], seed=7)
+ok(engnf._clean_design("cutter", CUTTER) is None,
+   "flex off (default): non-12-point class rejected")
+ok(engnf.class_cost(engnf.fleets[0], "trader") == 15,
+   "flex off: flat ship_cost")
+
 # allow_designs=False ignores live designs
 eng6 = Engine([("D", Scripted([{"designs": {"corvette": CORVETTE}}])), ("X", Idle())],
               seed=7, scenario={"allow_designs": False})

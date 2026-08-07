@@ -264,8 +264,14 @@ class Engine:
                "with null")
             + (f"; SHIP DESIGN enabled: \"designs\": {{\"<name>\": {{six stats}}}} "
                f"creates a custom class — speed/hold/guns/armor/hull/lookout, each "
-               f">=1, total EXACTLY {c['design_points']} points, max 4 classes; "
-               "then build or refit it by name"
+               ">=1, "
+               + (f"total 6 to {c['design_points_max']} points and BUILD/REFIT cost "
+                  f"scales with the total ({c['ship_cost']} cargo at "
+                  f"{c['design_points']} points — small hulls are cheap, big hulls "
+                  "are expensive gambles)"
+                  if c["flex_design"] else
+                  f"total EXACTLY {c['design_points']} points")
+               + ", max 4 classes; then build or refit it by name"
                + (f"; operator classes available to all: "
                   + ", ".join(f"{n} {v}" for n, v in sorted(self.shared_designs.items()))
                   if self.shared_designs else "")
@@ -566,10 +572,35 @@ class Engine:
             clean = {k: int(st[k]) for k in self.STAT_KEYS}
         except (KeyError, TypeError, ValueError):
             return None
-        if any(v < 1 for v in clean.values()) \
-                or sum(clean.values()) != self.cfg["design_points"]:
+        if any(v < 1 for v in clean.values()):
+            return None
+        total = sum(clean.values())
+        if self.cfg["flex_design"]:
+            if not (6 <= total <= self.cfg["design_points_max"]):
+                return None
+        elif total != self.cfg["design_points"]:
             return None
         return clean
+
+    def class_cost(self, fleet, name):
+        """Build cost for a class. Fixed under standard rules; scales linearly
+        with the class's point total under flex_design."""
+        base = self.cfg["ship_cost"]
+        if not self.cfg["flex_design"]:
+            return base
+        st = self.class_stats(fleet, name)
+        if st is None:
+            return base
+        return max(1, round(base * sum(st.values()) / self.cfg["design_points"]))
+
+    def refit_class_cost(self, fleet, name):
+        base = self.cfg["refit_cost"]
+        if not self.cfg["flex_design"]:
+            return base
+        st = self.class_stats(fleet, name)
+        if st is None:
+            return base
+        return max(1, round(base * sum(st.values()) / self.cfg["design_points"]))
 
     def class_stats(self, fleet, name):
         """Resolve a class name for a fleet: built-in, operator, or own design."""
@@ -671,14 +702,15 @@ class Engine:
             if not isinstance(preset, str) \
                     or self.class_stats(fleet, preset) is None:
                 continue
-            if fleet.cargo < self.cfg['ship_cost']:
+            cost = self.class_cost(fleet, preset)
+            if fleet.cargo < cost:
                 fleet.warnings.append(
                     f"build {preset} DROPPED — insufficient funds "
-                    f"(cost {self.cfg['ship_cost']}, treasury {fleet.cargo})")
+                    f"(cost {cost}, treasury {fleet.cargo})")
             elif len(fleet.build_q) >= 3:
                 fleet.warnings.append(f"build {preset} DROPPED — build queue full (3)")
             else:
-                fleet.cargo -= self.cfg['ship_cost']
+                fleet.cargo -= cost
                 fleet.build_q.append((preset, squad))
         sent = 0
         for pm in self._as_list(actions.get("parley")) if self.cfg["parley"] else []:
@@ -1198,10 +1230,10 @@ class Engine:
                         s.refit_to = None
                 rf = f.pending_refits.get(s.squad)
                 if rf and rf != s.preset and s.refit_to is None \
-                        and f.cargo >= self.cfg["refit_cost"]:
+                        and f.cargo >= self.refit_class_cost(f, rf):
                     st = self.class_stats(f, rf)
                     if st is not None:
-                        f.cargo -= self.cfg["refit_cost"]     # paid up front
+                        f.cargo -= self.refit_class_cost(f, rf)   # paid up front
                         if self.cfg["refit_ticks"] <= 0:
                             s.preset = rf
                             s.stats = dict(st)

@@ -148,7 +148,7 @@
       <span>⬟ bright-ringed + gun studs = frigate</span>
       <span>› sliver = scout</span>
       <span>● teal = fish shoal · ◆ amber = wreck</span>
-      <span>custom classes: shape follows stats (length=speed, beam=hold, studs=guns, mast=lookout)</span>
+      <span>custom classes: shape follows stats (length=speed, beam=hold, gun mounts at 2+ guns — odd count = bow chaser, mast=lookout)</span>
       <span>✦ = combat (tinted toward the likely survivor)</span>
       <span>click a ship to inspect · click the timeline to jump</span>
     </div>
@@ -213,6 +213,11 @@ async function loadBundle(b, idx) {
 }
 
 function load(rp) {
+  if (!rp || !Array.isArray(rp.frames)) {        // a 404 body is not a replay
+    $("meta").textContent = "that replay doesn't exist" +
+      (rp && rp.error ? ` (${rp.error})` : "") + " — click the logo for the library";
+    return;
+  }
   S.rp = rp; S.fi = 0; S.playing = false; S.acc = 0; S.sel = null;
   S.cat = {}; S.sinkAt = {}; S.byShip = {}; S.heading = {}; S.smooth = {};
   S.pov = -1; S.povCache = null;
@@ -670,10 +675,28 @@ function drawShipShape(preset, color, cargo, sel, stats) {
   } else {
     ctx.strokeStyle = "#ffffff55"; ctx.stroke();
   }
-  ctx.fillStyle = "#ffffffcc";                    // one stud per gun, alternating sides
-  for (let g = 0; g < Math.min(6, stats.guns); g++) {
-    const sy = (g % 2 ? 1 : -1), gx = L * 0.25 - Math.floor(g / 2) * 2.4;
-    ctx.fillRect(gx, sy * (B + 0.5) - 0.8, 1.8, 1.6);
+  // gun MOUNTS: none at 1 gun (the base state); 2+ guns mount outboard barrels in
+  // symmetric pairs from amidships aft, and an odd count adds a BOW CHASER.
+  // Dark fill + light outline so they read against both the hull and the bright
+  // armor ring (P3 review feedback).
+  const guns = Math.min(6, stats.guns);
+  if (guns >= 2) {
+    const pairs = Math.floor((guns - (guns % 2)) / 2);
+    ctx.fillStyle = "#0b1220dd";
+    ctx.strokeStyle = "#ffffffbb";
+    ctx.lineWidth = 0.7;
+    for (let p2 = 0; p2 < pairs; p2++) {
+      const gx = -p2 * 2.6;                       // start amidships, build aft
+      for (const sy of [-1, 1]) {
+        ctx.fillRect(gx - 0.8, sy * (B * 0.85) - (sy < 0 ? 2.4 : 0), 1.6, 2.4);
+        ctx.strokeRect(gx - 0.8, sy * (B * 0.85) - (sy < 0 ? 2.4 : 0), 1.6, 2.4);
+      }
+    }
+    if (guns % 2) {                               // the odd one out: bow chaser
+      ctx.fillRect(L * 0.55, -0.6 + 0.9, 2.6, 1.2);
+      ctx.strokeRect(L * 0.55, -0.6 + 0.9, 2.6, 1.2);
+    }
+    ctx.lineWidth = 1;
   }
   if (stats.lookout >= 2) {                       // lookout mast amidships
     ctx.strokeStyle = "#ffffffbb";
@@ -1173,13 +1196,16 @@ async function livePoll(jid) {
       if (d.state !== "running" && d.state !== "queued") {
         S.liveDone = true;
         $("becalmed").style.display = "none";
-        $("meta").textContent += " · match complete — reloading full replay…";
-        if (d.mode === "series") {
-          location.href = `player.html?replay=` +
-            encodeURIComponent(`replays/${d.name}/g${d.game}.json`);
+        if (d.state === "done") {
+          $("meta").textContent += " · match complete — reloading full replay…";
+          location.href = "player.html?replay=" + encodeURIComponent(
+            d.mode === "series" ? `replays/${d.name}/g${d.game}.json`
+                                : `replays/${d.name}.json`);
         } else {
-          location.href = `player.html?replay=` +
-            encodeURIComponent(`replays/${d.name}.json`);
+          // cancelled/failed runs have no landed replay to redirect into
+          $("meta").textContent =
+            `⚓ this run is ${d.state} — nothing more will arrive. ` +
+            "Back to the library: click the FLOTILLA logo.";
         }
         return;
       }
