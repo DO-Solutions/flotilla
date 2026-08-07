@@ -63,9 +63,10 @@ html = f"""<!DOCTYPE html>
  .lbl {{ font-size:10px; color:#8b9bb8; }} .lbl b {{ color:#e6edf7; }}
 </style></head><body>
 <h1>Custom ship silhouettes — every distinct shape at {points} points</h1>
-<p>Deterministic projection: length=speed · beam=hold · studs=min(guns,6) ·
-bright doubled outline=armor≥3 · mast=lookout≥2 (taller with lookout). Hull is
-invisible. <b>{len(shapes)} distinct shapes</b> from all legal stat lines.
+<p>Deterministic projection: length=speed · beam=hold · gun mounts at 2+ guns
+(symmetric pairs spread along the hull; odd count = bow chaser; saturates at 5
+pairs) · bright doubled outline=armor≥3 · mast=lookout≥2 (taller with lookout).
+Hull is invisible. No per-stat cap exists — just the point budget. <b>{len(shapes)} distinct shapes</b> from all legal stat lines.
 Call out wonky ones by <b>#id</b>.</p>
 <h2>Built-ins (reference)</h2><div class="grid" id="ref"></div>
 <h2>Custom shapes</h2><div class="grid" id="g"></div>

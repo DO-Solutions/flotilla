@@ -115,6 +115,7 @@
     <select id="speed">
       <option value="1">1×</option><option value="2" selected>2×</option>
       <option value="4">4×</option><option value="8">8×</option>
+      <option value="real" title="play at the actual average pace the admirals set — near-continuous slow sailing">⏱ live pace</option>
     </select>
     <select id="pov" title="watch through one admiral's fog of war">
       <option value="-1">👁 all-seeing</option>
@@ -196,6 +197,29 @@ const canvas = $("sea"), ctx = canvas.getContext && canvas.getContext("2d");
 const tlc = $("timeline"), tctx = tlc.getContext && tlc.getContext("2d");
 const cc = $("chart"), cctx = cc.getContext && cc.getContext("2d");
 
+function updateRealRate() {
+  // "live pace": game seconds per wall second, from the decision telemetry —
+  // each window's wall cost ≈ the SLOWEST admiral's latency (they think in
+  // parallel). Works identically for replays and the live stream.
+  if (!S.rp) return;
+  const byT = new Map();
+  for (const d of S.rp.decisions || []) {
+    const ms = (d.u && d.u.ms) || 0;
+    byT.set(d.t, Math.max(byT.get(d.t) || 0, ms));
+  }
+  let wall = 0;
+  for (const ms of byT.values()) wall += ms / 1000;
+  const frames = S.rp.frames;
+  const gameSec = frames.length ? frames[frames.length - 1].t / S.rp.meta.tick_hz : 0;
+  S.realRate = wall > 1 && gameSec > 0
+    ? Math.min(3, Math.max(0.02, gameSec / wall)) : 1;
+}
+function curSpeed() {
+  const v = $("speed").value;
+  if (v === "real") return S.realRate || 1;
+  return +v;
+}
+
 function fmtTime(t) {
   const s = Math.floor(t / (S.rp ? S.rp.meta.tick_hz : 10));
   return String(Math.floor(s / 60)).padStart(2, "0") + ":" + String(s % 60).padStart(2, "0");
@@ -249,6 +273,7 @@ function load(rp) {
       `winner: ${rp.result.names[rp.result.winner]}`;
   $("nextg").style.display =
     (S.bundle && S.gameIdx < S.bundle.games.length - 1) ? "" : "none";
+  updateRealRate();
   $("prevg").style.display = (S.bundle && S.gameIdx > 0) ? "" : "none";
   $("scrub").max = rp.frames.length - 1;
   const intro = $("introfleets");
@@ -271,7 +296,11 @@ function load(rp) {
   const cfgp = $("settingspanel");
   const conf = rp.meta.config;
   const scn = rp.meta.scenario || {};
-  cfgp.innerHTML = `<h3>scenario</h3><div class="desc">${(scn.description || "")
+  cfgp.innerHTML =
+    `<h3>view</h3><label style="display:block;margin-bottom:8px">` +
+    `<input type="checkbox" id="shownames"${S.showNames ? " checked" : ""}> ` +
+    `show island names on the map</label>` +
+    `<h3>scenario</h3><div class="desc">${(scn.description || "")
       .replace(/</g, "&lt;")}</div>`;
   const prompted = rp.fleets.filter(f => f.prompt);
   if (prompted.length) {
@@ -679,22 +708,28 @@ function drawShipShape(preset, color, cargo, sel, stats) {
   // symmetric pairs from amidships aft, and an odd count adds a BOW CHASER.
   // Dark fill + light outline so they read against both the hull and the bright
   // armor ring (P3 review feedback).
-  const guns = Math.min(6, stats.guns);
+  // stats have NO per-stat cap (only the point budget: at 12 points anything can
+  // reach 7). Mounts distribute EVENLY along the hull body so batteries center
+  // naturally at any count; drawing saturates at 5 pairs + chaser (flex-design
+  // monsters) — the inspector always carries the true number.
+  const guns = stats.guns;
   if (guns >= 2) {
-    const pairs = Math.floor((guns - (guns % 2)) / 2);
+    const pairs = Math.min(5, Math.floor(guns / 2));
+    const fore = L * 0.28, aft = -L * 0.68;       // the mountable hull span
     ctx.fillStyle = "#0b1220dd";
     ctx.strokeStyle = "#ffffffbb";
     ctx.lineWidth = 0.7;
     for (let p2 = 0; p2 < pairs; p2++) {
-      const gx = -p2 * 2.6;                       // start amidships, build aft
+      const gx = pairs === 1 ? (fore + aft) / 2
+                             : fore + (aft - fore) * (p2 / (pairs - 1));
       for (const sy of [-1, 1]) {
         ctx.fillRect(gx - 0.8, sy * (B * 0.85) - (sy < 0 ? 2.4 : 0), 1.6, 2.4);
         ctx.strokeRect(gx - 0.8, sy * (B * 0.85) - (sy < 0 ? 2.4 : 0), 1.6, 2.4);
       }
     }
     if (guns % 2) {                               // the odd one out: bow chaser
-      ctx.fillRect(L * 0.55, -0.6 + 0.9, 2.6, 1.2);
-      ctx.strokeRect(L * 0.55, -0.6 + 0.9, 2.6, 1.2);
+      ctx.fillRect(L * 0.55, 0.3, 2.6, 1.2);
+      ctx.strokeRect(L * 0.55, 0.3, 2.6, 1.2);
     }
     ctx.lineWidth = 1;
   }
@@ -771,6 +806,11 @@ function draw(fr, prev, alpha) {
     else { ctx.fillStyle = "rgba(251,191,36,.55)";
            ctx.moveTo(x, y - r); ctx.lineTo(x + r, y); ctx.lineTo(x, y + r); ctx.lineTo(x - r, y); }
     ctx.fill();
+    if (S.showNames) {
+      ctx.font = "9px sans-serif";
+      ctx.fillStyle = "#e6edf7aa";
+      ctx.fillText(nodeName(nd), x + r + 3, y + 3);
+    }
     ctx.globalAlpha = 1;
   }
 
@@ -904,7 +944,7 @@ function draw(fr, prev, alpha) {
         sm = S.smooth[s[0]] = { x: tx, y: ty, ax: tx, ay: ty,
              a: orbitAngle !== null ? orbitAngle + Math.PI / 2 : -Math.PI / 2 };
       }
-      const k = S.playing ? Math.min(1, .12 * +$("speed").value + .06) : 1;
+      const k = S.playing ? Math.min(1, .12 * curSpeed() + .06) : 1;
       sm.x += (tx - sm.x) * k; sm.y += (ty - sm.y) * k;
       // heading = tangent of the RENDERED path (the wake it just generated): the bow
       // points from the last heading-anchor (~2px back along its own trail) to the
@@ -1008,15 +1048,19 @@ function loop(ts) {
   requestAnimationFrame(loop);
   if (!S.rp || !S.playing) { S.last = ts; return; }
   const dt = Math.min(100, ts - S.last); S.last = ts;
-  let speed = +$("speed").value;
+  let speed = curSpeed();
+  const realPace = $("speed").value === "real";
   if (S.liveMode) {
     // elastic pacing: chase the stream's edge, slow as we catch up. When the
     // engine is waiting on the admirals there's nothing ahead — the winds die.
+    // "live pace" opts OUT of elasticity: constant slow sailing, and hitting
+    // the edge just pauses (becalmed) until the next window lands.
     const ahead = S.rp.frames.length - 1 - S.fi;
     const LAG = Math.round((S.rp.meta.window || 100) / S.rp.meta.frame_every);
     const becalmed = ahead <= 2 && !S.liveDone;
     $("becalmed").style.display = becalmed ? "" : "none";
-    speed = becalmed ? 0 : speed * Math.min(2, Math.max(0.3, ahead / LAG));
+    if (becalmed) speed = 0;
+    else if (!realPace) speed = speed * Math.min(2, Math.max(0.3, ahead / LAG));
   }
   const fps = S.rp.meta.tick_hz / S.rp.meta.frame_every * speed;
   S.acc += dt / 1000 * fps;
@@ -1064,6 +1108,12 @@ $("play").addEventListener("click", () => {
   setPlay(!S.playing);
 });
 $("scrub").addEventListener("input", e => { setPlay(false); seek(+e.target.value); });
+document.addEventListener("change", e => {
+  if (e.target && e.target.id === "shownames") {
+    S.showNames = e.target.checked;
+    if (S.rp) seek(S.fi);              // instant, in any replay or live view
+  }
+});
 $("pov").addEventListener("change", () => {
   S.pov = parseInt($("pov").value);
   S.povCache = S.pov >= 0 ? computePov(S.pov) : null;
@@ -1174,6 +1224,7 @@ function liveAppend(p) {
   }
   for (const d of p.decisions || []) rp.decisions.push(d);
   $("scrub").max = Math.max(0, rp.frames.length - 1);
+  updateRealRate();
 }
 async function livePoll(jid) {
   let ofs = 0, game = 0;
