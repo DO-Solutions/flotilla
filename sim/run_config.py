@@ -105,7 +105,22 @@ def play_game(named_bots, seed, scenario, outpath, memos_after=None):
             b.pad = ""                     # per-game working memory; memos carry over
             b.plan_text = ""
     eng = Engine(named_bots, seed=seed, scenario=scenario)
+    live_path = os.environ.get("FLOTILLA_LIVE")
+    lfh = None
+    if live_path:
+        # live stream: header + one JSON line per window ("w" truncates = new game;
+        # readers detect the reset by their offset exceeding the file size)
+        lfh = open(live_path, "w")
+        lfh.write(json.dumps(eng.live_header(), separators=(",", ":")) + "\n")
+        lfh.flush()
+
+        def _sink(payload):
+            lfh.write(json.dumps(payload, separators=(",", ":")) + "\n")
+            lfh.flush()
+        eng.live = _sink
     result = eng.run()
+    if lfh:
+        lfh.close()
     replay = eng.replay(result)
     if memos_after:
         replay["memos"] = memos_after

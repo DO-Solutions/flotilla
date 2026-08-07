@@ -138,6 +138,10 @@
       </div>
     </div>
     <canvas id="sea" width="1152" height="648"></canvas>
+    <div id="becalmed" style="display:none;position:absolute;top:12px;left:50%;
+         transform:translateX(-50%);background:#0a1b33ee;border:1px solid var(--line);
+         border-radius:8px;padding:6px 16px;font-size:13px;color:var(--dim)">
+      🌬 becalmed — awaiting the admirals…</div>
     <div id="legend">
       <span>◖ round + fat = trader (swells with cargo)</span>
       <span>➤ dart = raider</span>
@@ -966,6 +970,7 @@ function seek(fi) {
   S.fi = Math.max(0, Math.min(S.rp.frames.length - 1, fi));
   $("scrub").value = S.fi;
   const fr = S.rp.frames[S.fi];
+  if (!fr) return;                       // live mode starts with zero frames
   updatePanels(fr);
   draw(fr, S.rp.frames[S.fi - 1], 1);
 }
@@ -980,13 +985,26 @@ function loop(ts) {
   requestAnimationFrame(loop);
   if (!S.rp || !S.playing) { S.last = ts; return; }
   const dt = Math.min(100, ts - S.last); S.last = ts;
-  const speed = +$("speed").value;
+  let speed = +$("speed").value;
+  if (S.liveMode) {
+    // elastic pacing: chase the stream's edge, slow as we catch up. When the
+    // engine is waiting on the admirals there's nothing ahead — the winds die.
+    const ahead = S.rp.frames.length - 1 - S.fi;
+    const LAG = Math.round((S.rp.meta.window || 100) / S.rp.meta.frame_every);
+    const becalmed = ahead <= 2 && !S.liveDone;
+    $("becalmed").style.display = becalmed ? "" : "none";
+    speed = becalmed ? 0 : speed * Math.min(2, Math.max(0.3, ahead / LAG));
+  }
   const fps = S.rp.meta.tick_hz / S.rp.meta.frame_every * speed;
   S.acc += dt / 1000 * fps;
   while (S.acc >= 1) { S.acc -= 1; S.fi++; }
-  if (S.fi >= S.rp.frames.length - 1) { S.fi = S.rp.frames.length - 1; setPlay(false); }
+  if (S.fi >= S.rp.frames.length - 1) {
+    S.fi = Math.max(0, S.rp.frames.length - 1);
+    if (!S.liveMode) setPlay(false);     // live: stay armed for the next frames
+  }
   $("scrub").value = S.fi;
   const fr = S.rp.frames[S.fi];
+  if (!fr) return;
   updatePanels(fr);
   draw(fr, S.rp.frames[S.fi - 1], Math.min(1, S.acc));
 }
@@ -1090,12 +1108,90 @@ document.body.addEventListener("drop", e => {
   f.text().then(t => load(JSON.parse(t)));
 });
 
-window.__flotilla = { seek, seekFrac, state: () => S, load, loadBundle, setPlay, select };
+window.__flotilla = { seek, seekFrac, state: () => S, load, loadBundle, setPlay,
+                      select, liveInit, liveAppend };
 if (!location.protocol.startsWith("http")) {   // downloaded bundle: no home to go to
   $("homelink").removeAttribute("href");
 }
 const qs = new URLSearchParams(location.search);
-if (qs.get("replay")) {
+// ---- LIVE MODE: chase a running match's frame stream ----
+function liveInit(hdr, game) {
+  const rp = { meta: hdr.meta, fleets: hdr.fleets, nodes: hdr.nodes,
+               frames: [], events: [], decisions: [],
+               result: { names: Object.fromEntries(hdr.fleets.map(f => [f.id, f.name])),
+                         winner: null } };
+  load(rp);
+  S.liveMode = true;
+  S.liveDone = false;
+  $("meta").textContent = `⛵ LIVE — game ${game} · ` +
+    hdr.fleets.map(f => f.name).join(" vs ");
+  $("dl").style.display = "none";
+  setPlay(true);
+}
+function liveAppend(p) {
+  const rp = S.rp;
+  for (const fr of p.frames || []) {
+    rp.frames.push(fr);
+    const mmap = new Map();
+    for (const row of fr.s) mmap.set(row[0], row);
+    S.frameMaps.push(mmap);
+  }
+  for (const e of p.events || []) {
+    rp.events.push(e);
+    if (e.k === "spawn") S.cat[e.ship] = { preset: e.preset, squad: e.squad, fleet: e.fleet };
+    if (e.k === "refit" && S.cat[e.ship]) {
+      (S.cat[e.ship].refits = S.cat[e.ship].refits || []).push([e.t, e.to]);
+    }
+    if (e.k === "sink") S.sinkAt[e.ship] = e.t;
+    if (e.k === "intent" || e.k === "orders") {
+      (S.byShip[e.ship] = S.byShip[e.ship] || []).push(e);
+    }
+    if (["sink", "flag_sunk", "signal", "region"].includes(e.k)) S.tl.push(e);
+    if (e.k === "parley") S.parley.push(e);
+  }
+  for (const d of p.decisions || []) rp.decisions.push(d);
+  $("scrub").max = Math.max(0, rp.frames.length - 1);
+}
+async function livePoll(jid) {
+  let ofs = 0, game = 0;
+  while (true) {
+    let d = null;
+    try {
+      d = await (await fetch(`api/live/${jid}?ofs=${ofs}`)).json();
+    } catch (e) { /* transient */ }
+    if (d) {
+      if (d.ofs < ofs) { ofs = 0; continue; }        // truncated: fresh game
+      ofs = d.ofs;
+      for (const line of d.lines || []) {
+        if (line.header) {
+          game = d.game || game + 1;
+          liveInit(line, game);
+        } else if (S.liveMode) {
+          liveAppend(line);
+        }
+      }
+      if (d.state !== "running" && d.state !== "queued") {
+        S.liveDone = true;
+        $("becalmed").style.display = "none";
+        $("meta").textContent += " · match complete — reloading full replay…";
+        if (d.mode === "series") {
+          location.href = `player.html?replay=` +
+            encodeURIComponent(`replays/${d.name}/g${d.game}.json`);
+        } else {
+          location.href = `player.html?replay=` +
+            encodeURIComponent(`replays/${d.name}.json`);
+        }
+        return;
+      }
+    }
+    await new Promise(r => setTimeout(r, 2500));
+  }
+}
+
+if (qs.get("live")) {
+  $("meta").textContent = "⛵ LIVE — waiting for the match to raise sail…";
+  livePoll(qs.get("live"));
+} else if (qs.get("replay")) {
   fetch(qs.get("replay")).then(r => r.json()).then(load)
     .catch(e => { $("meta").textContent = "failed to load replay: " + e; });
 } else if (qs.get("series")) {

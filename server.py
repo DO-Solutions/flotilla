@@ -149,7 +149,10 @@ def _run_job(job, cfg):
             p = subprocess.Popen([sys.executable,
                                   os.path.join(HERE, "sim", "run_config.py"), cfgpath],
                                  stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                                 text=True, cwd=HERE)
+                                 text=True, cwd=HERE,
+                                 env={**os.environ,
+                                      "FLOTILLA_LIVE": os.path.join(outdir,
+                                                                    "live.jsonl")})
             PROCS[job["id"]] = p
             for line in p.stdout:
                 job["log"].append(line.rstrip()[:400])
@@ -312,6 +315,40 @@ class H(BaseHTTPRequestHandler):
             if not os.path.exists(p):
                 build_index(LIB)
             return self._send(200, open(p, "rb").read())
+        m = re.match(r"^/api/live/([A-Za-z0-9_.-]+)$", path)
+        if m:
+            jid = m.group(1)
+            j = _job(jid)
+            if not j:
+                return self._send(404, {"error": "no such job"})
+            qs = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
+            try:
+                ofs = max(0, int((qs.get("ofs") or ["0"])[0]))
+            except ValueError:
+                ofs = 0
+            livef = os.path.join(LIB, "_work", jid, "live.jsonl")
+            out = {"ofs": ofs, "lines": [], "state": j["state"],
+                   "name": j["name"], "mode": j["mode"],
+                   "game": min(j["games_done"] + (0 if j["state"] != "running" else 1),
+                               j.get("games_expected", 1))}
+            if os.path.isfile(livef):
+                size = os.path.getsize(livef)
+                if ofs > size:
+                    ofs = 0                      # file truncated: a new game began
+                with open(livef) as fh:
+                    fh.seek(ofs)
+                    chunk = fh.read(4_000_000)
+                nl = chunk.rfind("\n")
+                if nl >= 0:                      # only complete lines ship
+                    for ln in chunk[:nl].split("\n"):
+                        if ln:
+                            try:
+                                out["lines"].append(json.loads(ln))
+                            except ValueError:
+                                pass
+                    ofs += nl + 1
+                out["ofs"] = ofs
+            return self._send(200, out)
         # library files: replays/<match.json> | replays/<series>/<g.json> |
         # tournaments/... | bundles/...
         m = re.match(r"^/replays/([^/]+)$", path)

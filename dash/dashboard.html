@@ -798,6 +798,8 @@ async function pollJobs() {
         ` · game ${Math.min(j.games_done + (j.state === "done" ? 0 : 1), j.games_expected)}/${j.games_expected}`;
       return `<div class="job"><b>${j.name}</b> <span class="dim">(${j.mode})</span> ` +
         `<span class="st-${j.state === "running" ? "run" : j.state}">${j.state}</span>${prog}` +
+        (j.state === "running" && j.mode !== "tournament" ?
+          ` <a class="btn btn-watch" target="_blank" href="player.html?live=${j.id}">👁 watch live</a>` : "") +
         (["queued", "running"].includes(j.state) ?
           ` <a class="btn btn-dl jcancel" href="#" data-id="${j.id}">✕ cancel</a>` : "") +
         (j.error ? ` <span class="st-failed">${j.error}</span>` : "") +

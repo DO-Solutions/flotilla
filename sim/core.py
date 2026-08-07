@@ -272,6 +272,8 @@ class Engine:
                              if c["signal_mode"] == "preset" else [],
                              programs=c["programs"])
         self.t = 0
+        self.live = None                   # optional per-window flush callback
+        self._lf = self._le = self._ld = 0
         self.next_ship_id = 1
         self.next_node_id = 1
         self.ships = {}                    # id -> Ship (insertion ordered)
@@ -1226,12 +1228,47 @@ class Engine:
         self._update_contacts()
         if t % FRAME_EVERY == 0:
             self._frame()
+        if self.live is not None and (t + 1) % self.cfg["window"] == 0:
+            self._live_flush()             # one flush per completed window chunk
         self.t += 1
+
+    def live_header(self):
+        """The live stream's opening line: everything the viewer needs before any
+        frame exists (same shapes as replay())."""
+        return dict(header=True, meta=dict(
+            seed=self.seed, w=self.W, h=self.H, tick_hz=TICKS_PER_SEC,
+            frame_every=FRAME_EVERY, window=self.cfg["window"],
+            presets={**PRESETS, **self.shared_designs}, harbor_r=self.hr,
+            ship_cost=self.cfg["ship_cost"], scenario=self.scenario,
+            config={k: v for k, v in self.cfg.items() if k != "rules"},
+            regions=self.regions or None),
+            fleets=[dict(id=f.id, name=f.name, harbor=(f.hx, f.hy),
+                         model=getattr(f.bot, "model_label", None),
+                         designs=dict(f.designs), prompt=None)
+                    for f in self.fleets.values()],
+            nodes=[dict(id=n.id, name=n.name, x=n.x, y=n.y, kind=n.kind, cap=n.cap)
+                   for n in self.nodes.values()],
+            max_ticks=self.max_ticks)
+
+    def _live_flush(self, final=False):
+        payload = dict(t=self.t, final=final,
+                       frames=self.frames[self._lf:],
+                       events=self.events[self._le:],
+                       decisions=self.decisions[self._ld:],
+                       scores={f.id: f.score() for f in self.fleets.values()})
+        self._lf, self._le, self._ld = (len(self.frames), len(self.events),
+                                        len(self.decisions))
+        try:
+            self.live(payload)
+        except Exception:
+            self.live = None               # a broken sink must never hurt the sim
 
     def run(self):
         while self.t < self.max_ticks and sum(1 for f in self.fleets.values() if f.alive) > 1:
             self.tick()
         self._frame()
+        if self.live is not None:
+            self._live_flush(final=True)
         scores = {f.id: f.score() for f in self.fleets.values()}
         alive = [f.id for f in self.fleets.values() if f.alive]
         winner = max(scores, key=lambda k: (self.fleets[k].alive, scores[k], -k))
