@@ -94,6 +94,41 @@ def _normalize_results(job, outdir):
         shutil.move(outdir, dst)
 
 
+def _publish_partial_series(job, outdir):
+    """Live publishing: each finished game of a series lands in the library as it
+    completes (with a partial series.json), so spectators follow along instead of
+    waiting for the whole job. The final _normalize_results replaces it all with
+    the canonical result. Must NEVER break the run — best-effort only."""
+    try:
+        dst = os.path.join(LIB, "series", job["name"])
+        os.makedirs(dst, exist_ok=True)
+        rows = []
+        for line in job["log"]:
+            if '"winner"' in line:
+                try:
+                    r = json.loads(line)
+                    if "winner" in r and "file" in r:
+                        rows.append(r)
+                except ValueError:
+                    pass
+        for i, r in enumerate(rows):
+            fn = os.path.basename(r["file"])
+            src = os.path.join(outdir, fn)
+            if os.path.isfile(src):
+                tmp = os.path.join(dst, fn + ".tmp")
+                shutil.copy2(src, tmp)
+                os.replace(tmp, os.path.join(dst, fn))     # atomic vs readers
+        with open(os.path.join(dst, "series.json"), "w") as fh:
+            json.dump({"games": [dict(game=i + 1, seed=r.get("seed"),
+                                      file=os.path.basename(r["file"]),
+                                      winner=r.get("winner"))
+                                 for i, r in enumerate(rows)],
+                       "memos": {}, "partial": True}, fh, indent=1)
+        build_index(LIB)
+    except Exception:
+        pass
+
+
 def _run_job(job, cfg):
     with RUN_QUEUE:
         if job.get("cancel"):                     # cancelled while queued
@@ -120,6 +155,8 @@ def _run_job(job, cfg):
                 job["log"].append(line.rstrip()[:400])
                 if '"winner"' in line:
                     job["games_done"] += 1
+                    if job["mode"] == "series":
+                        _publish_partial_series(job, outdir)
                 _persist_jobs()
             rc = p.wait()
             if job.get("cancel"):

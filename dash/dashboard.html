@@ -294,7 +294,7 @@ function renderSeriesTable() {
     tr.innerHTML =
       `<td><input class="sname" data-series="${s.name}" value="${displayName(s)
         .replace(/"/g, "&quot;")}" title="click to rename"></td>` +
-      `<td>${s.games.length}</td>` +
+      `<td>${s.games.length}${s.partial ? ' <span class="warn">⏳ live</span>' : ""}</td>` +
       `<td class="dim">${seriesPlayers(s)}</td>` +
       `<td class="dim">${seriesLatest(s)}</td>` +
       `<td><a class="btn btn-watch" target="_blank" ` +
@@ -785,7 +785,7 @@ fetch("api/health").then(r => r.json()).then(async h => {
   }
 }).catch(() => {});
 refreshPrompts().then(renderPlayers);
-let LASTDONE = 0;
+let LASTSIG = "";
 async function pollJobs() {
   try {
     const d = await (await fetch("api/runs")).json();
@@ -802,9 +802,11 @@ async function pollJobs() {
           `<div class="dim" style="font-size:11px">${(j.log.at(-1) || "").replace(/</g, "&lt;").slice(0, 140)}</div>` : "") +
         `</div>`;
     }).join("") || `<div class="dim">no runs yet — configure above and launch</div>`;
-    const done = (d.jobs || []).filter(j => j.state === "done").length;
-    if (done !== LASTDONE) {                 // a run finished: refresh the library
-      LASTDONE = done;
+    // refresh the library whenever a run finishes OR any series lands a game
+    const sig = (d.jobs || []).filter(j => j.state === "done").length + "|" +
+                (d.jobs || []).reduce((n, j) => n + (j.games_done || 0), 0);
+    if (sig !== LASTSIG) {
+      LASTSIG = sig;
       const idx = await (await fetch("index.json")).json();
       IDX = idx;
       renderSeriesTable();

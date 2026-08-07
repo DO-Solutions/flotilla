@@ -68,7 +68,8 @@ def build_index(lib):
                     games.append(dict(game=g["game"], winner=g["winner"],
                                       file=f"replays/{name}/{gfn}"))
             idx["series"].append(dict(name=name, display_name=s.get("display_name"),
-                                      games=games, memos=s.get("memos", {})))
+                                      games=games, memos=s.get("memos", {}),
+                                      partial=bool(s.get("partial"))))
     tdir = os.path.join(lib, "tournaments")
     if os.path.isdir(tdir):
         for name in sorted(os.listdir(tdir)):

@@ -123,6 +123,29 @@ ok(st == 200 and "trade-first" not in r, "empty text deletes the prompt")
 st, r = req("/api/prompts", {"name": "", "text": "x"})
 ok(st == 400, "unnamed prompt rejected")
 
+# live per-game publishing: a series game lands in the library before the job ends
+wd = os.path.join(TMP, "_work", "livetest")
+os.makedirs(wd, exist_ok=True)
+with open(os.path.join(wd, "g1.json"), "w") as fh:
+    json.dump(rp, fh)
+livejob = dict(name="live-series", mode="series", games_done=1,
+               log=[json.dumps({"seed": 9, "file": os.path.join(wd, "g1.json"),
+                                "scores": {"A": 1, "B": 2}, "winner": "B"})])
+server._publish_partial_series(livejob, wd)
+ok(os.path.isfile(os.path.join(TMP, "series", "live-series", "g1.json")),
+   "partial publish copies the finished game")
+with open(os.path.join(TMP, "series", "live-series", "series.json")) as fh:
+    sj = json.load(fh)
+ok(sj.get("partial") is True and sj["games"][0]["winner"] == "B",
+   "partial series.json written with winner")
+with open(os.path.join(TMP, "index.json")) as fh:
+    ix = json.load(fh)
+live = next((x for x in ix["series"] if x["name"] == "live-series"), None)
+ok(live is not None and live.get("partial") is True,
+   "index lists the in-progress series as partial")
+ok(any(m["file"] == "replays/live-series/g1.json" for m in ix["matches"]),
+   "the live game is watchable from the index")
+
 srv.shutdown()
 shutil.rmtree(TMP, ignore_errors=True)
 print("FAILURES:", fails)
