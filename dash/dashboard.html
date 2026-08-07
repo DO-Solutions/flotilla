@@ -214,6 +214,12 @@
     it can author the same file directly. Only values you change are written.
   </div>
   <div style="margin-bottom:10px">
+    <label id="auxwrap" style="display:none" title="run this job on a disposable
+      worker droplet — the site stays free while it sails">
+      <input type="checkbox" id="cauxec"> ⚓ run on a fleet auxiliary
+    </label>
+  </div>
+  <div style="margin-bottom:10px">
     mode:
     <select id="cmode">
       <option value="match">single match</option>
@@ -751,6 +757,7 @@ document.addEventListener("click", e => {
     e.preventDefault();
     const cfg = buildConfig();
     if ($("cname").value.trim()) cfg.name = $("cname").value.trim();
+    if ($("cauxec") && $("cauxec").checked) cfg.executor = "auxiliary";
     delete cfg.outdir;
     fetch("api/run", { method: "POST", body: JSON.stringify(cfg) })
       .then(r => r.json()).then(d => {
@@ -779,6 +786,7 @@ fetch("api/health").then(r => r.json()).then(async h => {
   if (h && h.ok) {
     SERVER = true;
     SHOWCASE = !!h.showcase;
+    if (h.aux) $("auxwrap").style.display = "";
     $("claunch").style.display = "";
     $("jobscard").style.display = "";
     pollJobs();

@@ -200,6 +200,20 @@ def submit_run(cfg):
     job = dict(id=jid, name=name, mode=mode, state="queued", games_done=0,
                games_expected=exp, submitted=time.time(), started=None,
                finished=None, error=None, log=[])
+    if cfg.pop("executor", None) == "auxiliary":
+        if _aux_cfg() is None:
+            raise ValueError("auxiliary executor not configured — "
+                             "POST /api/aux-config first")
+        with AUX_LOCK:
+            active = len(AUX)
+        if active >= int(_aux_cfg().get("max_concurrent", 3)):
+            raise ValueError(f"auxiliary fleet at capacity ({active})")
+        with JOBS_LOCK:
+            JOBS.append(job)
+        _persist_jobs()
+        threading.Thread(target=_run_job_aux, args=(job, dict(cfg)),
+                         daemon=True).start()
+        return job
     with JOBS_LOCK:
         JOBS.append(job)
     _persist_jobs()
@@ -285,6 +299,143 @@ def _showcase_list():
         return []
 
 
+# ---- fleet auxiliaries: disposable worker droplets (docs/FLEET_AUXILIARIES.md) ----
+AUX = {}                                # job id -> {"bearer", "droplet_id", "born"}
+AUX_LOCK = threading.Lock()
+
+
+def _aux_cfg():
+    env = {k.lower().replace("aux_", ""): os.environ[k]
+           for k in ("AUX_DO_TOKEN", "AUX_CALLBACK_BASE", "AUX_CALLBACK_AUTH",
+                     "AUX_SIZE", "AUX_REGION", "AUX_MAX_CONCURRENT",
+                     "AUX_MAX_AGE_H") if os.environ.get(k)}
+    if not {"do_token", "callback_base"} <= set(env):
+        try:
+            with open(os.path.join(LIB, "aux.json")) as fh:
+                env = json.load(fh)
+        except Exception:
+            return None
+    if not {"do_token", "callback_base"} <= set(env):
+        return None
+    env.setdefault("size", "s-1vcpu-1gb")
+    env.setdefault("region", "nyc3")
+    env.setdefault("max_concurrent", 3)
+    env.setdefault("max_age_h", 8)
+    return env
+
+
+def _do(cfg, method, path, body=None):
+    import urllib.request as _rq
+    req = _rq.Request("https://api.digitalocean.com/v2" + path,
+                      data=json.dumps(body).encode() if body is not None else None,
+                      method=method,
+                      headers={"Authorization": f"Bearer {cfg['do_token']}",
+                               "Content-Type": "application/json"})
+    with _rq.urlopen(req, timeout=45) as r:
+        raw = r.read()
+        return json.loads(raw) if raw else {}
+
+
+def _aux_user_data(jid, bearer, cfg):
+    base = cfg["callback_base"].rstrip("/")
+    basic = f'-u "{cfg["callback_auth"]}" ' if cfg.get("callback_auth") else ""
+    return f"""#!/bin/bash
+mkdir -p /opt/flotilla /etc/flotilla-aux
+for i in $(seq 1 60); do
+  curl -fsS {basic}-H "X-Aux-Token: {bearer}" \\
+    "{base}/api/aux/{jid}/app.tar.gz" -o /tmp/app.tgz && break
+  sleep 5
+done
+tar xzf /tmp/app.tgz -C /opt/flotilla
+curl -fsS {basic}-H "X-Aux-Token: {bearer}" \\
+  "{base}/api/aux/{jid}/job.json" -o /etc/flotilla-aux/job.json
+chmod 600 /etc/flotilla-aux/job.json
+nohup python3 /opt/flotilla/scripts/aux_agent.py >/var/log/flotilla-aux.log 2>&1 &
+"""
+
+
+def _app_tarball():
+    """The running app, packed for a worker: code only, never the library."""
+    import io
+    import tarfile
+    buf = io.BytesIO()
+    with tarfile.open(fileobj=buf, mode="w:gz") as tar:
+        for item in ("server.py", "VERSION", "sim", "scripts", "viewer", "dash"):
+            p = os.path.join(HERE, item)
+            if os.path.exists(p):
+                tar.add(p, arcname=item, filter=lambda ti:
+                        None if "__pycache__" in ti.name else ti)
+    return buf.getvalue()
+
+
+def _aux_destroy(jid):
+    cfg = _aux_cfg()
+    with AUX_LOCK:
+        rec = AUX.pop(jid, None)
+    if cfg and rec and rec.get("droplet_id"):
+        try:
+            _do(cfg, "DELETE", f"/droplets/{rec['droplet_id']}")
+        except Exception:
+            pass                        # the reaper sweeps stragglers by tag
+
+
+def _run_job_aux(job, cfg):
+    aux = _aux_cfg()
+    jid = job["id"]
+    import secrets as _sec
+    bearer = "kaux_" + _sec.token_urlsafe(24)
+    with AUX_LOCK:
+        AUX[jid] = {"bearer": bearer, "droplet_id": None, "born": time.time(),
+                    "config": cfg, "rows": []}
+    job["state"] = "running"
+    job["started"] = time.time()
+    job["aux"] = True
+    _persist_jobs()
+    try:
+        d = _do(aux, "POST", "/droplets", {
+            "name": f"flotilla-aux-{jid}", "region": aux["region"],
+            "size": aux["size"], "image": "debian-13-x64",
+            "tags": ["flotilla-aux"],
+            "user_data": _aux_user_data(jid, bearer, aux)})
+        with AUX_LOCK:
+            AUX[jid]["droplet_id"] = d["droplet"]["id"]
+        job["log"].append(f"auxiliary droplet {d['droplet']['id']} provisioning")
+        _persist_jobs()
+    except Exception as e:
+        job["state"] = "failed"
+        job["error"] = f"aux provision failed: {type(e).__name__}: {e}"[:250]
+        job["finished"] = time.time()
+        _persist_jobs()
+        _aux_destroy(jid)
+        return
+    deadline = time.time() + float(aux["max_age_h"]) * 3600
+    while job["state"] == "running" and time.time() < deadline:
+        time.sleep(20)
+    if job["state"] == "running":       # blew the age cap — reap it
+        job["state"] = "failed"
+        job["error"] = f"auxiliary exceeded max_age_h={aux['max_age_h']}"
+        job["finished"] = time.time()
+        _persist_jobs()
+    _aux_destroy(jid)
+
+
+def _aux_reaper():
+    while True:
+        time.sleep(300)
+        cfg = _aux_cfg()
+        if not cfg:
+            continue
+        try:
+            d = _do(cfg, "GET", "/droplets?tag_name=flotilla-aux&per_page=100")
+            with AUX_LOCK:
+                live = {r["droplet_id"] for r in AUX.values() if r.get("droplet_id")}
+            for dr in d.get("droplets", []):
+                if dr["id"] not in live:
+                    _do(cfg, "DELETE", f"/droplets/{dr['id']}")
+        except Exception:
+            pass
+
+
 MODELS_CACHE = {"at": 0.0, "ids": []}
 SCRIPTED_BOTS = ["merchant", "corsair", "admiralty", "turtle"]
 
@@ -352,6 +503,7 @@ class H(BaseHTTPRequestHandler):
                 q = sum(1 for j in JOBS if j["state"] in ("queued", "running"))
             return self._send(200, {"ok": True, "version": VERSION, "queue": q,
                                     "showcase": _showcase_cfg() is not None,
+                                    "aux": _aux_cfg() is not None,
                                     "runs_enabled": bool(os.environ.get("DO_INFERENCE_KEY"))
                                     or True})
         if path == "/api/stats":
@@ -392,6 +544,22 @@ class H(BaseHTTPRequestHandler):
             if not os.path.exists(p):
                 build_index(LIB)
             return self._send(200, open(p, "rb").read())
+        m = re.match(r"^/api/aux/([A-Za-z0-9_.-]+)/(app\.tar\.gz|job\.json)$", path)
+        if m:
+            jid, what = m.groups()
+            with AUX_LOCK:
+                rec = AUX.get(jid)
+            if rec is None or self.headers.get("X-Aux-Token") != rec["bearer"]:
+                return self._send(401, {"error": "bad aux token"})
+            if what == "app.tar.gz":
+                return self._send(200, _app_tarball(), "application/gzip")
+            aux = _aux_cfg() or {}
+            return self._send(200, {
+                "job_id": jid, "bearer": rec["bearer"],
+                "callback_base": aux.get("callback_base", ""),
+                "callback_auth": aux.get("callback_auth", ""),
+                "config": rec["config"],
+                "inference_key": os.environ.get("DO_INFERENCE_KEY", "")})
         m = re.match(r"^/api/live/([A-Za-z0-9_.-]+)$", path)
         if m:
             jid = m.group(1)
@@ -492,6 +660,88 @@ class H(BaseHTTPRequestHandler):
                 with open(_prompts_path(), "w") as fh:
                     json.dump(prompts, fh, indent=1)
                 return self._send(200, prompts)
+            m = re.match(r"^/api/aux/([A-Za-z0-9_.-]+)/(live|game|done|fail)$", path)
+            if m:
+                jid, what = m.groups()
+                with AUX_LOCK:
+                    rec = AUX.get(jid)
+                j = _job(jid)
+                if rec is None or j is None \
+                        or self.headers.get("X-Aux-Token") != rec["bearer"]:
+                    return self._send(401, {"error": "bad aux token"})
+                d = json.loads(body or b"{}")
+                wd = os.path.join(LIB, "_work", jid)
+                os.makedirs(wd, exist_ok=True)
+                if what == "live":
+                    with open(os.path.join(wd, "live.jsonl"), "a") as fh:
+                        for line in d.get("lines", []):
+                            fh.write(json.dumps(line, separators=(",", ":")) + "\n")
+                    return self._send(200, {"ok": True})
+                if what == "game":
+                    fn = os.path.basename(str(d.get("file", "")))
+                    rp = d.get("replay")
+                    if not fn.endswith(".json") or not isinstance(rp, dict):
+                        return self._send(400, {"error": "bad game payload"})
+                    if j["mode"] == "series":
+                        dst = os.path.join(LIB, "series", j["name"])
+                        os.makedirs(dst, exist_ok=True)
+                        tmp = os.path.join(dst, fn + ".tmp")
+                        with open(tmp, "w") as fh:
+                            json.dump(rp, fh, separators=(",", ":"))
+                        os.replace(tmp, os.path.join(dst, fn))
+                        if d.get("row"):
+                            rec["rows"].append(d["row"])
+                            j["games_done"] += 1
+                            j["log"].append(json.dumps(d["row"])[:400])
+                        with open(os.path.join(dst, "series.json"), "w") as fh:
+                            json.dump({"games": [
+                                dict(game=i + 1, seed=r.get("seed"),
+                                     file=os.path.basename(r["file"]),
+                                     winner=r.get("winner"))
+                                for i, r in enumerate(rec["rows"])],
+                                "memos": {}, "partial": True}, fh, indent=1)
+                    else:
+                        os.makedirs(os.path.join(LIB, "matches"), exist_ok=True)
+                        with open(os.path.join(LIB, "matches",
+                                               f"{j['name']}.json"), "w") as fh:
+                            json.dump(rp, fh, separators=(",", ":"))
+                        j["games_done"] += 1
+                    build_index(LIB)
+                    _persist_jobs()
+                    return self._send(200, {"ok": True})
+                if what == "done":
+                    if j["mode"] == "series":
+                        dst = os.path.join(LIB, "series", j["name"])
+                        os.makedirs(dst, exist_ok=True)
+                        ser = d.get("series") or {}
+                        ser.pop("partial", None)
+                        with open(os.path.join(dst, "series.json"), "w") as fh:
+                            json.dump(ser, fh, indent=1)
+                    build_index(LIB)
+                    j["state"] = "done"
+                    j["finished"] = time.time()
+                    _persist_jobs()
+                    threading.Thread(target=_aux_destroy, args=(jid,),
+                                     daemon=True).start()
+                    return self._send(200, {"ok": True})
+                j["state"] = "failed"                      # fail
+                j["error"] = str(d.get("error", "aux failed"))[:250]
+                j["finished"] = time.time()
+                _persist_jobs()
+                threading.Thread(target=_aux_destroy, args=(jid,),
+                                 daemon=True).start()
+                return self._send(200, {"ok": True})
+            if path == "/api/aux-config":
+                d = json.loads(body)
+                if not {"do_token", "callback_base"} <= set(d):
+                    return self._send(400, {"error": "need do_token + callback_base "
+                                            "(+ optional callback_auth/size/region/"
+                                            "max_concurrent/max_age_h)"})
+                p = os.path.join(LIB, "aux.json")
+                with open(p, "w") as fh:
+                    json.dump(d, fh)
+                os.chmod(p, 0o600)
+                return self._send(200, {"ok": True, "aux": True})
             if path == "/api/showcase-config":
                 d = json.loads(body)
                 need = {"access_key", "secret_key", "endpoint", "bucket"}
@@ -612,6 +862,7 @@ def main():
     host, port = BIND.rsplit(":", 1)
     if not os.environ.get("DO_INFERENCE_KEY"):
         print("NOTE: DO_INFERENCE_KEY not set — scripted-bot runs only until you export it.")
+    threading.Thread(target=_aux_reaper, daemon=True).start()
     srv = ThreadingHTTPServer((host, int(port)), H)
     print(f"Flotilla server {VERSION} — http://{BIND}  (library: {LIB})")
     srv.serve_forever()

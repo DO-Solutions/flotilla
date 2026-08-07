@@ -1,6 +1,6 @@
-# Fleet Auxiliaries — worker servers for running sims (design)
+# Fleet Auxiliaries — worker servers for running sims
 
-*Status: DESIGN — not built. 2026-08-07.*
+*Status: BUILT 2026-08-07 (same day as the design — see "As built" below).*
 
 ## Why
 
@@ -62,14 +62,27 @@ box holding infrastructure credentials, so scope it hard:
   peaks ~200MB). Worst-case runaway = cap × $0.009/hr.
 - Self-hosters without a token simply keep the local executor (default).
 
-## Open questions (decide before building)
+## As built (decisions on the open questions)
 
-1. Token custody: env on the flagship vs a config-API secret like showcase creds.
-2. Warm pool (1 idle aux for instant starts) vs pure cold-start (~50s provision)?
-3. Does the auxiliary get the inference key, or proxy model calls through the
-   flagship? (Proxying keeps the key off disposable boxes; adds a hop.)
+1. **Token custody**: config API — `POST /api/aux-config {do_token, callback_base,
+   callback_auth?, size?, region?, max_concurrent?, max_age_h?}`, stored 0600 in
+   the library dir (never served by any route); `AUX_*` env works too. Use a
+   custom-scoped DO token (droplet create/read/delete + tag) — the token-management
+   API can't mint these, so it's a one-time control-panel step.
+2. **No warm pool**: pure cold start (~60s) against 30-40 minute games.
+3. **The auxiliary gets the inference key** — served in job.json over TLS
+   (bearer-gated), NOT embedded in user_data, so it never appears in droplet
+   metadata. Better custody than the flagship's own env, in fact.
+4. **No bucket keys on workers**: the aux fetches the app as a tarball from the
+   flagship itself (`GET /api/aux/<job>/app.tar.gz`, per-job bearer in
+   `X-Aux-Token` — `Authorization` stays free for the fronting proxy's basic auth).
+5. **Live watch is transparent**: aux `live` callbacks append to the same
+   live.jsonl the local executor writes; `/api/live/<job>` cannot tell the
+   difference. Games file into the library per-game via the `game` callback.
+6. Reaper: every 5 min, any `flotilla-aux`-tagged droplet not attached to a live
+   job is destroyed; per-job watchdog enforces `max_age_h`. Flagship restart
+   mid-aux-run orphans the job (in-memory bearer) — the reaper still collects the
+   droplet; rerun the job. Known v1 limitation.
 
-## Cost of doing nothing
-
-Acceptable until either (a) mid-run deploys hurt weekly, or (b) we want >2
-concurrent series. Both were true this week.
+Use: check "⚓ run on a fleet auxiliary" in Chart a Course, or add
+`"executor": "auxiliary"` to any run-config.
