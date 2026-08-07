@@ -33,6 +33,7 @@ SENSORS = {
     "self.hull_pct": "hull % (0-100)",
     "self.cargo": "cargo aboard", "self.hold_cap": "cargo capacity",
     "self.power": "your combat power",
+    "self.speed": "your speed stat",
     "self.docked": "1 inside your harbor circle else 0",
     "self.tick": "current game tick",
     "harbor.x": "your harbor x", "harbor.y": "your harbor y",
@@ -43,11 +44,13 @@ SENSORS = {
     "enemy.laden": "1 if it is carrying cargo",
     "enemy.power": "its combat power",
     "enemy.stronger": "1 if it outguns you",
+    "enemy.count": "how many enemy ships are in your sight right now",
     "ally.found": "1 if a fleet-mate is in sight",
     "ally.dist": "distance to the nearest fleet-mate",
     "node.found": "1 if your charts show a stocked island",
     "node.x": "nearest believed-stocked island x", "node.y": "…y",
     "node.dist": "distance to it", "node.stock": "believed stock there",
+    "node.kind": "0 = fish shoal (regenerates), 1 = wreck (finite)",
     "rival.found": "1 if orders.target_fleet names a living rival",
     "rival.x": "that rival's harbor x", "rival.y": "that rival's harbor y",
     "orders.rally_x": "rally x from your squadron's standing orders",
@@ -65,7 +68,7 @@ ACTIONS = {
     "hold": (0, "hold position"),
 }
 
-FUNCS = {"min": 2, "max": 2, "abs": 1, "dist": 4}
+FUNCS = {"min": 2, "max": 2, "abs": 1, "sign": 1, "dist": 4}
 
 MAX_LINES = 64
 BUDGET = 1500                  # expression-node evaluations per ship per tick
@@ -90,15 +93,18 @@ delivery physics as orders (harbor circle / signal). One program per squadron;
 every ship runs its own instance with its own mem. An empty string removes the
 program (ship reverts to its standing-orders role).
 
-Statements (one per line, run TOP-DOWN every tick; first true `when` acts):
+Statements (one per line, run TOP-DOWN every tick):
   mem <name> = <number>      persistent per-ship variable (initialized once)
   set <name> = <expr>        assignment, executes when reached
-  when <expr>: <action>      condition -> action; first hit ends the tick
-  default: <action>          fallback (put it last)
+  when <expr>: <body>        body = semicolon-separated `set`s with an OPTIONAL
+                             final action, e.g.  when c: set a = 1; helm.home()
+                             sets run and evaluation CONTINUES; the first ACTION
+                             that fires ends the tick
+  default: <body>            fallback (put it last)
   # comment
 
 Expressions: + - * / %  · == != < <= > >=  · and or not · ( ) ·
-  min(a,b) max(a,b) abs(a) dist(x1,y1,x2,y2)
+  min(a,b) max(a,b) abs(a) sign(a) dist(x1,y1,x2,y2)
 
 SENSORS (read-only):
 {s}
@@ -250,9 +256,37 @@ def _parse_action(p):
     p.take(")")
     if len(args) != nargs:
         raise ConnError(f"helm.{verb} takes {nargs} args", p.line)
-    if p.peek() is not None:
-        raise ConnError(f"unexpected {p.peek()!r} after action", p.line)
     return (verb, args)
+
+
+def _parse_body(body, ln, decls):
+    """A when/default body: semicolon-separated `set`s + at most one final action.
+    Returns (sets, action_or_None); sets = [(name, expr), ...]."""
+    sets, action = [], None
+    parts = [x.strip() for x in body.split(";") if x.strip()]
+    if not parts:
+        raise ConnError("empty body — give it set(s) and/or an action", ln)
+    for i, part in enumerate(parts):
+        if part.startswith("set "):
+            m = re.match(r"set\s+([A-Za-z_][A-Za-z_0-9]*)\s*=\s*(.+)", part)
+            if not m:
+                raise ConnError("set syntax: set <name> = <expr>", ln)
+            if m.group(1) not in decls:
+                raise ConnError(f"set of undeclared {m.group(1)} "
+                                f"(add: mem {m.group(1)} = 0)", ln)
+            p = _P(_tokens(m.group(2), ln), ln, decls)
+            e = p.expr()
+            if p.peek() is not None:
+                raise ConnError(f"unexpected {p.peek()!r}", ln)
+            sets.append((m.group(1), e))
+        else:
+            if i != len(parts) - 1:
+                raise ConnError("the action must come LAST in a body", ln)
+            pa = _P(_tokens(part, ln), ln, decls)
+            action = _parse_action(pa)
+            if pa.peek() is not None:
+                raise ConnError(f"unexpected {pa.peek()!r} after action", ln)
+    return sets, action
 
 
 def compile_program(text):
@@ -301,14 +335,13 @@ def compile_program(text):
                 if p.peek() is not None:
                     raise ConnError(f"unexpected {p.peek()!r} in condition", ln)
                 body = body.strip()
-            pa = _P(_tokens(body, ln), ln, decls)
-            action = _parse_action(pa)
-            stmts.append(("when", cond, action, ln))
+            sets, action = _parse_body(body, ln, decls)
+            stmts.append(("when", cond, sets, action, ln))
             continue
         raise ConnError(f"cannot parse {s[:30]!r} — statements are "
                         "mem/set/when/default", ln)
-    if not any(st[0] == "when" for st in stmts):
-        raise ConnError("program has no when/default statement — it can never act")
+    if not any(st[0] == "when" and st[3] is not None for st in stmts):
+        raise ConnError("program has no when/default with an ACTION — it can never act")
     return Program(decls, stmts, text)
 
 
@@ -356,6 +389,8 @@ class Program:
                     return max(a)
                 if node[1] == "abs":
                     return abs(a[0])
+                if node[1] == "sign":
+                    return float((a[0] > 0) - (a[0] < 0))
                 return float(max(abs(a[0] - a[2]), abs(a[1] - a[3])))  # dist = cheb
             a, b = ev(node[1]), ev(node[2])
             if k == "+":
@@ -383,8 +418,11 @@ class Program:
         for st in self.stmts:
             if st[0] == "set":
                 mem[st[1]] = ev(st[2])
-            else:
+            else:                          # ("when", cond, sets, action, line)
                 if ev(st[1]):
-                    verb, argnodes = st[2]
-                    return (verb, [ev(x) for x in argnodes], st[3])
+                    for name, e in st[2]:  # body sets run; evaluation continues…
+                        mem[name] = ev(e)
+                    if st[3] is not None:  # …unless an action fires
+                        verb, argnodes = st[3]
+                        return (verb, [ev(x) for x in argnodes], st[4])
         return None

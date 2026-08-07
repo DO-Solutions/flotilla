@@ -774,16 +774,18 @@ class Engine:
         sen = {"self.x": ship.x, "self.y": ship.y,
                "self.hull_pct": (ship.hull * 100) // ship.hull_max,
                "self.cargo": ship.cargo, "self.hold_cap": ship.hold_cap,
-               "self.power": ship.power(),
+               "self.power": ship.power(), "self.speed": ship.stats["speed"],
                "self.docked": 1.0 if hd <= self.hr else 0.0, "self.tick": self.t,
                "harbor.x": f.hx, "harbor.y": f.hy, "harbor.dist": hd}
-        en, ed = None, 10 ** 9
+        en, ed, ecount = None, 10 ** 9, 0
         al, ad = None, 10 ** 9
         for s2 in self.ships.values():
             d = cheb(ship.x, ship.y, s2.x, s2.y)
             if s2.fleet != ship.fleet:
-                if d <= ship.vision and d < ed:
-                    en, ed = s2, d
+                if d <= ship.vision:
+                    ecount += 1
+                    if d < ed:
+                        en, ed = s2, d
             elif s2.id != ship.id and d < ad:
                 al, ad = s2, d
         sen.update({"enemy.found": 1.0 if en else 0.0,
@@ -793,6 +795,7 @@ class Engine:
                     "enemy.power": en.power() if en else 0,
                     "enemy.stronger": 1.0 if en is not None
                     and en.power() > ship.power() else 0.0,
+                    "enemy.count": ecount,
                     "ally.found": 1.0 if al else 0.0,
                     "ally.dist": ad if al else 9999})
         nd, ndd, nst = None, 10 ** 9, 0
@@ -804,7 +807,8 @@ class Engine:
                     nd, ndd, nst = n, d, b
         sen.update({"node.found": 1.0 if nd else 0.0,
                     "node.x": nd.x if nd else 0, "node.y": nd.y if nd else 0,
-                    "node.dist": ndd if nd else 9999, "node.stock": nst})
+                    "node.dist": ndd if nd else 9999, "node.stock": nst,
+                    "node.kind": 1.0 if nd is not None and nd.kind == "wreck" else 0.0})
         od = ship.orders
         tf = od.get("target_fleet")
         rv = self.fleets.get(tf) if tf is not None else None

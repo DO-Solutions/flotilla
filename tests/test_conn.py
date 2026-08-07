@@ -106,6 +106,43 @@ except conn.ConnError:
     budget_ok = False
 ok(budget_ok, "reasonable program fits the tick budget")
 
+# ---- v1.1: conditional set, compound bodies, sign(), continue-semantics ----
+v11 = conn.compile_program("""
+mem alarm = 0
+when enemy.found and enemy.count >= 3: set alarm = 1
+when mem.alarm == 1: set alarm = mem.alarm; helm.home()
+when node.kind == 1: helm.goto(node.x, node.y)
+default: helm.hold()
+""")
+m = v11.init_mem()
+out = v11.run({"enemy.found": 1, "enemy.count": 3, "node.kind": 0}, m)
+ok(m["alarm"] == 1.0 and out[0] == "home",
+   "when-set runs AND evaluation continues to the acting rule")
+out = v11.run({"enemy.found": 0, "enemy.count": 0, "node.kind": 1,
+               "node.x": 5, "node.y": 6}, v11.init_mem())
+ok(out[0] == "goto" and out[1] == [5.0, 6.0], "node.kind sensor routes wreck logic")
+
+e = err_of("mem a = 0\nwhen 1 == 1: helm.home(); set a = 1")
+ok(e and "action must come LAST" in e, "action-then-set rejected with clear message")
+e = err_of("mem a = 0\nwhen 1 == 1: set a = 1\nwhen 0 == 1: set a = 2")
+ok(e and "can never act" in e, "all-set program (no action anywhere) rejected")
+
+sg = conn.compile_program(
+    "when 1 == 1: helm.goto(self.x + sign(self.x - enemy.x) * 4, self.y)\n"
+    "default: helm.hold()")
+out = sg.run({"self.x": 10, "self.y": 5, "enemy.x": 20}, {})
+ok(out[1] == [6.0, 5.0], "sign() computes kiting offsets")
+
+# GLM's game-1 failure shape now compiles
+glm = conn.compile_program("""
+mem retreating = 0
+when self.hull_pct < 40: set retreating = 1
+when mem.retreating == 1 and self.docked == 1: set retreating = 0
+when mem.retreating == 1: helm.home()
+default: helm.gather()
+""")
+ok(glm is not None, "the conditional-set pattern that cost GLM game 1 now compiles")
+
 # ---- sensor tables agree with the engine ----
 class Idle:
     name = "idle"
