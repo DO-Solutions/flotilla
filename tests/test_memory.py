@@ -129,6 +129,9 @@ ad.debrief("digest here")
 duser = ad.sent[0][1]["content"]
 ok("final scratchpad" in duser and "opening plan" in duser,
    "debrief receives scratchpad + plan")
+dsys = ad.sent[0][0]["content"]
+ok("GENERALIZE" in dsys and "DIFFERENT island names" in dsys,
+   "debrief demands generalized, name-free advice")
 
 print("FAILURES:", fails)
 sys.exit(1 if fails else 0)

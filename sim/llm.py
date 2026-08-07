@@ -91,7 +91,8 @@ your traders stop raids (workers won't flee threats your escorts cover).
 NAMES: you and your rivals are admirals with NAMES (state "admirals" map; your own
 is state you.name) and every island/resource node has a NAME (state nodes[].name).
 ALWAYS refer to admirals and islands by name — never "Fleet 2" or "node 7" — in your
-thoughts, parley messages, and post-game memos; spectators and rivals read them.
+thoughts and parley messages; spectators and rivals read them. (Post-game MEMOS are
+the one exception: generalize there — see the debrief instructions.)
 target_fleet and parley "to" accept an admiral's name directly.
 
 PARLEY (diplomacy): you may message rival admirals — add "parley": [{"to": <fleet id \
@@ -366,7 +367,13 @@ class LLMAdmiral:
             {"role": "system", "content": self.system + "\n\nThe game just ended. You "
              "are between games in a series against the same opponents on the same map. "
              "Study the record and write a STRATEGY MEMO to your future self for the "
-             "next game: what worked, what failed, what to do differently. Plain text. "
+             "next game: what worked, what failed, what to do differently. "
+             "GENERALIZE: your next game may have DIFFERENT opponents, DIFFERENT "
+             "island names, and a different map — advice pinned to specific names or "
+             "coordinates will be useless or misleading. Write patterns, not places: "
+             "'shuttle traders between the nearest rich shoal and port', 'the current "
+             "leader gets dogpiled', 'aggressive raider opponents punish unescorted "
+             "traders' — not 'raid Nihiru' or 'ally with KimiK3'. Plain text. "
              f"HARD LIMIT: {cap} characters — your memo is stored VERBATIM and cut at "
              f"exactly {cap} chars, so finish inside the limit. Terse beats truncated: "
              "a memo that ends mid-sentence loses its conclusions. "
