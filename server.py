@@ -277,6 +277,28 @@ class H(BaseHTTPRequestHandler):
             return self._send(200, {"ok": True, "version": VERSION, "queue": q,
                                     "runs_enabled": bool(os.environ.get("DO_INFERENCE_KEY"))
                                     or True})
+        if path == "/api/stats":
+            # self-reported host stats — no monitoring agent needed, stdlib only
+            stats = {"jobs_running": 0, "version": VERSION}
+            try:
+                with JOBS_LOCK:
+                    stats["jobs_running"] = sum(1 for j in JOBS
+                                                if j["state"] in ("queued", "running"))
+                with open("/proc/loadavg") as fh:
+                    stats["load_1m"] = float(fh.read().split()[0])
+                mem = {}
+                with open("/proc/meminfo") as fh:
+                    for ln in fh:
+                        k, v = ln.split(":", 1)
+                        mem[k] = int(v.split()[0])
+                stats["mem_total_mb"] = mem.get("MemTotal", 0) // 1024
+                stats["mem_available_mb"] = mem.get("MemAvailable", 0) // 1024
+                du = shutil.disk_usage(LIB)
+                stats["disk_free_gb"] = round(du.free / 1e9, 2)
+                stats["library_files"] = sum(len(fs) for _, _, fs in os.walk(LIB))
+            except Exception as e:
+                stats["error"] = str(e)[:100]
+            return self._send(200, stats)
         if path == "/api/models":
             return self._send(200, {"models": _models(), "scripted": SCRIPTED_BOTS})
         if path == "/api/prompts":

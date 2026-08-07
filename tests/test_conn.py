@@ -5,7 +5,7 @@ import os
 import sys
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "sim"))
-import helm                              # noqa: E402
+import conn                              # noqa: E402
 from core import Engine, WINDOW          # noqa: E402
 
 fails = 0
@@ -20,14 +20,14 @@ def ok(cond, msg):
 
 def err_of(text):
     try:
-        helm.compile_program(text)
+        conn.compile_program(text)
         return None
-    except helm.HelmError as e:
+    except conn.ConnError as e:
         return str(e)
 
 
 # ---- parser ----
-p = helm.compile_program("""
+p = conn.compile_program("""
 # forager
 mem trips = 0
 when self.hull_pct < orders.retreat: helm.home()
@@ -57,7 +57,7 @@ e = err_of("when self.x > 0: helm.goto(1)")
 ok(e and "takes 2 args" in e, "action arity checked")
 
 # ---- semantics ----
-prog = helm.compile_program("""
+prog = conn.compile_program("""
 mem state = 0
 set state = state_placeholder
 when mem.state == 1: helm.home()
@@ -71,7 +71,7 @@ m["state"] = 1
 out = prog.run({"self.cargo": 5}, m)
 ok(out[0] == "home", "earlier when wins when true")
 
-prog2 = helm.compile_program("""
+prog2 = conn.compile_program("""
 mem n = 0
 set n = mem.n + 1
 when mem.n >= 3: helm.home()
@@ -81,7 +81,7 @@ m2 = prog2.init_mem()
 r = [prog2.run({}, m2)[0] for _ in range(4)]
 ok(r == ["hold", "hold", "home", "home"], f"mem persists across ticks ({r})")
 
-prog3 = helm.compile_program(
+prog3 = conn.compile_program(
     "when dist(0, 0, self.x, self.y) > 5 and not (self.cargo == 0): "
     "helm.goto(min(self.x, 10), max(self.y, 2))\ndefault: helm.hold()")
 out = prog3.run({"self.x": 30, "self.y": 1, "self.cargo": 4}, {})
@@ -90,19 +90,19 @@ ok(out[0] == "goto" and out[1] == [10.0, 2.0],
 ok(prog3.run({"self.x": 3, "self.y": 1, "self.cargo": 4}, {})[0] == "hold",
    "condition false falls through to default")
 
-div = helm.compile_program("when 5 / self.cargo > 2: helm.home()\ndefault: helm.hold()")
+div = conn.compile_program("when 5 / self.cargo > 2: helm.home()\ndefault: helm.hold()")
 ok(div.run({"self.cargo": 0}, {})[0] == "hold", "division by zero yields 0, no crash")
 
 # budget: self-referential churn over many statements
 big = "mem a = 1\n" + "\n".join(
     f"set a = mem.a + {i} * (1 + 2 * 3) - abs(0 - 1)" for i in range(50)) \
     + "\ndefault: helm.hold()"
-bp = helm.compile_program(big)
+bp = conn.compile_program(big)
 try:
     for _ in range(10):
         bp.run({}, bp.init_mem())
     budget_ok = True                     # 50 sets fit the budget
-except helm.HelmError:
+except conn.ConnError:
     budget_ok = False
 ok(budget_ok, "reasonable program fits the tick budget")
 
@@ -117,10 +117,10 @@ class Idle:
 eng = Engine([("A", Idle()), ("B", Idle())], seed=5)
 ship = next(s for s in eng.ships.values() if s.fleet == 0)
 sen, _ = eng._program_sensors(ship)
-missing = set(helm.SENSORS) - set(sen)
-extra = set(sen) - set(helm.SENSORS)
+missing = set(conn.SENSORS) - set(sen)
+extra = set(sen) - set(conn.SENSORS)
 ok(not missing and not extra,
-   f"engine sensors == helm.SENSORS (missing {missing or '∅'}, extra {extra or '∅'})")
+   f"engine sensors == conn.SENSORS (missing {missing or '∅'}, extra {extra or '∅'})")
 
 # ---- engine integration ----
 class Programmer:

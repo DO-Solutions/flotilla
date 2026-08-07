@@ -50,19 +50,26 @@ def make_bot(spec, adm):
             return BOTS[model]
         a = {**adm, **{k: spec[k] for k in
                        ("temperature", "max_tokens", "timeout_s", "think",
-                        "history_chars", "memo_chars") if k in spec}}
+                        "history_chars", "memo_chars", "scratchpad",
+                        "scratchpad_chars", "warmup_timeout_s") if k in spec}}
         return LLMAdmiral(model, label=spec.get("label") or None,
                           temperature=a["temperature"], max_tokens=a["max_tokens"],
                           timeout=a["timeout_s"], think=a["think"],
                           history_chars=a["history_chars"], memo_chars=a["memo_chars"],
-                          prompt=str(spec.get("prompt", ""))[:a["memo_chars"]])
+                          prompt=str(spec.get("prompt", ""))[:a["memo_chars"]],
+                          scratchpad=a["scratchpad"],
+                          scratchpad_chars=a["scratchpad_chars"],
+                          warmup_timeout_s=a["warmup_timeout_s"])
     if spec.startswith("llm:"):
         parts = spec.split(":", 2)
         return LLMAdmiral(parts[1], label=parts[2] if len(parts) > 2 else None,
                           temperature=adm["temperature"], max_tokens=adm["max_tokens"],
                           timeout=adm["timeout_s"], think=adm["think"],
                           history_chars=adm["history_chars"],
-                          memo_chars=adm["memo_chars"])
+                          memo_chars=adm["memo_chars"],
+                          scratchpad=adm["scratchpad"],
+                          scratchpad_chars=adm["scratchpad_chars"],
+                          warmup_timeout_s=adm["warmup_timeout_s"])
     return BOTS[spec]
 
 
@@ -95,6 +102,8 @@ def play_game(named_bots, seed, scenario, outpath, memos_after=None):
     for _, b in named_bots:
         if isinstance(b, LLMAdmiral):
             b._last_thoughts = []
+            b.pad = ""                     # per-game working memory; memos carry over
+            b.plan_text = ""
     eng = Engine(named_bots, seed=seed, scenario=scenario)
     result = eng.run()
     replay = eng.replay(result)

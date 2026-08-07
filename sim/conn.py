@@ -1,5 +1,6 @@
-"""helm — the ship-programming language. Each ship is a machine with sensors and
-a helm; admirals write PROGRAMS (per squadron) that ride it. This is the real
+"""conn — the ship-programming language. Naval fact: the officer directing a
+ship's movements "has the conn"; the helm executes. Exactly so here — admirals
+write CONN PROGRAMS (per squadron) that have the conn and drive each ship's helm. This is the real
 coding challenge: not toggling preset behaviors, but writing the control loop.
 
 Design constraints (why not Python/Lua):
@@ -70,7 +71,7 @@ MAX_LINES = 64
 BUDGET = 1500                  # expression-node evaluations per ship per tick
 
 
-class HelmError(Exception):
+class ConnError(Exception):
     def __init__(self, msg, line=None):
         super().__init__(f"line {line}: {msg}" if line else msg)
         self.line = line
@@ -83,8 +84,8 @@ def api_reference():
     a = "\n".join(f"  helm.{k}({', '.join('xy'[i] for i in range(n)) if n else ''})"
                   f"  — {d}" for k, (n, d) in ACTIONS.items())
     return f"""
-SHIP PROGRAMMING (the helm language) — each ship is a machine; you write the
-control program. Send "programs": {{"A": "<script>"}} alongside orders — same
+SHIP PROGRAMMING (the conn language) — each ship is a machine; your program HAS THE
+CONN and drives its helm. Send "programs": {{"A": "<script>"}} alongside orders — same
 delivery physics as orders (harbor circle / signal). One program per squadron;
 every ship runs its own instance with its own mem. An empty string removes the
 program (ship reverts to its standing-orders role).
@@ -134,7 +135,7 @@ def _tokens(s, line):
     while i < len(s):
         m = TOKEN.match(s, i)
         if not m:
-            raise HelmError(f"cannot read {s[i:i+10]!r}", line)
+            raise ConnError(f"cannot read {s[i:i+10]!r}", line)
         out.append(m.group(1))
         i = m.end()
     return out
@@ -150,7 +151,7 @@ class _P:
     def take(self, want=None):
         tok = self.peek()
         if tok is None or (want and tok != want):
-            raise HelmError(f"expected {want or 'more'}, got {tok!r}", self.line)
+            raise ConnError(f"expected {want or 'more'}, got {tok!r}", self.line)
         self.i += 1
         return tok
 
@@ -218,26 +219,26 @@ class _P:
                 args.append(self.expr())
             self.take(")")
             if len(args) != FUNCS[tok]:
-                raise HelmError(f"{tok}() takes {FUNCS[tok]} args", self.line)
+                raise ConnError(f"{tok}() takes {FUNCS[tok]} args", self.line)
             return ("fn", tok, args)
         if tok in SENSORS:
             return ("sensor", tok)
         if tok.startswith("mem."):
             name = tok[4:]
             if name not in self.decls:
-                raise HelmError(f"mem.{name} not declared (add: mem {name} = 0)",
+                raise ConnError(f"mem.{name} not declared (add: mem {name} = 0)",
                                 self.line)
             return ("mem", name)
-        raise HelmError(f"unknown name {tok!r} — see the sensor list", self.line)
+        raise ConnError(f"unknown name {tok!r} — see the sensor list", self.line)
 
 
 def _parse_action(p):
     tok = p.take()
     if tok != "helm" and not tok.startswith("helm."):
-        raise HelmError(f"action must be helm.<verb>(...), got {tok!r}", p.line)
+        raise ConnError(f"action must be helm.<verb>(...), got {tok!r}", p.line)
     verb = tok[5:] if tok.startswith("helm.") else p.take()
     if verb not in ACTIONS:
-        raise HelmError(f"unknown action helm.{verb} — one of {list(ACTIONS)}", p.line)
+        raise ConnError(f"unknown action helm.{verb} — one of {list(ACTIONS)}", p.line)
     nargs = ACTIONS[verb][0]
     p.take("(")
     args = []
@@ -248,19 +249,19 @@ def _parse_action(p):
             args.append(p.expr())
     p.take(")")
     if len(args) != nargs:
-        raise HelmError(f"helm.{verb} takes {nargs} args", p.line)
+        raise ConnError(f"helm.{verb} takes {nargs} args", p.line)
     if p.peek() is not None:
-        raise HelmError(f"unexpected {p.peek()!r} after action", p.line)
+        raise ConnError(f"unexpected {p.peek()!r} after action", p.line)
     return (verb, args)
 
 
 def compile_program(text):
-    """text -> Program. Raises HelmError (with line number) on any problem."""
+    """text -> Program. Raises ConnError (with line number) on any problem."""
     decls = {}
     stmts = []                             # ("set", name, expr) | ("when", expr, action)
     lines = text.splitlines()
     if len(lines) > MAX_LINES:
-        raise HelmError(f"program exceeds {MAX_LINES} lines")
+        raise ConnError(f"program exceeds {MAX_LINES} lines")
     for ln, raw in enumerate(lines, 1):
         s = raw.split("#", 1)[0].strip()
         if not s:
@@ -268,46 +269,46 @@ def compile_program(text):
         if s.startswith("mem "):
             m = re.fullmatch(r"mem\s+([A-Za-z_][A-Za-z_0-9]*)\s*=\s*(-?\d+\.?\d*)", s)
             if not m:
-                raise HelmError("mem syntax: mem <name> = <number>", ln)
+                raise ConnError("mem syntax: mem <name> = <number>", ln)
             decls[m.group(1)] = float(m.group(2))
             continue
         if s.startswith("set "):
             m = re.match(r"set\s+([A-Za-z_][A-Za-z_0-9]*)\s*=\s*(.+)", s)
             if not m:
-                raise HelmError("set syntax: set <name> = <expr>", ln)
+                raise ConnError("set syntax: set <name> = <expr>", ln)
             if m.group(1) not in decls:
-                raise HelmError(f"set of undeclared {m.group(1)} "
+                raise ConnError(f"set of undeclared {m.group(1)} "
                                 f"(add: mem {m.group(1)} = 0)", ln)
             p = _P(_tokens(m.group(2), ln), ln, decls)
             e = p.expr()
             if p.peek() is not None:
-                raise HelmError(f"unexpected {p.peek()!r}", ln)
+                raise ConnError(f"unexpected {p.peek()!r}", ln)
             stmts.append(("set", m.group(1), e, ln))
             continue
         if s.startswith("when ") or s.startswith("default"):
             if s.startswith("default"):
                 rest = s[len("default"):].lstrip()
                 if not rest.startswith(":"):
-                    raise HelmError("default syntax: default: <action>", ln)
+                    raise ConnError("default syntax: default: <action>", ln)
                 cond = ("num", 1.0)
                 body = rest[1:].strip()
             else:
                 if ":" not in s:
-                    raise HelmError("when syntax: when <expr>: <action>", ln)
+                    raise ConnError("when syntax: when <expr>: <action>", ln)
                 cexpr, body = s[5:].split(":", 1)
                 p = _P(_tokens(cexpr.strip(), ln), ln, decls)
                 cond = p.expr()
                 if p.peek() is not None:
-                    raise HelmError(f"unexpected {p.peek()!r} in condition", ln)
+                    raise ConnError(f"unexpected {p.peek()!r} in condition", ln)
                 body = body.strip()
             pa = _P(_tokens(body, ln), ln, decls)
             action = _parse_action(pa)
             stmts.append(("when", cond, action, ln))
             continue
-        raise HelmError(f"cannot parse {s[:30]!r} — statements are "
+        raise ConnError(f"cannot parse {s[:30]!r} — statements are "
                         "mem/set/when/default", ln)
     if not any(st[0] == "when" for st in stmts):
-        raise HelmError("program has no when/default statement — it can never act")
+        raise ConnError("program has no when/default statement — it can never act")
     return Program(decls, stmts, text)
 
 
@@ -324,13 +325,13 @@ class Program:
 
     def run(self, sensors, mem):
         """One tick: returns (verb, [arg values], line) or None (no when fired).
-        Raises HelmError on budget exhaustion."""
+        Raises ConnError on budget exhaustion."""
         budget = [BUDGET]
 
         def ev(node):
             budget[0] -= 1
             if budget[0] <= 0:
-                raise HelmError(f"instruction budget ({BUDGET}) exhausted")
+                raise ConnError(f"instruction budget ({BUDGET}) exhausted")
             k = node[0]
             if k == "num":
                 return node[1]

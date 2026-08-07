@@ -47,6 +47,10 @@
              text-transform:uppercase; letter-spacing:1px; }
   .tile label { display:flex; justify-content:space-between; align-items:center;
                 gap:8px; font-size:12px; padding:3px 0; }
+  .pname { width:150px; background:transparent; border:none; border-bottom:1px dashed var(--line);
+           border-radius:0; color:var(--accent); font-size:13px; text-transform:uppercase;
+           letter-spacing:1px; padding:0 0 2px; }
+  .pname:focus { border-bottom-color:var(--accent); outline:none; }
   .info { position:relative; display:inline-block; color:var(--dim); cursor:help;
           border:1px solid var(--line); border-radius:50%; width:15px; height:15px;
           line-height:13px; text-align:center; font-size:10px; margin-left:4px; }
@@ -538,14 +542,13 @@ function renderPlayers() {
     const tile = document.createElement("div");
     tile.className = "tile";
     tile.innerHTML =
-      `<h3>player ${i + 1}` +
+      `<h3><input class="sname pf pname" data-i="${i}" data-f="label" ` +
+      `value="${(p.label || "").replace(/"/g, "&quot;")}" ` +
+      `placeholder="Player ${i + 1}" title="click to name this player">` +
       (PLAYERS.length > 2 ? ` <a href="#" class="prm" data-i="${i}" ` +
         `style="float:right;color:#ff6b6b">✕</a>` : "") + `</h3>` +
       `<label><span>model</span><select class="pf" data-i="${i}" data-f="model" ` +
       `style="max-width:230px">${modelOptions(p.model)}</select></label>` +
-      `<label><span>label</span><input class="sname pf" style="width:130px" ` +
-      `data-i="${i}" data-f="label" value="${(p.label || "").replace(/"/g, "&quot;")}" ` +
-      `placeholder="display name"></label>` +
       (scripted ? `<div class="dim">scripted bot — no LLM settings</div>` :
         `<div style="display:flex;gap:8px;flex-wrap:wrap">` +
         OVR.map(([f, lab]) =>

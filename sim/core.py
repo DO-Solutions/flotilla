@@ -8,7 +8,7 @@ import json
 import random
 from concurrent.futures import ThreadPoolExecutor
 
-import helm
+import conn
 from config_schema import resolve as _resolve_cfg
 
 # --- tunables (balance knobs live here; the harness sweeps matches against them) ---
@@ -64,7 +64,8 @@ def sign(v):
 class Ship:
     __slots__ = ("id", "fleet", "squad", "x", "y", "stats", "hull", "hull_max",
                  "cargo", "move_acc", "volley_cd", "attackers", "wp_i", "preset", "orders",
-                 "intent", "node_id", "haul_home", "recall", "program", "pmem")
+                 "intent", "node_id", "haul_home", "recall", "program", "pmem",
+                 "trip_start", "trip_gathered", "trip_hits", "trip_far")
 
     def __init__(self, sid, fleet, squad, x, y, preset):
         self.id = sid
@@ -81,7 +82,11 @@ class Ship:
         self.attackers = set()
         self.wp_i = 0
         self.recall = False                 # return-to-port flag hoisted for this ship
-        self.program = None                 # compiled helm program (rides the ship)
+        self.trip_start = None              # None = in port; else departure tick
+        self.trip_gathered = 0
+        self.trip_hits = 0
+        self.trip_far = 0
+        self.program = None                 # compiled conn program (has the conn)
         self.pmem = {}                      # the program's per-ship memory
         self.orders = dict(DEFAULT_ORDER)   # per-ship copy; refreshed in port / by signal
         self.intent = ""                    # human/agent-readable "what am I doing"
@@ -123,7 +128,8 @@ class Fleet:
         self.contacts = {}                 # enemy ship id -> last-sighting record
         self.inbox = []                    # parley messages, delivered at next window
         self.parley_log = []               # full transcript, both directions
-        self.pending_programs = {}         # squad -> compiled helm Program
+        self.pending_programs = {}         # squad -> compiled conn Program
+        self.reports_pending = []          # voyage reports awaiting the next window
         self.territory = 0                 # territory-mode control points
         self.recent_hits = 0               # hits taken since last window (bot signal)
 
@@ -221,11 +227,13 @@ class Engine:
             + ("" if c["parley"] else
                "; PARLEY IS DISABLED this match — no admiral-to-admiral messaging, "
                "any parley you send is discarded")
-            + (f"; SHIP PROGRAMS enabled (helm language, max "
+            + ("; returning ships file voyage reports — read state.reports each window"
+               if c["voyage_reports"] else "")
+            + (f"; CONN PROGRAMS enabled (the conn language, max "
                f"{c['program_chars']} chars/squadron — full API reference in your "
                "system prompt); a programmed ship ignores its role and runs your code"
                if c["programs"] else
-               "; ship programs are DISABLED this match — standing-order roles only")
+               "; conn programs are DISABLED this match — standing-order roles only")
             + ".")
         self.scenario = dict(win=c["win"], description=c["description"],
                              rules=c["rules"], regions=c["regions"],
@@ -409,6 +417,7 @@ class Engine:
         nodes = [dict(id=n.id, name=n.name, x=n.x, y=n.y, kind=n.kind,
                       believed=self.believed(fleet, n)) for n in self.nodes.values()]
         messages, fleet.inbox = fleet.inbox, []
+        reports, fleet.reports_pending = fleet.reports_pending[:12], []
         region_view = [dict(id=r["id"], name=r["name"], x=r["x"], y=r["y"],
                             owner=(self.fleets[self.region_owner[r["id"]]].name
                                    if self.region_owner[r["id"]] is not None else None))
@@ -425,7 +434,7 @@ class Engine:
                 orders={k: dict(v) for k, v in fleet.pending.items()},
                 programs={sq: p.text
                           for sq, p in fleet.pending_programs.items()}),
-            enemies=enemies, nodes=nodes,
+            enemies=enemies, nodes=nodes, reports=reports,
             parley_log=fleet.parley_log[-200:],
             admirals={f.id: f.name for f in self.fleets.values()},
             scores={f.id: f.score() for f in self.fleets.values()},
@@ -530,8 +539,8 @@ class Engine:
                              reason=f"exceeds {self.cfg['program_chars']} chars")
                     continue
                 try:
-                    prog = helm.compile_program(text)
-                except helm.HelmError as e:
+                    prog = conn.compile_program(text)
+                except conn.ConnError as e:
                     self._ev("program_rejected", fleet=fleet.id, squad=sq,
                              reason=str(e)[:200])
                     continue
@@ -621,6 +630,8 @@ class Engine:
                 self._ev("signal", fleet=fleet.id, flag=hoisted)
         rec = dict(t=self.t, fleet=fleet.id,
                    thoughts=str(actions.get("thoughts", ""))[:400])
+        if actions.get("scratchpad") is not None:    # replay review sees pad rewrites
+            rec["pad"] = str(actions["scratchpad"])[:2000]
         if isinstance(actions.get("_usage"), dict):
             rec["u"] = actions["_usage"]
         self.decisions.append(rec)
@@ -680,7 +691,7 @@ class Engine:
 
     def _program_sensors(self, ship):
         """The ship's sensor readout — everything a helm program can read. Keys
-        must exactly match helm.SENSORS (single source of truth over there)."""
+        must exactly match conn.SENSORS (single source of truth over there)."""
         f = self.fleets[ship.fleet]
         hd = cheb(ship.x, ship.y, f.hx, f.hy)
         sen = {"self.x": ship.x, "self.y": ship.y,
@@ -735,7 +746,7 @@ class Engine:
         sen, en = self._program_sensors(ship)
         try:
             out = ship.program.run(sen, ship.pmem)
-        except helm.HelmError as e:
+        except conn.ConnError as e:
             self._intent(ship, f"program fault: {e} — standing orders take over")
             return NotImplemented
         f = self.fleets[ship.fleet]
@@ -777,7 +788,7 @@ class Engine:
         if ship.recall:                     # RETURN flag: home for orders, no detours
             self._intent(ship, "recalled by signal: making for port to collect orders")
             return (f.hx, f.hy)
-        if ship.program is not None:        # a helm program rides this ship
+        if ship.program is not None:        # a conn program has this ship
             r = self._run_program(ship)
             if r is not NotImplemented:     # NotImplemented = runtime fault -> role
                 return r
@@ -886,6 +897,33 @@ class Engine:
         t = self.t
         # decision windows: all admirals see the same tick's state; LLM calls run
         # concurrently (lockstep), results apply in fleet-id order (deterministic)
+        if t == 0 and self.cfg["warmup"]:
+            # pre-game planning: admirals study the rules + opening view and write
+            # an opening plan (kept in their context; shown in the replay)
+            planners = [f for f in self.fleets.values()
+                        if f.alive and hasattr(f.bot, "plan")]
+
+            def _plan(f):
+                try:
+                    return f.bot.plan(self.summary_for(f))
+                except Exception as e:
+                    return dict(plan="", err=f"{type(e).__name__}: {e}"[:120],
+                                tin=0, tout=0, ms=0, cost=0.0)
+
+            if len(planners) > 1:
+                with ThreadPoolExecutor(max_workers=len(planners)) as ex:
+                    outs = list(ex.map(_plan, planners))
+            else:
+                outs = [_plan(f) for f in planners]
+            for f, o in zip(planners, outs):
+                head = ("(opening plan) " + o["plan"]) if o.get("plan") \
+                    else f"(warmup failed: {o.get('err')})"
+                self.decisions.append(dict(
+                    t=0, fleet=f.id, thoughts=head[:400], plan=o.get("plan", ""),
+                    u=dict(model=getattr(f.bot, "model_label", None),
+                           tin=o.get("tin", 0), tout=o.get("tout", 0),
+                           ms=o.get("ms", 0), cost=o.get("cost", 0.0),
+                           err=o.get("err"))))
         if t % self.cfg['window'] == 0:
             live = [f for f in self.fleets.values() if f.alive]
             for f in live:
@@ -927,6 +965,16 @@ class Engine:
             docked = cheb(s.x, s.y, f.hx, f.hy) <= self.hr
             if docked:
                 s.recall = False
+                if s.trip_start is not None:         # back from a voyage: file report
+                    if self.cfg["voyage_reports"]:
+                        line = (f"{s.preset} #{s.id} ({s.squad}) returned: "
+                                f"{(t - s.trip_start) / 10:.0f}s out, delivered "
+                                f"{s.cargo}, gathered {s.trip_gathered}, took "
+                                f"{s.trip_hits} hits, ranged {s.trip_far} cells")
+                        f.reports_pending.append(line)
+                        self._ev("report", fleet=f.id, ship=s.id, s=line)
+                    s.trip_start = None
+                    s.trip_gathered = s.trip_hits = s.trip_far = 0
                 if s.cargo:
                     f.cargo += s.cargo
                     f.bank += s.cargo
@@ -950,6 +998,10 @@ class Engine:
                     s.pmem = {}
                 if s.hull < s.hull_max and t % self.cfg['repair_period'] == 0:
                     s.hull = min(s.hull_max, s.hull + 2)
+            else:
+                if s.trip_start is None:             # casting off
+                    s.trip_start = t
+                s.trip_far = max(s.trip_far, cheb(s.x, s.y, f.hx, f.hy))
             tgt = self._ship_target(s)
             if tgt is not None and tgt != (s.x, s.y):
                 self._move(s, *tgt)
@@ -960,6 +1012,7 @@ class Engine:
                             and s.cargo < s.hold_cap and t % self.cfg['gather_period'] == 0:
                         n.remaining -= 1
                         s.cargo += 1
+                        s.trip_gathered += 1
                         break
         # combat
         for s in list(self.ships.values()):
@@ -982,6 +1035,7 @@ class Engine:
             if enemy is not None:
                 dmg = max(1, s.stats["guns"] * 2 - enemy.stats["armor"])
                 enemy.hull -= dmg
+                enemy.trip_hits += 1
                 enemy.attackers.add(s.id)
                 self.fleets[enemy.fleet].recent_hits += 1
                 s.volley_cd = self.cfg['volley']
@@ -1007,6 +1061,7 @@ class Engine:
                     best, bd = s, d
             if best is not None:
                 best.hull -= max(1, 5 * 2 - best.stats["armor"])
+                best.trip_hits += 1
         # deaths
         for s in [s for s in self.ships.values() if s.hull <= 0]:
             if s.cargo > 0:

@@ -36,7 +36,7 @@ SCHEMA = {
         "volley":      dict(d=5,    t="int", lo=1,  hi=50,  doc="Ticks between shots for every gun."),
         "kill_score":  dict(d=8,    t="int", lo=0,  hi=100, doc="Score per enemy ship sunk (timed_score mode)."),
         "flag_kill_score": dict(d=150, t="int", lo=0, hi=1000, doc="Score for destroying a flagship (timed_score mode)."),
-        "leash":       dict(d=12,   t="int", lo=2,  hi=60,  doc="Max cells a ship will pursue an enemy from its station."),
+        "leash":       dict(d=12,   t="int", lo=2,  hi=60,  doc="ROLE-driven ships only: max cells a ship pursues an enemy from its station. Conn-programmed ships make their own pursuit decisions and ignore this."),
     },
     "pacing": {
         "window":      dict(d=100,  t="int", lo=20, hi=1000, doc="Ticks between admiral decision windows (100 = every 10s of game time)."),
@@ -45,7 +45,8 @@ SCHEMA = {
     },
     "scenario": {
         "parley":      dict(d=True, t="bool", doc="Admiral-to-admiral messaging (diplomacy). Off = no communication between fleets: pure play skill, no negotiation."),
-        "programs":    dict(d=True, t="bool", doc="Ship programming: admirals may write helm-language control programs per squadron (the real coding challenge — the API reference is injected into their prompts). Off = standing-order roles only."),
+        "voyage_reports": dict(d=True, t="bool", doc="Ships file a one-line voyage report when they return to the harbor circle (time out, cargo delivered, gathered, hits taken, range) — delivered in the admiral's next state.reports and recorded for post-game review."),
+        "programs":    dict(d=True, t="bool", doc="Ship programming: admirals may write conn-language control programs per squadron (the real coding challenge — the API reference is injected into their prompts). Off = standing-order roles only."),
         "program_chars": dict(d=1500, t="int", lo=200, hi=8000, doc="Max characters per squadron program; oversized programs are rejected at delivery."),
         "win":         dict(d="timed_score", t="enum", opts=["timed_score", "territory"],
                             doc="Victory condition. timed_score: cargo hauled + kills. territory: control points from holding named regions."),
@@ -58,7 +59,11 @@ SCHEMA = {
         "timeout_s":   dict(d=45,   t="int", lo=5,  hi=600, doc="Seconds an admiral gets to answer a decision window; slower = orders stand (missed window)."),
         "think":       dict(d=False, t="bool", doc="Allow reasoning models their hidden thinking (slower, possibly smarter). Off = fair fast default."),
         "history_chars": dict(d=8000, t="int", lo=0, hi=60000, doc="Character budget for the admiral's full-game memory in every prompt: its campaign journal (every past thought) + the complete parley transcript. Oldest entries drop first when over budget. 0 disables in-game history."),
-        "memo_chars":  dict(d=1200, t="int", lo=200, hi=8000, doc="Hard character cap for post-game strategy memos AND per-admiral custom prompts. Models are told this budget explicitly; text is cut at the limit."),
+        "memo_chars":  dict(d=1200, t="int", lo=200, hi=8000, doc="Hard character cap for post-game strategy memos, opening plans, AND per-admiral custom prompts. Models are told this budget explicitly; text is cut at the limit."),
+        "scratchpad":  dict(d=True, t="bool", doc="Admirals get a persistent scratchpad: a freeform note they can fully rewrite any window (response field \"scratchpad\"), always in their context and handed to the post-game review."),
+        "scratchpad_chars": dict(d=2000, t="int", lo=0, hi=10000, doc="Character cap for the scratchpad."),
+        "warmup":      dict(d=True, t="bool", doc="Pre-game planning phase: before window 0 each admiral studies the rules + its opening view and writes an OPENING PLAN (kept in context all game, shown in the replay)."),
+        "warmup_timeout_s": dict(d=120, t="int", lo=10, hi=600, doc="Seconds for the warmup planning call — deliberately longer than the in-game window."),
     },
     "series": {
         "games":       dict(d=3,    t="int", lo=1,  hi=20,  doc="Games in the series."),

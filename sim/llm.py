@@ -68,9 +68,12 @@ drop their cargo as wrecks. state.enemies is your CONTACT PLOT: entries carry ag
 seconds since your fleet last saw that ship (0 = in sight right now). Stale contacts \
 keep their last-known position/type/load — the ship may have moved or sunk unseen.
 - MEMORY: your prompt carries your CAMPAIGN JOURNAL (every thought you recorded this \
-game) and the FULL PARLEY TRANSCRIPT (every message sent and received). Deals, threats, \
-and promises are all on the record — check the transcript before you act on or against \
-an agreement.
+game), the FULL PARLEY TRANSCRIPT (every message sent and received), and your \
+SCRATCHPAD — a freeform note you fully rewrite by including a "scratchpad" field in \
+any reply (ship configs, deals, target lists, whatever you must not lose; it is also \
+handed to your post-game review). Deals, threats, and promises are all on the record — \
+check the transcript before you act on or against an agreement. Returning ships file \
+voyage reports in state.reports when enabled.
 - Economy truths: a trader pays for itself within a few trips on nearby grounds. \
 Raiding denies rivals AND drops their cargo where you can scoop it. Defenders near \
 your traders stop raids (workers won't flee threats your escorts cover).
@@ -96,6 +99,7 @@ except thoughts):
  "programs": {"A": "when self.cargo >= self.hold_cap: helm.home()\\n..."},
  "build": [{"preset": "trader", "squad": "A"}],
  "signal": false,
+ "scratchpad": "full replacement text for your scratchpad (optional)",
  "parley": [{"to": "all", "text": "..."}]}
 ("programs" only when scenario.rules says ship programs are enabled — see the \
 SHIP PROGRAMMING reference appended below when active.)"""
@@ -104,7 +108,8 @@ SHIP PROGRAMMING reference appended below when active.)"""
 class LLMAdmiral:
     def __init__(self, model_id, label=None, temperature=0.2, max_tokens=700,
                  timeout=45, think=False, history_chars=8000, memo_chars=1200,
-                 prompt=""):
+                 prompt="", scratchpad=True, scratchpad_chars=2000,
+                 warmup_timeout_s=120):
         self.model_id = model_id
         self.model_label = label or model_id
         self.name = self.model_label
@@ -121,6 +126,11 @@ class LLMAdmiral:
             if self.custom_prompt else "")
         self.api_key = os.environ.get("DO_INFERENCE_KEY", "")
         self.price = PRICES.get(model_id, (0.0, 0.0))
+        self.scratchpad_on = scratchpad
+        self.scratchpad_chars = scratchpad_chars
+        self.warmup_timeout = warmup_timeout_s
+        self.pad = ""                    # the scratchpad: model-curated working memory
+        self.plan_text = ""              # opening plan from the warmup phase
         self._last_thoughts = []         # [(window, thought)] — the campaign journal
         self.notes = ""                  # series mode: strategy memo from prior games
 
@@ -211,12 +221,12 @@ class LLMAdmiral:
 
     # ---------- the admiral ----------
     def _system_for(self, summary):
-        """System message, with the helm API reference appended when programs are
+        """System message, with the conn API reference appended when programs are
         on — stable per match, so the cached-prefix property holds."""
         want = bool((summary.get("scenario") or {}).get("programs"))
         if getattr(self, "_sys_progs", None) != want:
             self._sys_progs = want
-            from helm import api_reference
+            from conn import api_reference
             self._sys_full = self.system + (api_reference() if want else "")
         return self._sys_full
 
@@ -224,11 +234,17 @@ class LLMAdmiral:
         system = self._system_for(summary)
         summary = dict(summary)
         plog = summary.pop("parley_log", [])
-        # prompt order: stable → append-only → volatile (cache-friendly prefix)
+        # prompt order: stable → append-only → mutable → volatile (cache-friendly)
         memo = (f"Your strategy memo from earlier games in this series:\n{self.notes}\n\n"
                 if self.notes else "")
-        user = (memo
+        plan = (f"Your opening plan for this game:\n{self.plan_text}\n\n"
+                if self.plan_text else "")
+        pad = (f"=== YOUR SCRATCHPAD (rewrite via the \"scratchpad\" field, "
+               f"max {self.scratchpad_chars} chars) ===\n{self.pad}\n\n"
+               if self.scratchpad_on and self.pad else "")
+        user = (memo + plan
                 + self._history(plog)
+                + pad
                 + f"=== CURRENT STATE — window {summary['window']} ===\n"
                 + json.dumps(summary, separators=(",", ":"))
                 + "\nReply with your decision JSON only.")
@@ -259,10 +275,54 @@ class LLMAdmiral:
         th = str(actions.get("thoughts", ""))[:400]
         if th and not th.startswith("(missed"):
             self._last_thoughts.append((summary.get("window", 0), th))
+        if self.scratchpad_on and actions.get("scratchpad") is not None:
+            self.pad = str(actions["scratchpad"])[:self.scratchpad_chars]
         cost = (tin * self.price[0] + tout * self.price[1]) / 1e6
         actions["_usage"] = dict(model=self.model_label, tin=tin, tout=tout, ms=ms,
                                  cost=round(cost, 6), err=err)
         return actions
+
+    # ---------- warmup: pre-game planning ----------
+    def plan(self, summary):
+        """Before window 0: study the rules + the fog-limited opening view, write an
+        opening plan. Relaxed timeout — planning is where care pays."""
+        cap = self.memo_chars
+        summary = dict(summary)
+        summary.pop("parley_log", None)
+        msgs = [
+            {"role": "system", "content": self._system_for(summary)
+             + "\n\nWARMUP — the match has NOT started. Study the scenario rules and "
+             "your opening view, then write your OPENING PLAN: economy, scouting, "
+             "force posture, diplomacy stance, and (if conn programs are enabled) "
+             "which squadrons you intend to program and how. The plan stays in your "
+             f"context all game. Plain text, HARD LIMIT {cap} characters. "
+             "Reply with ONLY the plan text."},
+            {"role": "user", "content": "Opening view:\n"
+             + json.dumps(summary, separators=(",", ":"))
+             + ("\n\nYour strategy memo from earlier games:\n" + self.notes
+                if self.notes else "")},
+        ]
+        keep_t, keep_m = self.timeout, self.max_tokens
+        try:
+            self.timeout = self.warmup_timeout
+            self.max_tokens = max(600, min(4000, cap // 2))
+            try:
+                text, tin, tout, ms = self._chat(msgs)
+            except Exception:
+                text, tin, tout, ms = self._chat(msgs)   # one retry
+            text = text.strip()
+            if len(text) > cap:
+                text = text[:cap - 12] + " …[cut@limit]"
+            self.plan_text = text
+            cost = (tin * self.price[0] + tout * self.price[1]) / 1e6
+            return dict(plan=text, tin=tin, tout=tout, ms=ms,
+                        cost=round(cost, 6), err=None)
+        except Exception as e:
+            return dict(plan="", tin=0, tout=0, ms=0, cost=0.0,
+                        err=f"{type(e).__name__}: {e}")
+        finally:
+            self.timeout = keep_t
+            self.max_tokens = keep_m
 
     # ---------- series mode: between-game study ----------
     def debrief(self, digest):
@@ -281,6 +341,9 @@ class LLMAdmiral:
              "a memo that ends mid-sentence loses its conclusions. "
              "Reply with ONLY the memo text."},
             {"role": "user", "content": digest
+             + ("\n\nYour opening plan was:\n" + self.plan_text
+                if self.plan_text else "")
+             + ("\n\nYour final scratchpad:\n" + self.pad if self.pad else "")
              + ("\n\nYour previous memo:\n" + self.notes if self.notes else "")},
         ]
         keep = self.timeout

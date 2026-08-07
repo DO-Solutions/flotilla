@@ -17,8 +17,19 @@ import os
 import sys
 
 
+_CACHE = {}                       # path -> (mtime, size, row) — parse each file once
+
+
 def _row(path, rel, mtype):
     try:
+        st = os.stat(path)
+        key = (st.st_mtime, st.st_size)
+        hit = _CACHE.get(path)
+        if hit and hit[0] == key:
+            row = dict(hit[1])
+            row["type"] = mtype   # type can change (series rename); rest is content
+            row["file"] = rel
+            return row
         rp = json.load(open(path))
     except Exception as e:
         print(f"libindex: skip {path}: {e}", file=sys.stderr)
@@ -30,11 +41,13 @@ def _row(path, rel, mtype):
               for k, v in (res.get("scores") or {}).items()}
     cost = sum((d.get("u") or {}).get("cost", 0) for d in rp.get("decisions", []))
     when = datetime.datetime.utcfromtimestamp(os.path.getmtime(path)).isoformat()
-    return dict(when=when, type=mtype, seed=(rp.get("meta") or {}).get("seed"),
-                scores={names[k]: v for k, v in sorted(scores.items())},
-                winner=names.get(res.get("winner")),
-                ticks=res.get("ticks") or (rp.get("frames") or [{}])[-1].get("t", 0),
-                cost=round(cost, 3), file=rel)
+    row = dict(when=when, type=mtype, seed=(rp.get("meta") or {}).get("seed"),
+               scores={names[k]: v for k, v in sorted(scores.items())},
+               winner=names.get(res.get("winner")),
+               ticks=res.get("ticks") or (rp.get("frames") or [{}])[-1].get("t", 0),
+               cost=round(cost, 3), file=rel)
+    _CACHE[path] = (key, dict(row))
+    return row
 
 
 def build_index(lib):
