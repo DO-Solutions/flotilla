@@ -1216,17 +1216,17 @@ function renderPlayers() {
       (scripted ? `<div class="dim">scripted bot — no LLM settings</div>` :
         `<div style="display:flex;gap:8px;flex-wrap:wrap">` +
         OVR.map(([f, lab]) =>
-          `<label style="flex:0"><span class="dim">${lab}</span>` +
+          `<label style="flex:0"><span>${lab}</span>` +
           `<input class="sname pf" style="width:64px" data-i="${i}" data-f="${f}" ` +
           `value="${p[f] ?? ""}" placeholder="—"></label>`).join("") +
-        `<label style="flex:0"><span class="dim">think</span>` +
+        `<label style="flex:0"><span>think</span>` +
         `<select class="pf" data-i="${i}" data-f="think">` +
         `<option value="" ${p.think === undefined ? "selected" : ""}>inherit</option>` +
         `<option value="true" ${p.think === true ? "selected" : ""}>on</option>` +
         `<option value="false" ${p.think === false ? "selected" : ""}>off</option>` +
         `</select></label></div>` +
-        `<label style="display:block"><span class="dim">operator prompt ` +
-        `(optional, cap = memo_chars)</span></label>` +
+        `<label style="display:block"><span>operator prompt ` +
+        `<span class="dim">(optional, cap = memo_chars)</span></span></label>` +
         `<textarea class="pf" data-i="${i}" data-f="prompt" rows="5" maxlength="8000" ` +
         `style="width:100%;background:#0a1b33;color:var(--ink);min-height:76px;` +
         `resize:vertical;border:1px solid var(--line);border-radius:6px;` +
