@@ -63,6 +63,7 @@
 <div id="tmeta"></div>
 <div id="bracket" class="rounds"></div>
 <div id="standings"></div>
+<div id="tstats" style="display:none"></div>
 <script>
 "use strict";
 const $ = id => document.getElementById(id);
@@ -174,7 +175,14 @@ function render() {
     (TJ.partial ? ` · <span class="live">⏳ in progress` +
       (liveN ? ` — ${liveN} series live now` : "") + `</span>`
       : TJ.cancelled ? ` · <span class="warn">✖ ended early</span>`
-      : ` · finished`);
+      : ` · finished`) +
+    (!TJ.partial && (TJ.matchups || []).length
+      ? ` · <a class="btn btn-dl" href="#" id="statstab">${STATSOPEN
+          ? "🏆 back to the bracket"
+          : "📊 tournament stats (spoilers)"}</a>` : "");
+  $("bracket").style.display = STATSOPEN ? "none" : "";
+  $("standings").style.display = STATSOPEN ? "none" : "";
+  $("tstats").style.display = STATSOPEN ? "" : "none";
   $("sub").textContent = "";
   // bracket: matchups grouped by round (in-flight lanes join round ?)
   const rounds = {};
@@ -242,6 +250,110 @@ function render() {
         `<td>${sh(esc(s.score))}</td></tr>`).join("") +
       `</tbody></table></div>` : "";
 }
+
+// ---- tournament-level per-agent stats (completed tournaments) ----
+// Aggregates the schedule can't show: every finished replay is fetched once
+// and reduced to tournament-wide numbers per admiral. Deliberately NOT the
+// per-series story (the series page owns that).
+let STATSOPEN = false, STATS = null;
+const avg = (a) => a.length ? a.reduce((x, y) => x + y, 0) / a.length : null;
+const mmss = (t) => t == null ? "—"
+  : `${Math.floor(t / 600)}:${String(Math.floor((t % 600) / 10)).padStart(2, "0")}`;
+async function buildStats() {
+  const agg = {};
+  const A = (n) => agg[n] = agg[n] ||
+    { sw: 0, gw: 0, gp: 0, score: [], byGame: {}, fk: [], sunk: [],
+      lost: [], cost: [] };
+  const base = TNAME ? `tournaments/${encodeURIComponent(TNAME)}/` : "./";
+  const jobs = [];
+  for (const m of TJ.matchups || []) {
+    if (m.winner) A(m.winner).sw++;
+    for (const g of m.games || []) jobs.push([m, g]);
+  }
+  let done0 = 0;
+  for (const [m, g] of jobs) {
+    $("tstats").innerHTML = `<div class="card">📊 crunching game ` +
+      `${++done0} of ${jobs.length}…</div>`;
+    let rp;
+    try {
+      rp = await (await fetch(base + m.dir + "/" +
+        String(g.file).split("/").pop())).json();
+    } catch (e) { continue; }
+    const names = (rp.result || {}).names || {};
+    const firstKill = {}, lost = {}, sunk = {};
+    for (const e2 of rp.events || []) {
+      if (e2.k !== "sink") continue;
+      if (e2.by != null && !(e2.by in firstKill)) firstKill[e2.by] = e2.t;
+      lost[e2.fleet] = (lost[e2.fleet] || 0) + 1;
+      if (e2.by != null) sunk[e2.by] = (sunk[e2.by] || 0) + 1;
+    }
+    const cost = {};
+    for (const d2 of rp.decisions || []) {
+      const u = d2.u || {};
+      if (u.cost) cost[d2.fleet] = (cost[d2.fleet] || 0) + u.cost;
+    }
+    for (const [fid, nm] of Object.entries(names)) {
+      const a = A(nm);
+      a.gp++;
+      const sc = (g.scores || {})[nm];
+      if (sc != null) {
+        a.score.push(sc);
+        (a.byGame[g.game] = a.byGame[g.game] || []).push(sc);
+      }
+      if (g.winner === nm) a.gw++;
+      if (firstKill[fid] != null) a.fk.push(firstKill[fid]);
+      a.sunk.push(sunk[fid] || 0);
+      a.lost.push(lost[fid] || 0);
+      a.cost.push(cost[fid] || 0);
+    }
+  }
+  return agg;
+}
+function renderStats() {
+  const names = Object.keys(STATS)
+    .sort((a, b) => STATS[b].sw - STATS[a].sw || STATS[b].gw - STATS[a].gw);
+  const gnums = [...new Set(names.flatMap(n =>
+    Object.keys(STATS[n].byGame).map(Number)))].sort((a, b) => a - b);
+  let h = `<div class="card" style="max-width:none"><h3 style="color:var(--accent);` +
+    `font-size:14px;margin-bottom:6px">Per-admiral tournament stats</h3>` +
+    `<table><thead><tr><th>admiral</th><th>series won</th><th>games won</th>` +
+    `<th>avg score</th><th>avg first kill</th><th>avg ships sunk</th>` +
+    `<th>avg ships lost</th><th>avg $/game</th></tr></thead><tbody>` +
+    names.map(n => {
+      const a = STATS[n];
+      return `<tr><td style="color:${playerColor(names, n)}">${esc(n)}</td>` +
+        `<td>${a.sw}</td><td>${a.gw} / ${a.gp}</td>` +
+        `<td>${avg(a.score) != null ? Math.round(avg(a.score)) : "—"}</td>` +
+        `<td>${mmss(avg(a.fk))}${a.fk.length < a.gp
+          ? ` <span class="warn" title="games with no kill at all are left out">` +
+            `(${a.fk.length}g)</span>` : ""}</td>` +
+        `<td>${avg(a.sunk).toFixed(1)}</td><td>${avg(a.lost).toFixed(1)}</td>` +
+        `<td>$${avg(a.cost).toFixed(2)}</td></tr>`;
+    }).join("") + `</tbody></table></div>`;
+  h += `<div class="card" style="max-width:none"><h3 style="color:var(--accent);` +
+    `font-size:14px;margin-bottom:6px">Average score by game number</h3>` +
+    `<div style="color:var(--dim);font-size:12px;margin-bottom:6px">how each ` +
+    `admiral's play moves across a series — memo learning shows up here</div>` +
+    `<table><thead><tr><th>admiral</th>` +
+    gnums.map(g => `<th>game ${g}</th>`).join("") + `</tr></thead><tbody>` +
+    names.map(n => `<tr><td style="color:${playerColor(names, n)}">${esc(n)}</td>` +
+      gnums.map(g => {
+        const v = avg(STATS[n].byGame[g] || []);
+        return `<td>${v != null ? Math.round(v) : "—"}</td>`;
+      }).join("") + `</tr>`).join("") + `</tbody></table></div>`;
+  $("tstats").innerHTML = h;
+}
+document.addEventListener("click", async e => {
+  if (e.target && e.target.id === "statstab") {
+    e.preventDefault();
+    STATSOPEN = !STATSOPEN;
+    render();
+    if (STATSOPEN) {
+      if (!STATS) STATS = await buildStats();
+      renderStats();
+    }
+  }
+});
 
 $("reveal").addEventListener("click", e => {
   e.preventDefault();

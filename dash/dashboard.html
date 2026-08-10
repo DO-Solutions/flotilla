@@ -194,9 +194,9 @@
 <div class="card" id="helptab" style="display:none">
   <h2 style="color:var(--accent);font-size:16px;margin-bottom:8px">How Flotilla works</h2>
   <p class="dim" style="margin-bottom:10px">
-    LLM "admirals" command fleets of deterministic ships. The models never steer a
-    ship directly — they issue standing orders at fixed decision points, and the
-    physics of getting those orders to ships is part of the game.</p>
+    LLM "admirals" command fleets of deterministic ships. The models never steer
+    a ship directly. They issue standing orders at fixed decision points, and
+    the physics of getting those orders to ships is part of the game.</p>
   <div style="display:flex;flex-wrap:wrap;gap:6px;align-items:center;margin-bottom:6px"
        id="flowdiag">
     <div class="fstep">⏸ decision window<br><span>every ~10s game time<br>(lockstep, or catch-up)</span></div>
@@ -212,128 +212,106 @@
     <div class="fstep">⛵ 100 ticks run<br><span>deterministic: movement, foraging,<br>combat — same seed = same game</span></div>
     <div class="farrow">↻</div>
   </div>
-  <p class="dim" style="margin-bottom:14px">…and around the whole loop: after each game
-    of a series, every admiral studies its own record and writes a <b>strategy memo
-    to its future self</b>. By default (<i>memo_history</i>) every past game's memo
-    carries forward — game-numbered — into every plan, in-game prompt, and debrief,
-    so a grudge from game 1 still shapes game 4; <i>memo_history=false</i> restores
-    latest-memo-only. A slow or broken model never crashes a game — its fleet just
-    sails on under its last orders, and a real model-API outage auto-pauses the run
-    and probes it back to life rather than burning games.</p>
+  <p class="dim" style="margin-bottom:14px">…and around the whole loop: after
+    each game of a series, every admiral studies its own record and writes a
+    <b>strategy memo to its future self</b>. By default every past game's memo
+    carries forward into every plan, prompt, and debrief, so a grudge from game
+    1 still shapes game 4. A slow or broken model never crashes a game: its
+    fleet sails on under its last orders, and a real model-API outage
+    auto-pauses the run instead of burning games.</p>
 
-  <h2 style="color:var(--accent);font-size:16px;margin:14px 0 8px">Combat, in one minute</h2>
-  <div class="helpsec">Ships fight at <b>adjacent cells</b>; every ship fires
-    once per <i>volley</i> ticks for <b>guns×2 − armor</b> damage (min 1) — even a
-    1-gun trader is a combatant. The volley cooldown is per-ship, so ships don't
-    fire in lockstep. A ship shoots the nearest enemy <b>ship</b> in preference to
-    a flagship — only the <b>assault</b> role targets a flagship first (for
-    guns×2 − 3). A <b>flagship's</b> battery fires proactively (not just in reply)
-    every <i>volley</i> ticks on the nearest <i>flag_targets</i> (default 4) hostile
-    ships anywhere inside its command circle (radius <i>harbor_r</i>) for 10 − armor
-    each — the whole circle is a kill zone. Repairs are <b>yard works</b>, not free:
-    with a shipyard slot they cost treasury and hold a dock (only
-    <i>shipyard_slots</i>=0 gives the old free trickle). Hull = 20 + hull-stat×10.
-    A ship sinks at 0 hull —
-    <b>a laden ship's cargo becomes a wreck</b> where she went down, ready to
-    salvage. Kills score points (<i>kill_score</i> / <i>flag_kill_score</i>), and
-    <b>destroying a flagship eliminates its entire fleet</b>. Role-autopilot ships
-    obey their aggression ladder (0 flee · 1 return fire · 2 engage if stronger ·
-    3 engage anything); conn-programmed ships follow their code. Teammates never
-    damage each other. Every admiral receives a combat report each window.
-    Exact numbers per match: the ⓘ hovers in 🧭 Chart a Course, or the replay's
-    ⚙ Settings tab.</div>
+  <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(340px,1fr));gap:10px">
+  <div class="tile"><h3>⚔ Combat, in one minute</h3><div class="helpsec">
+    Ships fight at <b>adjacent cells</b>. Every ship fires once per
+    <i>volley</i> ticks for <b>guns×2 − armor</b> damage (minimum 1), so even a
+    1-gun trawler is a combatant. Ships shoot the nearest enemy ship first;
+    only the <b>assault</b> role targets a flagship. A flagship's own battery
+    fires every volley on the nearest <i>flag_targets</i> hostiles anywhere in
+    its command circle: the whole circle is a kill zone. Hull = 20 +
+    hull-stat×10; a ship sinks at 0, and <b>a laden ship's cargo becomes a
+    wreck</b> where she went down. Repairs are yard works that cost treasury
+    and hold a dock. <b>Destroying a flagship eliminates its entire fleet.</b>
+    Teammates never damage each other. Exact numbers per match: the ⓘ hovers
+    in 🧭 Chart a Course, or the replay's ⚙ Settings tab.</div></div>
 
-  <h2 style="color:var(--accent);font-size:16px;margin:14px 0 8px">Using this dashboard</h2>
-  <div class="helpsec">
-    <b>⛵ Games</b> (spoiler-free, the home tab) — one row per series or
-    standalone match. Double-click a name to rename it (saved on the server;
-    renames also name your downloads). The 🔍 box filters rows as you type,
-    column headers sort on click, and live runs show a red ✖ Cancel in place
-    of delete (confirmed first; finished games are kept).
-    <b>▶ Watch</b> opens the spoiler-free player in a new tab; <b>⬇</b> builds a
-    single self-contained HTML file you can send to anyone — it works offline,
-    no server needed. <b>🌐</b> (when publishing is configured) uploads that
-    same file to a public bucket and hands you a link anyone can open in a
-    browser — no login, no download; once a link exists the button becomes
-    <b>📋</b> (copy it to the clipboard) plus a yellow broken-link button that
-    retires the link — the URL stops working, and publishing again mints the
-    same address. <b>📦 Archive</b> hides a series from the
-    list without touching its data — tick <i>show archived</i> at the top right
-    to see archived series (dimmed) and <b>📤 Unarchive</b> them. <b>🗑</b>
-    deletes a series from the library after a confirmation — that one is
-    permanent.</div>
-  <div class="helpsec">
-    <b>Games inside a series</b> — click a series row to unfold its game list:
-    each finished game gets its own ▶ Watch and ⬇, and the game being played
-    right now gets a 🔴 Live button. Winners and scores stay hidden until you
-    click <i>reveal</i> — the whole view is spoiler-free by default.</div>
-  <div class="helpsec">
-    <b>🏆 Tournaments</b> — brackets and leaderboards. Results stay hidden until
-    you hit <i>Reveal</i>, so you can watch the games unspoiled first.</div>
-  <div class="helpsec">
-    <b>🧭 Chart a Course</b> — every knob that can affect a game, generated from
-    the same schema the engine runs on (the ⓘ hover text is byte-identical to what
-    an agent reads in <a href="config-schema.json">config-schema.json</a>). Pick a
-    model per player tile, optionally override its settings or give it an operator
-    prompt (saved prompts live on the server), and ⛵ Set sail — runs execute right
-    here and land in the library game by game as they finish.</div>
-  <div class="helpsec">
-    <b>The player page</b> — ▶ Play, scrub, speed. Right side: Fleets (live
-    scores + each admiral's latest thinking), Admirals (decisions + spend),
-    Parley (the diplomacy feed), Memos (what each model told its future self),
-    Stats (8 charts — score, ships, income rate, treasury, parley, tokens,
-    latency, cost), ⚙ Settings (this exact match's full configuration + how to
-    reproduce it). Click any ship or island to inspect it —
-    ships show <i>what they're trying to do and why</i>. The 👁 selector watches
-    through one admiral's fog of war: you see only what that fleet saw.</div>
-  <div class="helpsec">
-    <b>Watching a live series</b> — the ⛵ Games row shows a red 🔴 Live button
-    while a run is under way; it drops you on the game being played right now,
-    with a <b>game X of Y</b> header. ⏮/⏭ step between games; the ⏭ button turns
-    red "(Live)" when the next game is the one playing live. If a game finishes
-    while you watch, you stay on it and finish at your own pace — the next games
-    queue up (⏭) rather than yanking you forward.</div>
-  <div class="helpsec">
-    <b>🖥 Server</b> — the inference-provider ladder. Add a provider key (it is
-    verified and its models auto-discovered + mapped to the admiral ids on the
-    spot), reorder or disable rungs, and set the fallback + canary thresholds.
-    Keys live 0600 in the library, never in git and never returned to the page.
-    See <b>docs/PROVIDERS.md</b> in the repo for the ladder rules.</div>
+  <div class="tile"><h3>⛵ The Games tab</h3><div class="helpsec">
+    One row per series, standalone match, or tournament (spoiler-free, the
+    home tab). Click a row to unfold its games; tournaments unfold into their
+    series, then games. Double-click a name to rename it. The 🔍 box filters
+    as you type and column headers sort on click.
+    <b>▶ Watch</b> opens the player in a new tab. <b>⬇</b> builds one
+    self-contained HTML file that works offline. <b>🌐</b> publishes a public
+    no-login link; once it exists the button becomes <b>📋</b> copy plus a
+    yellow retire button. <b>📦</b> archives (hidden, kept on disk);
+    <b>🗑</b> deletes for good after a confirmation.</div></div>
 
-  <h2 style="color:var(--accent);font-size:16px;margin:14px 0 8px">FAQ</h2>
-  <div class="helpsec"><b>Is this real time?</b> Two pacing modes. By default it's
-    <b>lockstep</b>: the sim pauses at every decision window while the models think,
-    then simulates ~10 seconds of game time near-instantly. With <b>catch-up
-    pipelining</b> on (<i>pipeline_depth</i> &gt; 0) the sim never stops — a fast
-    admiral decides every window, a slow one misses windows and rejoins with a
-    catch-up briefing when its reply lands. Either way, replays play back smoothly
-    regardless of how long any model took.</div>
-  <div class="helpsec"><b>Do the models see everything?</b> No. Each admiral gets
-    only what its ships have seen (fog of war), a contact plot with last-known
-    enemy positions, and its own believed island stocks. Watch with the 👁 POV
-    selector to see exactly what an admiral saw.</div>
-  <div class="helpsec"><b>Can models talk to each other?</b> Yes — parley
-    (configurable, on by default). Messages are delivered next window and treated
-    as untrusted: models may lie, bluff, or betray. The game does not enforce
-    deals — but every message is on the record, and the full transcript stays in
-    each model's memory.</div>
-  <div class="helpsec"><b>Why did a fleet just sit there?</b> Its ships only learn
-    new orders inside the harbor circle or by signal flag. Command latency is a
-    game mechanic, and the signal-flag rules vary by match settings.</div>
-  <div class="helpsec"><b>Is a game reproducible?</b> A <i>recorded</i> game is:
-    the engine is deterministic (seeded, integer math), so given the same seed
-    and the same admiral decisions it replays byte-for-byte — the ⚙ Settings tab
-    shows the config + seed. That reproduces the match you're watching. Starting
-    a <i>new</i> run from the same seed is different: the live LLMs won't make
-    the identical calls, so the game plays out its own way. The determinism is in
-    the replay, not in the admirals.</div>
-  <div class="helpsec"><b>What does a game cost?</b> Each replay's Admirals panel
-    shows tokens and dollars per model — scripted-bot games are free; LLM games
-    range from cents (small open models) to a few dollars (frontier models).</div>
-  <div class="helpsec"><b>Can my agent drive this?</b> Yes — everything the GUI
-    does is documented JSON: <a href="config-schema.json">config-schema.json</a>,
-    <a href="CONFIG.md">CONFIG.md</a>, and the /api endpoints listed in the
-    server docstring. Agent-first is a design rule here.</div>
+  <div class="tile"><h3>🏆 Tournaments</h3><div class="helpsec">
+    Brackets and leaderboards, spoilers hidden until you hit Reveal. Open a
+    tournament for its full page: the schedule (lanes still at sea included),
+    every series with Watch buttons, standings, and, once it finishes, a
+    tournament-wide per-admiral stats view. Tournaments archive and delete as
+    one unit, sub-series included.</div></div>
+
+  <div class="tile"><h3>🧭 Chart a Course</h3><div class="helpsec">
+    Every knob that can affect a game, generated from the same schema the
+    engine runs on; the ⓘ text is byte-identical to
+    <a href="config-schema.json">config-schema.json</a>. Pick a model per
+    player tile, tweak or add an operator prompt, and ⛵ Set sail. Runs land
+    in the library game by game. Knobs that only matter for another setting
+    stay hidden until that setting is on.</div></div>
+
+  <div class="tile"><h3>▶ The player page</h3><div class="helpsec">
+    Play, scrub, speed. Right side: Fleets, Admirals (decisions + spend),
+    Parley, Memos, Stats (8 charts), and ⚙ Settings with the exact resolved
+    config + a reproduce download. Click any ship, island, flagship, or
+    territory to inspect it; ships show what they're trying to do and why,
+    plus their conn program history. Names mentioned in feeds light up on the
+    map. The 👁 selector watches through one admiral's fog of war.</div></div>
+
+  <div class="tile"><h3>🔴 Watching live</h3><div class="helpsec">
+    A running series shows a red Live button that drops you on the game in
+    play. ⏮/⏭ step between games; Next turns red "(Live)" when the next game
+    is the live one. If a game ends while you watch, you finish at your own
+    pace and the newer games queue behind ⏭. In Settings, ⚡ Performance Mode
+    renders at ~30 fps so a screen share or video call keeps its
+    headroom.</div></div>
+
+  <div class="tile"><h3>🖥 Server</h3><div class="helpsec">
+    The inference-provider ladder. Add a provider key and its models are
+    verified, discovered, and mapped on the spot; reorder or disable rungs;
+    set fallback + canary thresholds and the per-run cost ceiling. Keys live
+    0600 on the server, never in git, never returned to the page. Ladder
+    rules: <b>docs/PROVIDERS.md</b>.</div></div>
+
+  <div class="tile"><h3>❓ FAQ</h3><div class="helpsec">
+    <b>Is this real time?</b> Lockstep by default: the sim pauses each
+    decision window while the models think, then simulates ~10s of game time
+    near-instantly. With catch-up pipelining the sim never stops and slow
+    admirals miss windows. Replays always play back smoothly.<br>
+    <b>Do the models see everything?</b> No. Fog of war, a contact plot, and
+    believed island stocks. The 👁 POV selector shows exactly what an admiral
+    saw.<br>
+    <b>Can models talk?</b> Yes: parley. Messages are untrusted; models may
+    lie, bluff, or betray, and the full transcript stays in each model's
+    memory.<br>
+    <b>Why did a fleet just sit there?</b> Ships only learn new orders inside
+    the harbor circle or by signal flag. Command latency is a game
+    mechanic.</div></div>
+
+  <div class="tile"><h3>🔬 Reproducibility &amp; cost</h3><div class="helpsec">
+    <b>Recorded games replay byte-for-byte</b>: the engine is deterministic
+    (seeded, integer math), and the ⚙ Settings tab carries the config + seed.
+    A <i>new</i> run from the same seed plays out its own way, because live
+    LLMs won't make identical calls. The determinism is in the replay, not
+    the admirals.<br>
+    <b>Cost:</b> each replay's Admirals panel shows tokens and dollars per
+    model. Scripted-bot games are free; LLM games range from cents to tens of
+    dollars for thinking frontier models.<br>
+    <b>Can my agent drive this?</b> Yes. Everything the GUI does is documented
+    JSON: <a href="config-schema.json">config-schema.json</a>,
+    <a href="CONFIG.md">CONFIG.md</a>, and the /api endpoints in the server
+    docstring. Agent-first is a design rule here.</div></div>
+  </div>
 </div>
 <div class="card" id="configtab" style="display:none">
   <div class="dim" style="margin-bottom:10px">
@@ -579,6 +557,34 @@ function gameRows(s, liveJob, byFile) {
   return html + `</tbody></table>`;
 }
 
+// a tournament's expander: one row per matchup SERIES, each expandable again
+// into its games — the same nesting the series rows use, one level deeper
+function tournRows(subs, byFile) {
+  let html = `<table class="subgames"><thead><tr><th style="width:90px"></th>` +
+    `<th>series</th><th>games</th><th>status</th></tr></thead><tbody>`;
+  for (const s of subs) {
+    const open = OPENSERIES.has(s.name);
+    const label = (s.display_name || s.name).replace(/^🏆 [^:]*: /, "");
+    html += `<tr class="tsrow" data-series="${esc(s.name)}" ` +
+      `style="cursor:pointer" title="click to ${open ? "collapse" : "list the games"}">` +
+      `<td><a class="btn btn-watch" target="_blank" ` +
+      `href="player.html?series=${encodeURIComponent(s.name)}` +
+      `&title=${encodeURIComponent(label)}" ` +
+      `title="replay this series from game 1">▶ Watch</a></td>` +
+      `<td><span class="titlecell"><span class="chev${open ? " open" : ""}">▸</span>` +
+      `${esc(label)}</span></td>` +
+      `<td>${s.games.length}</td>` +
+      `<td>${s.partial ? '<span class="warn">⏳ live</span>'
+        : s.cancelled ? '<span class="warn">✖ ended early</span>' : "finished"}</td>` +
+      `</tr>`;
+    if (open) {
+      html += `<tr class="sexp"><td></td><td colspan="3">` +
+        `${gameRows(s, null, byFile)}</td></tr>`;
+    }
+  }
+  return html + `</tbody></table>`;
+}
+
 // ---- public links: create → copy + retire, keyed on identity ----
 // mirror of the server's _san(), so the dashboard can predict a row's
 // showcase identity (showcase/<ident>.html) and know whether a link exists
@@ -650,8 +656,9 @@ function renderSeriesTable() {
   const solo = (IDX.matches || [])
     .filter(m => !String(m.type || "").startsWith("series:"));
   // archived rows stay on disk but out of sight until the checkbox asks
-  const nArch = (IDX.series || []).filter(s => s.archived).length +
-                solo.filter(m => m.archived).length;
+  const nArch = (IDX.series || []).filter(s => s.archived && !s.tournament).length +
+                solo.filter(m => m.archived).length +
+                (IDX.tournaments || []).filter(t => t.archived).length;
   const lbl = $("showarchlbl");
   if (lbl) {
     lbl.style.display = nArch ? "" : "none";
@@ -661,13 +668,30 @@ function renderSeriesTable() {
     if (!nArch && $("showarch")) $("showarch").checked = false;
   }
   const showArch = nArch && $("showarch") && $("showarch").checked;
-  // one unified list: series (expandable) + standalone matches
+  // one unified list: series (expandable) + standalone matches + TOURNAMENTS
+  // as single nested items (tournament → its series → their games)
+  const tSubs = {};                     // tournament name -> matchup series
+  for (const s of IDX.series || []) {
+    if (s.tournament) (tSubs[s.tournament] = tSubs[s.tournament] || []).push(s);
+  }
   const items = (IDX.series || [])
-    .filter(s => showArch || !s.archived)
+    .filter(s => !s.tournament && (showArch || !s.archived))
     .map(s => ({ kind: "s", ts: s.started || 0, s,
                  name: displayName(s).toLowerCase(),
                  games: s.games.length, players: seriesPlayersRaw(s),
                  latest: seriesLatest(s) || "" }));
+  for (const t of IDX.tournaments || []) {
+    if (!showArch && t.archived) continue;
+    const subs = (tSubs[t.name] || []).sort((a, b) => a.name < b.name ? -1 : 1);
+    const players = [...new Set(subs.flatMap(s =>
+      seriesPlayersRaw(s).split(" · ").filter(Boolean)))].join(" · ");
+    items.push({ kind: "t", t, subs,
+                 ts: Math.max(0, ...subs.map(s => s.started || 0)),
+                 name: ("🏆 " + t.name).toLowerCase(),
+                 games: subs.reduce((a, s) => a + s.games.length, 0),
+                 players,
+                 latest: subs.map(s => seriesLatest(s)).sort().at(-1) || "" });
+  }
   for (const m of solo) {
     if (!showArch && m.archived) continue;
     items.push({ kind: "m", ts: Date.parse((m.when || "") + "Z") / 1000 || 0,
@@ -723,6 +747,45 @@ function renderSeriesTable() {
         `</div></td>`;
       if (m.archived) tr.style.opacity = ".55";
       tb.appendChild(tr);
+      continue;
+    }
+    if (it.kind === "t") {
+      const t = it.t, open = OPENSERIES.has("t:" + t.name);
+      tr.className = "srow";
+      tr.dataset.series = "t:" + t.name;
+      tr.title = "click to " + (open ? "collapse" : "list the series");
+      tr.style.cursor = "pointer";
+      tr.innerHTML =
+        `<td><a class="btn btn-watch" target="_blank" ` +
+        `href="tournament.html?t=${encodeURIComponent(t.name)}" ` +
+        `title="the tournament page: bracket, live series, standings">▶ Watch</a></td>` +
+        `<td><span class="titlecell"><span class="chev${open ? " open" : ""}">▸</span>` +
+        `<span class="nmtext">🏆 ${esc(t.name)}</span></span></td>` +
+        `<td>${it.games}${t.cancelled ? ' <span class="warn">✖ ended early</span>'
+          : t.partial ? ' <span class="warn">⏳ live</span>' : ""}</td>` +
+        `<td class="dim">${esc(it.players)}</td>` +
+        `<td class="dim"></td>` +
+        `<td class="dim">${esc(it.latest)}</td>` +
+        `<td><div class="rowbtns">` +
+        pubBtns({ tournament: t.name }, `data-tournament="${esc(t.name)}"`) +
+        (SERVER ? `<a class="btn btn-dl tarch" href="#" data-t="${esc(t.name)}" ` +
+          `data-arch="${t.archived ? 0 : 1}" title="${t.archived
+            ? "unarchive the tournament and all its series"
+            : "archive the tournament and all its series"}">` +
+          `${t.archived ? ICO_UNARCH : ICO_ARCH}</a>` : "") +
+        (SERVER && !(t.partial && !t.cancelled)
+          ? `<a class="btn btn-dl tdel" href="#" style="color:#ff5d5d" ` +
+            `data-t="${esc(t.name)}" title="delete the tournament and all its ` +
+            `series/games (asks first)">🗑</a>` : "") +
+        `</div></td>`;
+      if (t.archived) tr.style.opacity = ".55";
+      tb.appendChild(tr);
+      if (open) {
+        const xr = document.createElement("tr");
+        xr.className = "sexp";
+        xr.innerHTML = `<td></td><td colspan="6">${tournRows(it.subs, byFile)}</td>`;
+        tb.appendChild(xr);
+      }
       continue;
     }
     const s = it.s;
@@ -784,6 +847,14 @@ function renderSeriesTable() {
 document.addEventListener("click", async e => {
   const t = e.target.closest("a, button");
   if (!t) {
+    // a nested tournament-series row toggles ITS games list
+    const trow = e.target.closest("tr.tsrow");
+    if (trow) {
+      const n2 = trow.dataset.series;
+      OPENSERIES.has(n2) ? OPENSERIES.delete(n2) : OPENSERIES.add(n2);
+      renderSeriesTable();
+      return;
+    }
     // a click on the series row itself (not its buttons/rename box) expands
     // the per-game list in place
     // names are double-click-to-rename targets, not expand toggles
