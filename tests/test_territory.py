@@ -173,7 +173,32 @@ def main():
     e7.tick()
     assert rid7 not in e7._contest, \
         "elimination must reap the dead fleet's contests at once"
+    # --- conn territory sensors: programs can hold a point until it's ours ---
+    e8 = Engine([("A", Idle()), ("B", Idle())], seed=13, max_ticks=1,
+                scenario=sc2)
+    s8 = next(iter(e8.ships.values()))
+    rid8 = e8._cellregion[s8.x][s8.y]
+    sen = e8._program_sensors(s8)[0]
+    assert sen["terr.owner"] == -1 and sen["terr.mine"] == 0.0 \
+        and sen["terr.capture"] == 0, f"unclaimed territory reads clean ({sen})"
+    for _ in range(25):
+        e8._capture_tick()
+    sen = e8._program_sensors(s8)[0]
+    assert sen["terr.capture"] == 50, \
+        f"mid-capture progress visible to the keel ({sen['terr.capture']})"
+    e8.region_owner[rid8] = s8.fleet
+    sen = e8._program_sensors(s8)[0]
+    assert sen["terr.owner"] == s8.fleet and sen["terr.mine"] == 1.0, \
+        "a held territory reads as mine"
+    e9 = Engine([("A", Idle()), ("B", Idle())], seed=13, max_ticks=1,
+                scenario={})               # not a territory game
+    sen9 = e9._program_sensors(next(iter(e9.ships.values())))[0]
+    assert sen9["terr.owner"] == -2, "non-territory games read -2"
+    import conn as _conn
+    for k in ("terr.owner", "terr.mine", "terr.capture"):
+        assert k in _conn.SENSORS, f"{k} missing from conn.SENSORS"
     print("PASS territory capture timer + 4-way symmetry + territory_size")
+    print("PASS conn terr.* sensors")
     print("PASS test_territory")
 
 

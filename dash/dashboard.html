@@ -454,6 +454,30 @@ const $ = id => document.getElementById(id);
 let IDX = null;
 const TOKEN = "/*" + "EMBED_REPLAY" + "*/null";
 
+// ⓘ popovers: pin to FIXED viewport coordinates on hover so a tooltip in the
+// rightmost column (or any clipping container) always shows in full
+document.addEventListener("mouseover", e => {
+  const info = e.target.closest && e.target.closest(".info");
+  if (!info) return;
+  const pop = info.querySelector(".pop");
+  if (!pop) return;
+  const r = info.getBoundingClientRect();
+  const w = Math.min(280, window.innerWidth - 24);
+  pop.style.position = "fixed";
+  pop.style.width = w + "px";
+  let left = r.right + 6;
+  if (left + w > window.innerWidth - 8) left = r.left - w - 6;
+  if (left < 8) left = 8;
+  pop.style.left = left + "px";
+  pop.style.top = Math.max(8, r.top - 4) + "px";
+  requestAnimationFrame(() => {
+    const pr = pop.getBoundingClientRect();
+    if (pr.bottom > window.innerHeight - 8) {
+      pop.style.top = Math.max(8, window.innerHeight - 8 - pr.height) + "px";
+    }
+  });
+});
+
 function customNames() {
   try { return JSON.parse(localStorage.getItem("flotilla-series-names") || "{}"); }
   catch { return {}; }

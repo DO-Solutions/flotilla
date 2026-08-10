@@ -2400,6 +2400,10 @@ function draw(fr, prev, alpha) {
     }
   }
 
+  // Performance Mode skips wakes wholesale: the pack-width pass is O(ships²)
+  // and the trails stroke hundreds of segments per frame — the single most
+  // expensive purely-cosmetic layer on the map.
+  if (!S.eco) {
   // convoy heft: same-fleet ships sailing close together lay a WIDER wake
   const packWidth = {};
   for (const a of fr.s) {
@@ -2459,6 +2463,7 @@ function draw(fr, prev, alpha) {
     }
     ctx.lineWidth = 1;
   }
+  }                                      // end !S.eco (wake layer)
 
   for (const e of (S.sinks || [])) {                 // sink ripples
     const age = fr.t - e.t;
@@ -3008,6 +3013,29 @@ function linkify(escaped, ctxFleet) {
     return `<span class="entlink" data-ent="${escHtml(JSON.stringify(tgt))}">${m}</span>`;
   });
 }
+// ⓘ popovers: pin to FIXED viewport coordinates on hover — absolute pops were
+// born half off-frame inside the side panel and clipped by its overflow edge
+document.addEventListener("mouseover", e => {
+  const info = e.target.closest && e.target.closest(".info");
+  if (!info) return;
+  const pop = info.querySelector(".pop");
+  if (!pop) return;
+  const r = info.getBoundingClientRect();
+  const w = Math.min(280, window.innerWidth - 24);
+  pop.style.position = "fixed";
+  pop.style.width = w + "px";
+  let left = r.right + 6;
+  if (left + w > window.innerWidth - 8) left = r.left - w - 6;
+  if (left < 8) left = 8;
+  pop.style.left = left + "px";
+  pop.style.top = Math.max(8, r.top - 4) + "px";
+  requestAnimationFrame(() => {         // clamp the bottom once it has a height
+    const pr = pop.getBoundingClientRect();
+    if (pr.bottom > window.innerHeight - 8) {
+      pop.style.top = Math.max(8, window.innerHeight - 8 - pr.height) + "px";
+    }
+  });
+});
 document.addEventListener("mouseover", e => {
   const el = e.target.closest && e.target.closest(".entlink");
   if (!el) return;

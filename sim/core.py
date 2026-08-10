@@ -238,7 +238,12 @@ class Engine:
                     + "Score = +1 "
                     f"per held territory per {c['territory_tick'] / 10:g}s. Cargo funds "
                     "ships but does NOT score; kills do NOT score. Highest territory "
-                    "score at the bell wins; losing your flagship still eliminates you.")
+                    "score at the bell wins; losing your flagship still eliminates you. "
+                    "GEOGRAPHY: every cell belongs to its NEAREST territory seat "
+                    "(Chebyshev distance, ties to the lower id) — state.regions "
+                    "lists the seats, so you can work out which territory any "
+                    "point is in. Ship programs can read terr.owner / terr.mine / "
+                    "terr.capture for the territory under their keel.")
             else:
                 c["description"] = (
                     f"SCORE match (timed): score = cargo hauled to port + {c['kill_score']}/enemy "
@@ -1607,6 +1612,22 @@ class Engine:
                "self.stuck": 0 if hd <= self.hr else self.t - ship.moved_t,
                "self.idle": 0 if hd <= self.hr else self.t - ship.gained_t,
                "harbor.x": f.hx, "harbor.y": f.hy, "harbor.dist": hd}
+        # territory awareness: the ground truth under the keel, so programs
+        # can hold a point "until the territory is ours" without waiting a
+        # whole decision window for the admiral to notice
+        if self.regions:
+            rid = self._cellregion[ship.x][ship.y]
+            own = self.region_owner.get(rid)
+            c2 = self._contest.get(rid)
+            cap = max(1, self.cfg.get("territory_capture_ticks", 1))
+            sen["terr.owner"] = -1 if own is None else own
+            sen["terr.mine"] = 1.0 if (own is not None and
+                                       not self._hostile(own, ship.fleet)) else 0.0
+            sen["terr.capture"] = min(99, c2[1] * 100 // cap) if c2 else 0
+        else:
+            sen["terr.owner"] = -2
+            sen["terr.mine"] = 0.0
+            sen["terr.capture"] = 0
         if self._rank_tick != self.t:      # per-tick squadron rosters (cached)
             self._rank_tick = self.t
             self._ranks = {}
