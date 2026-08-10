@@ -30,6 +30,7 @@ The SENSORS/ACTIONS tables below are the single source of truth: the interpreter
 the API reference injected into admiral prompts, and the docs all derive from them.
 """
 import difflib
+import math
 import re
 
 SENSORS = {
@@ -68,8 +69,8 @@ SENSORS = {
     "rival.flag_x": "nearest hostile FLAGSHIP x (harbors are on the map)",
     "rival.flag_y": "nearest hostile flagship y",
     "rival.flag_dist": "distance to the nearest hostile flagship (destroy it to eliminate that fleet)",
-    "rival.flag_hull": "that flagship's hull — revealed ONLY when one of your ships is close enough to scout it, else -1 (get in close to learn it — and risk its guns)",
-    "rival.yard_busy": "that fleet's shipyard works in progress (builds+refits+repairs) — revealed at the same close scouting range as flag_hull, else -1 (read their production tempo up close)",
+    "rival.flag_hull": "that flagship's hull — revealed ONLY when THIS ship is close enough to scout it, else -1 (each ship reads its own sightings; a scout cannot share it — get in close and risk its guns)",
+    "rival.yard_busy": "that fleet's shipyard works in progress (builds+refits+repairs) — revealed at the same close scouting range as flag_hull, and likewise only to THIS ship, else -1 (read their production tempo up close)",
     "orders.rally_x": "rally x from your squadron's standing orders",
     "orders.rally_y": "rally y from standing orders",
     "orders.aggression": "aggression from standing orders (0-3)",
@@ -99,6 +100,22 @@ class ConnError(Exception):
     def __init__(self, msg, line=None):
         super().__init__(f"line {line}: {msg}" if line else msg)
         self.line = line
+
+
+def _fin(v, op):
+    """Arithmetic must stay finite. conn evaluates in IEEE floats, so repeated
+    multiplication saturates to inf (and inf-inf to nan). A non-finite value
+    used to sail on to int() at the helm, raising OverflowError/ValueError —
+    neither a ConnError, so nothing up the stack caught it and a THREE-LINE
+    program killed the whole match (and in a series, the run process). Faulting
+    here routes it to the ordinary program-fault path: standing orders take
+    over, the admiral gets a warning, and the replay stays reproducible. It also
+    keeps inf out of pmem, which json.dumps would have written to a checkpoint
+    as bare `Infinity`.
+    """
+    if not math.isfinite(v):
+        raise ConnError(f"'{op}' overflowed to a non-finite value")
+    return v
 
 
 def api_reference(examples=5):
@@ -282,7 +299,10 @@ class _P:
             self.take(")")
             return node
         if re.fullmatch(r"\d+\.?\d*", tok):
-            return ("num", float(tok))
+            v = float(tok)
+            if not math.isfinite(v):        # 400 digits parses straight to inf
+                raise ConnError(f"number {tok[:12]}… is too large", self.line)
+            return ("num", v)
         if tok in FUNCS:
             self.take("(")
             args = [self.expr()]
@@ -377,7 +397,10 @@ def compile_program(text):
             m = re.fullmatch(r"mem\s+([A-Za-z_][A-Za-z_0-9]*)\s*=\s*(-?\d+\.?\d*)", s)
             if not m:
                 raise ConnError("mem syntax: mem <name> = <number>", ln)
-            decls[m.group(1)] = float(m.group(2))
+            v = float(m.group(2))
+            if not math.isfinite(v):        # 400 digits parses straight to inf
+                raise ConnError(f"mem {m.group(1)} initial value is too large", ln)
+            decls[m.group(1)] = v
     for ln, raw in enumerate(lines, 1):
         s = raw.split("#", 1)[0].strip()
         if not s:
@@ -474,18 +497,19 @@ class Program:
                     return abs(a[0])
                 if node[1] == "sign":
                     return float((a[0] > 0) - (a[0] < 0))
-                return float(max(abs(a[0] - a[2]), abs(a[1] - a[3])))  # dist = cheb
+                return _fin(max(abs(a[0] - a[2]),
+                                abs(a[1] - a[3])), "dist")  # dist = cheb
             a, b = ev(node[1]), ev(node[2])
             if k == "+":
-                return a + b
+                return _fin(a + b, k)
             if k == "-":
-                return a - b
+                return _fin(a - b, k)
             if k == "*":
-                return a * b
+                return _fin(a * b, k)
             if k == "/":
-                return a / b if b else 0.0
+                return _fin(a / b, k) if b else 0.0
             if k == "%":
-                return a % b if b else 0.0
+                return _fin(a % b, k) if b else 0.0
             if k == "==":
                 return 1.0 if a == b else 0.0
             if k == "!=":

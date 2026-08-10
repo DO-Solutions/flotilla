@@ -272,5 +272,72 @@ ok("FLAGSHIP HUNT" in conn.api_reference(4)
    and "PACK HUNTER" not in conn.api_reference(4), "examples=4 adds the hunt")
 ok("PACK HUNTER" in conn.api_reference(5), "examples=5 is the full ladder")
 
+# ---- NON-FINITE ARITHMETIC must fault as a ConnError, not kill the engine ----
+# conn evaluates in IEEE floats, so repeated multiplication saturates to inf and
+# inf-inf to nan. Those used to reach int() at the helm as OverflowError /
+# ValueError — neither a ConnError, so nothing up the stack caught them and this
+# THREE-LINE program took down the whole match (and in a series, the run).
+CRASHER = """mem a = 9
+set a = mem.a * mem.a
+default: helm.goto(mem.a, 0)"""
+_prog = conn.compile_program(CRASHER)
+_mem = _prog.init_mem()          # decls seed pmem; a bare {} never grows
+_sen = {k: 0.0 for k in conn.SENSORS}
+_faulted = None
+for _ in range(40):                      # 9 -> 9^2 -> 9^4 ... saturates by ~t8
+    try:
+        _prog.run(_sen, _mem)
+    except conn.ConnError as e:
+        _faulted = str(e)
+        break
+    except Exception as e:               # the bug: OverflowError/ValueError
+        _faulted = f"WRONG EXCEPTION {type(e).__name__}: {e}"
+        break
+ok(_faulted is not None and "non-finite" in _faulted,
+   f"runaway multiplication faults as ConnError (got {_faulted!r})")
+ok(all(v == v and abs(v) != float("inf") for v in _mem.values()),
+   f"no non-finite value is ever committed to pmem (got {_mem!r})")
+
+# the same program, driven through the REAL engine: the run must survive and the
+# squadron must fall back to standing orders rather than crash the match.
+class _Crash:
+    name = "crash"
+
+    def decide(self, summary, rng):
+        return dict(thoughts="overflow", programs={"A": CRASHER})
+
+
+try:
+    _eng = Engine([("crash", _Crash()), ("quiet", Idle())], seed=3,
+                  max_ticks=WINDOW * 3 + 1,
+                  scenario={"programs": True, "role_fallback": True})
+    _res = _eng.run()
+    ok(True, "engine survives a program that overflows to non-finite")
+    ok(any("RUNTIME FAULT" in w for w in _eng.fleets[0].warnings)
+       or any(e["k"] == "program_rejected" for e in _eng.events),
+       "the overflowing squadron is told its program faulted")
+except Exception as e:
+    ok(False, f"engine CRASHED on an overflowing program: {type(e).__name__}: {e}")
+
+# oversized numeric literals parse straight to inf via float() — reject at compile
+ok(err_of("default: helm.goto(" + "9" * 400 + ", 0)") is not None,
+   "a 400-digit literal is rejected at compile time")
+ok(err_of("mem a = " + "9" * 400 + "\ndefault: helm.hold()") is not None,
+   "a 400-digit mem initializer is rejected at compile time")
+# division/modulo by zero stay defined (0.0) rather than faulting
+ok(err_of("default: helm.goto(1 / 0, 2 % 0)") is None,
+   "div/mod by zero remain defined, not a fault")
+
+# ---- deep nesting must be REJECTED, not raise RecursionError past the guard ----
+_deep = "default: helm.goto(" + "(" * 400 + "1" + ")" * 400 + ", 0)"
+_de = None
+try:
+    conn.compile_program(_deep)
+except conn.ConnError as e:
+    _de = "ConnError"
+except RecursionError:
+    _de = "RecursionError"
+ok(_de is not None, f"400-deep nesting is refused at compile ({_de})")
+
 print("FAILURES:", fails)
 sys.exit(1 if fails else 0)
