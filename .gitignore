@@ -1,0 +1,5 @@
+__pycache__/
+*.pyc
+# the replay library is the thing you BACK UP, never the thing you commit
+library/
+runs/
