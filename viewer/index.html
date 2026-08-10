@@ -192,21 +192,59 @@
   #logcard h3, #chartcard h3 { font-size: 13px; color: var(--accent); margin-bottom: 4px; }
   #gamelog { max-height: 44vh; overflow-y: auto; }
   #gamelog div { font-size: 12px; margin-bottom: 4px; color: var(--dim); }
-  #seriespanel { font-size: 13px; }
-  #seriespanel h3 { font-size: 13px; color: var(--accent); margin: 10px 0 4px; }
-  #seriespanel canvas { background: var(--card); border: 1px solid var(--line);
-    border-radius: 6px; width: 100%; }
-  table.sstats { border-collapse: collapse; width: 100%; font-size: 12px; }
-  table.sstats th, table.sstats td { border: 1px solid var(--line);
-    padding: 3px 8px; text-align: left; }
+  /* ---- Series review: a full-PAGE takeover (its own screen) ---- */
+  #seriespage { position: fixed; inset: 0; z-index: 50; overflow-y: auto;
+    background: radial-gradient(1200px 600px at 50% -10%, #12233f 0%, #0a1220 60%); }
+  .spwrap { max-width: 1040px; margin: 0 auto; padding: 22px 26px 60px; }
+  .sphead { display: flex; align-items: baseline; gap: 14px; flex-wrap: wrap;
+    margin-bottom: 4px; }
+  .sphead h1 { font-size: 26px; letter-spacing: .5px; }
+  .spsub { color: var(--dim); font-size: 14px; margin-bottom: 20px; }
+  .spback { position: fixed; top: 16px; right: 20px; z-index: 51; }
+  /* podium */
+  .podium { display: flex; justify-content: center; align-items: flex-end;
+    gap: 20px; margin: 10px 0 30px; min-height: 240px; }
+  .pod { display: flex; flex-direction: column; align-items: center; width: 168px; }
+  .pod .medal { width: 84px; height: 84px; border-radius: 50%;
+    display: flex; align-items: center; justify-content: center;
+    font: 800 34px/1 system-ui; color: #fff; border: 3px solid #ffffff33;
+    box-shadow: 0 6px 26px #0007; }
+  .pod.first .medal { width: 108px; height: 108px; font-size: 46px; }
+  .pod .rank { font-size: 13px; color: var(--dim); margin: 8px 0 2px; }
+  .pod .pname { font-weight: 700; font-size: 16px; text-align: center; }
+  .pod .pwins { font-size: 13px; color: var(--dim); }
+  .pod .plinth { width: 100%; margin-top: 12px; border-radius: 8px 8px 0 0;
+    background: linear-gradient(#1b2c4b, #142138); border: 1px solid var(--line);
+    border-bottom: none; display: flex; align-items: flex-start;
+    justify-content: center; padding-top: 8px; font: 800 30px/1 system-ui;
+    color: #ffffff22; }
+  .pod.first .plinth { height: 130px; } .pod.second .plinth { height: 96px; }
+  .pod.third .plinth { height: 68px; }
+  .pod .crown { font-size: 26px; height: 28px; }
+  /* stat cards */
+  .spcards { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px,1fr));
+    gap: 12px; margin: 8px 0 26px; }
+  .spcard { background: var(--card); border: 1px solid var(--line);
+    border-radius: 10px; padding: 12px 14px; }
+  .spcard .big { font-size: 24px; font-weight: 700; }
+  .spcard .lbl { font-size: 12px; color: var(--dim); margin-top: 2px; }
+  .spsec { font-size: 15px; color: var(--accent); margin: 22px 0 8px;
+    border-bottom: 1px solid var(--line); padding-bottom: 4px; }
+  .spgrid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+  @media (max-width: 720px) { .spgrid2 { grid-template-columns: 1fr; } }
+  #seriespage canvas { background: var(--card); border: 1px solid var(--line);
+    border-radius: 8px; width: 100%; }
+  table.sstats { border-collapse: collapse; width: 100%; font-size: 13px; }
+  table.sstats th, table.sstats td { border-bottom: 1px solid var(--line);
+    padding: 6px 10px; text-align: left; }
   table.sstats th { color: var(--dim); font-weight: 600; }
-  .ssgames { display: flex; flex-wrap: wrap; gap: 6px; }
+  .ssgames { display: flex; flex-wrap: wrap; gap: 8px; }
   .ssg { background: var(--card); border: 1px solid var(--line);
-    border-radius: 5px; padding: 2px 8px; font-size: 12px; }
+    border-radius: 6px; padding: 4px 12px; font-size: 13px; }
   .ssmemo { background: #0a1424; border: 1px solid var(--line);
-    border-radius: 6px; padding: 6px 9px; margin-bottom: 6px; }
+    border-radius: 8px; padding: 9px 13px; margin-bottom: 8px; }
   .ssmemo b { color: var(--accent); }
-  .ssmemo div { color: #8fa3c4; white-space: pre-wrap; margin-top: 3px;
+  .ssmemo div { color: #8fa3c4; white-space: pre-wrap; margin-top: 4px;
     overflow-wrap: anywhere; }
   #gamelog b { color: var(--ink); }
   #parleyfeed { background: var(--card); border: 1px solid var(--line);
@@ -350,9 +388,13 @@ at your own pace, then jump to the one being played now"></button>
         <div id="gamelog"></div>
       </div>
     </div>
-    <div id="seriespanel" style="display:none"></div>
   </div>
 </div>
+
+<!-- Series review — a full PAGE takeover (not a side panel): podium, series
+     stats, charts, memos. Lives inside player.html so it ships with every
+     single-file bundle and works offline. -->
+<div id="seriespage" style="display:none"><div class="spwrap" id="spwrap"></div></div>
 
 <div id="drop">Drop a replay .json here (or this file was exported with one embedded).</div>
 <script>
@@ -2663,75 +2705,136 @@ function setMode(mode) {
   $("statspanel").style.display = mode === "stats" ? "" : "none";
   $("settingspanel").style.display = mode === "settings" ? "" : "none";
   $("helppanel").style.display = mode === "help" ? "" : "none";
-  $("seriespanel").style.display = mode === "series" ? "" : "none";
-  if (mode === "series") { renderSeriesStats(); return; }   // its own async render
   seek(S.fi);
 }
-$("seriesbtn").addEventListener("click", () => setMode("series"));
+$("seriesbtn").addEventListener("click", openSeriesPage);
+document.addEventListener("keydown", e => {
+  if (e.key === "Escape" && $("seriespage").style.display !== "none")
+    closeSeriesPage();
+});
 
-// The whole SERIES at a glance — computed from the embedded game replays, so
-// it ships with a downloaded/showcase bundle and works offline. Score
-// progression, standings, per-game winners, cost, and the final memos.
-async function renderSeriesStats() {
-  const panel = $("seriespanel"), b = S.bundle;
-  if (!b) { panel.innerHTML = "<p class='dim'>no series loaded</p>"; return; }
-  panel.innerHTML = "<div class='dim'>crunching the series…</div>";
+// The Series Review — a full-PAGE takeover (its own screen, not a side tab):
+// a winner's podium, headline stat cards, standings, charts, per-game results,
+// and the final memos. Computed from the embedded game replays, so it ships
+// with a downloaded/showcase bundle and works offline.
+function closeSeriesPage() {
+  $("seriespage").style.display = "none";
+  document.body.style.overflow = "";
+}
+async function openSeriesPage() {
+  const page = $("seriespage"), wrap = $("spwrap"), b = S.bundle;
+  if (!b) return;
+  document.body.style.overflow = "hidden";
+  page.style.display = "";
+  wrap.innerHTML = `<button class="spback" id="spback">✕ back to the game</button>` +
+    `<div class="dim" style="padding:40px">crunching the series…</div>`;
+  $("spback").onclick = closeSeriesPage;
+  // gather every finished game's replay
   const games = [];
   for (let i = 0; i < b.games.length; i++) {
     let rp; try { rp = await ensureGame(b, i); } catch (e) { continue; }
     if (rp && rp.result) games.push({ n: b.games[i].game, rp });
   }
-  if (!games.length) { panel.innerHTML = "<p class='dim'>no finished games yet</p>"; return; }
-  const fleets = games[0].rp.fleets.map(f => ({ id: f.id, name: f.name }));
+  const base = games[0] ? games[0].rp : S.rp;
+  if (!base) { wrap.innerHTML =
+    `<button class="spback" id="spback">✕ back</button>` +
+    `<div class="dim" style="padding:40px">no finished games yet</div>`;
+    $("spback").onclick = closeSeriesPage; return; }
+  const fleets = base.fleets.map(f => ({ id: f.id, name: f.name }));
   const col = f => COLORS[f.id % COLORS.length];
-  const sc = (res, id) => (res.scores && (res.scores[id] ?? res.scores[String(id)])) || 0;
-  const per = {}; fleets.forEach(f => per[f.id] = { scores: [], cost: [], wins: 0 });
+  const nameOf = {}; fleets.forEach(f => nameOf[f.id] = f.name);
+  const scOf = (res, id) => (res.scores && (res.scores[id] ?? res.scores[String(id)])) || 0;
+  const per = {};
+  fleets.forEach(f => per[f.id] = { scores: [], cost: [], wins: 0, tok: 0 });
   const rows = [];
   for (const g of games) {
     const res = g.rp.result || {}, cost = {};
     for (const d of (g.rp.decisions || [])) {
-      if (d.u) cost[d.fleet] = (cost[d.fleet] || 0) + (d.u.cost || 0);
+      if (!d.u) continue;
+      cost[d.fleet] = (cost[d.fleet] || 0) + (d.u.cost || 0);
+      if (per[d.fleet]) per[d.fleet].tok += (d.u.tin || 0) + (d.u.tout || 0);
     }
-    fleets.forEach(f => { per[f.id].scores.push(sc(res, f.id));
+    fleets.forEach(f => { per[f.id].scores.push(scOf(res, f.id));
                           per[f.id].cost.push(cost[f.id] || 0); });
     if (res.winner != null && per[res.winner]) per[res.winner].wins++;
     rows.push({ n: g.n, win: res.winner });
   }
   const standings = fleets.map(f => ({ f, wins: per[f.id].wins,
     total: per[f.id].scores.reduce((a, x) => a + x, 0),
-    cost: per[f.id].cost.reduce((a, x) => a + x, 0) }))
+    cost: per[f.id].cost.reduce((a, x) => a + x, 0), tok: per[f.id].tok }))
     .sort((a, c) => c.wins - a.wins || c.total - a.total);
-  const nameOf = {}; fleets.forEach(f => nameOf[f.id] = f.name);
-  let h = `<h2 style="font-size:16px;margin:2px 0">${escHtml(b.name)} — series stats</h2>`;
-  h += `<div class="dim" style="margin-bottom:6px">${games.length} game` +
-    `${games.length > 1 ? "s" : ""} · ` +
-    fleets.map(f => `<b style="color:${col(f)}">${escHtml(f.name)}</b>`).join(" vs ") +
+  const nGames = games.length;
+  const medal = (s, big) => `<div class="medal" style="background:${col(s.f)}">` +
+    `${escHtml((s.f.name.trim()[0] || "?").toUpperCase())}</div>`;
+  // podium: 2nd · 1st · 3rd (classic center-tallest); only as many as exist
+  const podClass = ["first", "second", "third"];
+  const order = [];
+  if (standings[1]) order.push([standings[1], 1]);
+  order.push([standings[0], 0]);
+  if (standings[2]) order.push([standings[2], 2]);
+  const podHtml = order.map(([s, rank]) =>
+    `<div class="pod ${podClass[rank]}">` +
+    `<div class="crown">${rank === 0 ? "👑" : ""}</div>` +
+    medal(s) +
+    `<div class="rank">${rank === 0 ? "1st" : rank === 1 ? "2nd" : "3rd"}</div>` +
+    `<div class="pname" style="color:${col(s.f)}">${escHtml(s.f.name)}</div>` +
+    `<div class="pwins">${s.wins} win${s.wins === 1 ? "" : "s"} · ${s.total} pts</div>` +
+    `<div class="plinth">${rank + 1}</div></div>`).join("");
+  const champ = standings[0];
+  const totalCost = standings.reduce((a, s) => a + s.cost, 0);
+  const totalTok = standings.reduce((a, s) => a + s.tok, 0);
+  const closest = Math.max(...standings.map(s => s.wins)) -
+    (standings[1] ? standings[1].wins : 0);
+  let h = `<button class="spback" id="spback">✕ back to the game</button>`;
+  h += `<div class="sphead"><h1>${escHtml(b.name)}</h1>` +
+    `<span class="dim">series review</span></div>`;
+  h += `<div class="spsub">${nGames} game${nGames === 1 ? "" : "s"} · ` +
+    fleets.map(f => `<b style="color:${col(f)}">${escHtml(f.name)}</b>`)
+      .join(`<span style="color:var(--dim)"> vs </span>`) + `</div>`;
+  h += `<div class="podium">${podHtml}</div>`;
+  h += `<div class="spcards">` +
+    `<div class="spcard"><div class="big" style="color:${col(champ.f)}">` +
+      `${escHtml(champ.f.name)}</div><div class="lbl">🏆 series champion</div></div>` +
+    `<div class="spcard"><div class="big">${champ.wins}/${nGames}</div>` +
+      `<div class="lbl">games won by the champion</div></div>` +
+    `<div class="spcard"><div class="big">$${totalCost.toFixed(2)}</div>` +
+      `<div class="lbl">total LLM spend</div></div>` +
+    `<div class="spcard"><div class="big">${(totalTok / 1e6).toFixed(2)}M</div>` +
+      `<div class="lbl">tokens across the series</div></div>` +
     `</div>`;
-  h += `<table class="sstats"><thead><tr><th>admiral</th><th>wins</th>` +
+  h += `<div class="spgrid2"><div><div class="spsec">Score by game</div>` +
+    `<canvas id="ss_score" width="480" height="200"></canvas></div>` +
+    `<div><div class="spsec">LLM cost by game ($)</div>` +
+    `<canvas id="ss_cost" width="480" height="200"></canvas></div></div>`;
+  h += `<div class="spsec">Standings</div>` +
+    `<table class="sstats"><thead><tr><th>#</th><th>admiral</th><th>wins</th>` +
     `<th>total score</th><th>LLM cost</th></tr></thead><tbody>`;
-  standings.forEach((s, i) => { h += `<tr><td><b style="color:${col(s.f)}">` +
-    `${escHtml(s.f.name)}</b>${i === 0 ? " 🏆" : ""}</td><td>${s.wins}</td>` +
-    `<td>${s.total}</td><td>$${s.cost.toFixed(2)}</td></tr>`; });
+  standings.forEach((s, i) => { h += `<tr><td>${i + 1}</td><td>` +
+    `<b style="color:${col(s.f)}">${escHtml(s.f.name)}</b>${i === 0 ? " 🏆" : ""}` +
+    `</td><td>${s.wins}</td><td>${s.total}</td><td>$${s.cost.toFixed(2)}</td></tr>`; });
   h += `</tbody></table>`;
-  h += `<h3>score by game</h3><canvas id="ss_score" width="284" height="120"></canvas>`;
-  h += `<h3>LLM cost by game ($)</h3><canvas id="ss_cost" width="284" height="90"></canvas>`;
-  h += `<h3>who won each game</h3><div class="ssgames">`;
+  h += `<div class="spsec">Every game</div><div class="ssgames">`;
   rows.forEach(r => { const w = r.win != null ? nameOf[r.win] : "—";
-    const wc = r.win != null ? COLORS[r.win % COLORS.length] : "#889";
-    h += `<div class="ssg"><span class="dim">g${r.n}</span> ` +
+    const wc = r.win != null ? col({ id: r.win }) : "#889";
+    h += `<div class="ssg"><span class="dim">game ${r.n} →</span> ` +
       `<b style="color:${wc}">${escHtml(w || "—")}</b></div>`; });
   h += `</div>`;
-  const memos = games[games.length - 1].rp.memos || {};
+  const memos = (games[nGames - 1] || {}).rp
+    ? games[nGames - 1].rp.memos || {} : {};
   const mk = Object.keys(memos).filter(k => memos[k] && (memos[k].memo || memos[k]));
   if (mk.length) {
-    h += `<h3>post-series notes — each admiral's last memo</h3>`;
+    h += `<div class="spsec">Post-series notes — each admiral's last memo</div>`;
     for (const k of mk) {
       const txt = String((memos[k] && (memos[k].memo || memos[k])) || "");
       if (!txt.trim()) continue;
-      h += `<div class="ssmemo"><b>${escHtml(k)}</b><div>${escHtml(txt)}</div></div>`;
+      const fid = (fleets.find(f => f.name === k) || {}).id;
+      const c = fid != null ? col({ id: fid }) : "var(--accent)";
+      h += `<div class="ssmemo"><b style="color:${c}">${escHtml(k)}</b>` +
+        `<div>${escHtml(txt)}</div></div>`;
     }
   }
-  panel.innerHTML = h;
+  wrap.innerHTML = h;
+  $("spback").onclick = closeSeriesPage;
   drawSeriesLines($("ss_score"), fleets, per, "scores");
   drawSeriesLines($("ss_cost"), fleets, per, "cost");
 }
