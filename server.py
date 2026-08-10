@@ -1141,6 +1141,95 @@ def _s3_delete_public(cfg, key):
         raise
 
 
+def _s3_list_public(cfg, prefix):
+    """SigV4 S3 ListObjectsV2 — every key under a prefix, paginated. Needed
+    because a tournament showcase is a PREFIX of objects (index, player,
+    logos, one replay per matchup game, series-index), and retiring the link
+    must remove all of them, not just the entry points."""
+    import datetime as _dt
+    import hmac
+    import urllib.request as _rq
+    import xml.etree.ElementTree as _ET
+    host = f"{cfg['bucket']}.{cfg['endpoint']}"
+    region = cfg.get("region", "nyc3")
+    payload_hash = hashlib.sha256(b"").hexdigest()
+    keys, token = [], None
+    while True:
+        q = [("list-type", "2"), ("prefix", prefix)]
+        if token:
+            q.append(("continuation-token", token))
+        q.sort()
+        qs = "&".join(f"{urllib.parse.quote(k, safe='')}="
+                      f"{urllib.parse.quote(v, safe='')}" for k, v in q)
+        now = _dt.datetime.now(_dt.timezone.utc)
+        amzdate = now.strftime("%Y%m%dT%H%M%SZ")
+        datestamp = now.strftime("%Y%m%d")
+        headers = {"host": host, "x-amz-content-sha256": payload_hash,
+                   "x-amz-date": amzdate}
+        signed = ";".join(sorted(headers))
+        canonical = ("GET\n/\n" + qs + "\n"
+                     + "".join(f"{k}:{headers[k]}\n" for k in sorted(headers))
+                     + "\n" + signed + "\n" + payload_hash)
+        scope = f"{datestamp}/{region}/s3/aws4_request"
+        sts = ("AWS4-HMAC-SHA256\n" + amzdate + "\n" + scope + "\n"
+               + hashlib.sha256(canonical.encode()).hexdigest())
+
+        def _hm(k, m):
+            return hmac.new(k, m.encode(), hashlib.sha256).digest()
+
+        sk = _hm(_hm(_hm(_hm(("AWS4" + cfg["secret_key"]).encode(), datestamp),
+                         region), "s3"), "aws4_request")
+        sig = hmac.new(sk, sts.encode(), hashlib.sha256).hexdigest()
+        auth = (f"AWS4-HMAC-SHA256 Credential={cfg['access_key']}/{scope}, "
+                f"SignedHeaders={signed}, Signature={sig}")
+        req = _rq.Request(f"https://{host}/?{qs}",
+                          headers={**{k: v for k, v in headers.items()
+                                      if k != "host"}, "Authorization": auth})
+        with _rq.urlopen(req, timeout=60) as r:
+            root = _ET.fromstring(r.read())
+        ns = root.tag.split("}")[0] + "}" if root.tag.startswith("{") else ""
+        keys += [c.findtext(f"{ns}Key") for c in root.iter(f"{ns}Contents")]
+        token = root.findtext(f"{ns}NextContinuationToken")
+        if root.findtext(f"{ns}IsTruncated") != "true" or not token:
+            return keys
+
+
+def _showcase_purge(ident):
+    """Retire a public link COMPLETELY: every bucket object behind it plus its
+    registry entry. Single-object links (series/match bundles) are one key; a
+    tournament is a whole prefix, and leaving "unlisted" objects behind is a
+    slow object-storage leak — a deleted link must stop costing money.
+    Returns (deleted_count, failed_keys). On any failure the registry entry is
+    KEPT so the leak stays visible and retryable instead of silently orphaned.
+    Showcase unconfigured = clean no-op."""
+    cfg = _showcase_cfg()
+    if cfg is None:
+        return 0, []
+    try:
+        if ident.startswith("tournament-"):
+            keys = _s3_list_public(cfg, f"showcase/{ident}/")
+        else:
+            # pre-ident publishes named the object after the bare series/match
+            # name (showcase/<name>.html, no type prefix) — delete BOTH forms
+            # or retiring an old link leaves its real object billing forever.
+            # _s3_delete_public counts a 404 as deleted, so the miss is free.
+            bare = ident.split("-", 1)[1] if "-" in ident else ident
+            keys = [f"showcase/{ident}.html", f"showcase/{bare}.html"]
+    except Exception as e:
+        return 0, [f"list: {type(e).__name__}: {e}"[:120]]
+    deleted, failed = 0, []
+    for key in keys:
+        try:
+            _s3_delete_public(cfg, key)
+            deleted += 1
+        except Exception as e:
+            failed.append(f"{key}: {type(e).__name__}"[:120])
+    if not failed:
+        _showcase_list_update(
+            lambda pub: [x for x in pub if x.get("ident") != ident])
+    return deleted, failed
+
+
 # ---------------- public show: auto-mirror a PUBLIC job to the bucket ---------
 # A job launched with "public": true mirrors itself to the showcase bucket as it
 # runs: game replays as they land, a hub page (bracket/standings + links), the
@@ -2883,26 +2972,15 @@ class H(BaseHTTPRequestHandler):
                 if ident in ("series-", "match-", "tournament-"):
                     return self._send(400, {"error": "give series, match, or "
                                             "tournament"})
-                if ident.startswith("tournament-"):
-                    # kill the entry points; replay objects linger unlisted
-                    # until a re-publish overwrites the prefix
-                    keys = [f"showcase/{ident}/index.html",
-                            f"showcase/{ident}/tournament.json"]
-                    url = (f"https://{cfg['bucket']}.{cfg['endpoint']}/"
-                           f"showcase/{ident}/index.html")
-                else:
-                    keys = [f"showcase/{ident}.html"]
-                    url = (f"https://{cfg['bucket']}.{cfg['endpoint']}/"
-                           f"showcase/{ident}.html")
-                try:
-                    for key in keys:
-                        _s3_delete_public(cfg, key)
-                except Exception as e:
-                    return self._send(502, {"error": f"delete failed: "
-                                            f"{type(e).__name__}: {e}"[:200]})
-                _showcase_list_update(
-                    lambda pub: [x for x in pub if x.get("url") != url])
-                return self._send(200, {"ok": True, "ident": ident})
+                deleted, failed = _showcase_purge(ident)
+                if failed:
+                    return self._send(502, {"error": "delete incomplete — "
+                                            "kept the registry entry so it "
+                                            "stays retryable",
+                                            "deleted": deleted,
+                                            "failed": failed})
+                return self._send(200, {"ok": True, "ident": ident,
+                                        "deleted": deleted})
             if path == "/api/ships":
                 # save/remove an operator ship class (the Configure designer).
                 # ships.json is hand-editable; the GET reads it fresh.
@@ -3037,8 +3115,15 @@ class H(BaseHTTPRequestHandler):
                     meta = matches_meta(LIB)
                     if meta.pop(fn, None) is not None:
                         save_matches_meta(LIB, meta)
+                # a deleted replay's public link must die with it (archive
+                # keeps its link; DELETE is the full-removal path)
+                purged, pfail = _showcase_purge(
+                    f"match-{_san(fn.rsplit('.', 1)[0])}")
                 build_index(LIB)
-                return self._send(200, {"ok": True, "deleted": fn})
+                return self._send(200, {"ok": True, "deleted": fn,
+                                        "showcase_purged": purged,
+                                        **({"showcase_failed": pfail}
+                                           if pfail else {})})
             if path == "/api/delete-tournament":
                 # permanent removal of the WHOLE tournament — bracket + every
                 # matchup series + every game (the dashboard confirms first;
@@ -3058,8 +3143,11 @@ class H(BaseHTTPRequestHandler):
                                             "queued/running/paused — cancel "
                                             "it first"})
                 shutil.rmtree(tdir, ignore_errors=True)
+                purged, pfail = _showcase_purge(f"tournament-{tn}")
                 build_index(LIB)
-                return self._send(200, {"ok": True})
+                return self._send(200, {"ok": True, "showcase_purged": purged,
+                                        **({"showcase_failed": pfail}
+                                           if pfail else {})})
             if path == "/api/delete-series":
                 # permanent removal from the library (the dashboard confirms
                 # first; the daily restic backup is the only undo). A series
@@ -3079,8 +3167,12 @@ class H(BaseHTTPRequestHandler):
                                             "is queued/running/paused — "
                                             "cancel it first"})
                 shutil.rmtree(sdir, ignore_errors=True)
+                purged, pfail = _showcase_purge(f"series-{name}")
                 build_index(LIB)
-                return self._send(200, {"ok": True, "deleted": name})
+                return self._send(200, {"ok": True, "deleted": name,
+                                        "showcase_purged": purged,
+                                        **({"showcase_failed": pfail}
+                                           if pfail else {})})
             if path == "/api/providers":
                 st = _keystore()
                 masked = []

@@ -290,6 +290,103 @@ ok(st == 502 and "upload failed" in r["error"],
    "unreachable bucket fails gracefully (bundle built, upload 502)")
 os.remove(os.path.join(TMP, "showcase.json"))
 
+# ---- purge-on-delete: a retired/deleted link removes EVERY bucket object ----
+# A tournament showcase is a PREFIX (index, player, logos, one replay per
+# matchup game); the old delete removed only the two entry points and left the
+# replays as unlisted-but-billed objects. And library DELETE (not archive)
+# never touched the showcase at all — a deleted series kept its public bundle
+# forever. Both are slow object-storage cost leaks; these pin the fix with
+# patched S3 helpers so no network is involved.
+st, r = req("/api/showcase-config", {"access_key": "AK", "secret_key": "SK",
+                                     "region": "r", "endpoint": "e.com",
+                                     "bucket": "b"})
+ok(st == 200, "showcase re-configured for purge tests")
+_listed, _deleted = [], []
+
+
+def _fake_list(cfg, prefix):
+    _listed.append(prefix)
+    return [f"{prefix}index.html", f"{prefix}player.html",
+            f"{prefix}m1-vs-m2/g1.json"]
+
+
+def _fake_del(cfg, key):
+    if key in _FAIL:
+        raise OSError("bucket said no")
+    _deleted.append(key)
+    return 204
+
+
+_FAIL = set()
+_real_list, _real_del = server._s3_list_public, server._s3_delete_public
+server._s3_list_public, server._s3_delete_public = _fake_list, _fake_del
+try:
+    # tournament link retire = full prefix purge
+    os.makedirs(os.path.join(TMP, "tournaments", "cupx"), exist_ok=True)
+    with open(os.path.join(TMP, "tournaments", "cupx", "tournament.json"),
+              "w") as fh:
+        json.dump({"name": "cupx", "decided": True}, fh)
+    server._showcase_list_update(lambda pub: pub + [
+        {"name": "cupx", "ident": "tournament-cupx", "url": "u1"},
+        {"name": "sx", "ident": "series-sx", "url": "u2"}])
+    st, r = req("/api/showcase-delete", {"tournament": "cupx"})
+    ok(st == 200 and r["deleted"] == 3, f"link retire purges the WHOLE prefix ({r})")
+    ok(_listed == ["showcase/tournament-cupx/"]
+       and "showcase/tournament-cupx/m1-vs-m2/g1.json" in _deleted,
+       "matchup replay objects are deleted, not left unlisted")
+    ok(all(x.get("ident") != "tournament-cupx" for x in server._showcase_list()),
+       "registry entry dropped")
+    # deleting the tournament itself purges its published objects too
+    server._showcase_list_update(lambda pub: pub + [
+        {"name": "cupx", "ident": "tournament-cupx", "url": "u1"}])
+    _deleted.clear()
+    st, r = req("/api/delete-tournament", {"tournament": "cupx"})
+    ok(st == 200 and r.get("showcase_purged") == 3,
+       f"tournament DELETE purges its showcase ({r})")
+    ok(not os.path.isdir(os.path.join(TMP, "tournaments", "cupx")),
+       "tournament dir removed")
+    # series delete purges its single bundle object
+    os.makedirs(os.path.join(TMP, "series", "sx"), exist_ok=True)
+    with open(os.path.join(TMP, "series", "sx", "series.json"), "w") as fh:
+        json.dump({"name": "sx", "games": []}, fh)
+    _deleted.clear()
+    st, r = req("/api/delete-series", {"series": "sx"})
+    ok(st == 200 and r.get("showcase_purged") == 2
+       and _deleted == ["showcase/series-sx.html", "showcase/sx.html"],
+       f"series DELETE purges its bundle + the pre-ident legacy key ({r}, {_deleted})")
+    ok(all(x.get("ident") != "series-sx" for x in server._showcase_list()),
+       "series registry entry dropped")
+    # match delete purges its bundle
+    os.makedirs(os.path.join(TMP, "matches"), exist_ok=True)
+    with open(os.path.join(TMP, "matches", "mx.json"), "w") as fh:
+        json.dump(rp, fh)
+    server._showcase_list_update(lambda pub: pub + [
+        {"name": "mx", "ident": "match-mx", "url": "u3"}])
+    _deleted.clear()
+    st, r = req("/api/delete-match", {"match": "mx.json"})
+    ok(st == 200 and r.get("showcase_purged") == 2
+       and _deleted == ["showcase/match-mx.html", "showcase/mx.html"],
+       f"match DELETE purges its bundle + the pre-ident legacy key ({r}, {_deleted})")
+    # failure path: bucket error -> registry entry KEPT (visible + retryable),
+    # the library delete itself still succeeds
+    os.makedirs(os.path.join(TMP, "series", "sy"), exist_ok=True)
+    with open(os.path.join(TMP, "series", "sy", "series.json"), "w") as fh:
+        json.dump({"name": "sy", "games": []}, fh)
+    server._showcase_list_update(lambda pub: pub + [
+        {"name": "sy", "ident": "series-sy", "url": "u4"}])
+    _FAIL.add("showcase/series-sy.html")
+    st, r = req("/api/delete-series", {"series": "sy"})
+    ok(st == 200 and r.get("showcase_failed"),
+       f"library delete survives a bucket failure and REPORTS it ({r})")
+    ok(any(x.get("ident") == "series-sy" for x in server._showcase_list()),
+       "failed purge keeps the registry entry for retry")
+    _FAIL.clear()
+finally:
+    server._s3_list_public, server._s3_delete_public = _real_list, _real_del
+    server._showcase_list_update(
+        lambda pub: [x for x in pub if x.get("ident") != "series-sy"])
+os.remove(os.path.join(TMP, "showcase.json"))
+
 # live per-game publishing: a series game lands in the library before the job ends
 wd = os.path.join(TMP, "_work", "livetest")
 os.makedirs(wd, exist_ok=True)
