@@ -5,6 +5,13 @@ standard library, zero dependencies**, one HTML file each for the player and the
 dashboard. Keep it that way — a contribution that adds a dependency needs a very
 good reason.
 
+## How changes land
+
+This repo is the real, primary repo: pull requests are reviewed and **merged
+here**, and releases deploy from `main`. (Early contributions arrived while
+the project still developed behind a one-way export and had to be reproduced
+commit-by-commit — that era is over.)
+
 ## Getting started
 
 ```bash
