@@ -35,6 +35,7 @@ import json
 import os
 import random
 import sys
+import threading
 import time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -139,9 +140,22 @@ def merged_scenario(cfg):
             **cfg.get("series", {}), **cfg.get("tournament", {})}
 
 
+# protocol lines (the "winner"/"memos_saved"/… JSON the server and aux agent
+# parse off stdout) as ONE atomic write — parallel tournament matchups print
+# from worker threads, and print()'s separate payload+newline writes can
+# interleave mid-line under load
+_EMIT_LOCK = threading.Lock()
+
+
+def _emit(obj):
+    with _EMIT_LOCK:
+        sys.stdout.write(json.dumps(obj) + "\n")
+        sys.stdout.flush()
+
+
 def play_game(named_bots, seed, scenario, outpath, memos_after=None, prov=None,
               pause_check=None, resume_engine=None, game_no=None,
-              games_total=None):
+              games_total=None, live=True):
     if resume_engine is None:
         for _, b in named_bots:
             if isinstance(b, LLMAdmiral):
@@ -157,7 +171,9 @@ def play_game(named_bots, seed, scenario, outpath, memos_after=None, prov=None,
                                            for n, b in named_bots])
     else:
         eng = resume_engine                # a thawed checkpoint mid-game
-    live_path = os.environ.get("FLOTILLA_LIVE")
+    # parallel tournament matchups pass live=False: they'd otherwise all
+    # truncate + interleave the ONE live.jsonl and corrupt the stream
+    live_path = os.environ.get("FLOTILLA_LIVE") if live else None
     lfh = None
     if live_path:
         # live stream: header + one JSON line per window ("w" truncates = new game;
@@ -225,7 +241,7 @@ def play_game(named_bots, seed, scenario, outpath, memos_after=None, prov=None,
     row = {"seed": seed, "file": outpath,
            "scores": {result["names"][k]: v for k, v in result["scores"].items()},
            "winner": result["names"][result["winner"]]}
-    print(json.dumps(row), flush=True)
+    _emit(row)
     return replay, result, row
 
 
@@ -282,13 +298,12 @@ def debrief_all(named_bots, replay, game_no, total, timeout_s, full_info=False):
         finally:
             b.timeout = keep
         memos[name] = {"memo": out["memo"], "err": out["err"]}
-        print(json.dumps({"debrief": name, "after_game": game_no,
-                          "err": out["err"]}), flush=True)
+        _emit({"debrief": name, "after_game": game_no, "err": out["err"]})
     return memos
 
 
 def run_series(named_bots, seed, scenario, ser, outdir, label="series", prov=None,
-               pause_check=None, resume=None):
+               pause_check=None, resume=None, live=True):
     os.makedirs(outdir, exist_ok=True)
     games = list(resume["rows"]) if resume else []
     final_memos = {}
@@ -300,7 +315,7 @@ def run_series(named_bots, seed, scenario, ser, outdir, label="series", prov=Non
             named_bots, gseed, scenario, gpath, prov=prov,
             pause_check=pause_check,
             resume_engine=resume.get("engine") if (resume and g == start_g) else None,
-            game_no=g, games_total=ser["games"])
+            game_no=g, games_total=ser["games"], live=live)
         if replay == "PAUSED":
             write_checkpoint(outdir, dict(
                 kind="series", engine=result, game=g, rows=games, ser=ser,
@@ -342,7 +357,7 @@ def run_series(named_bots, seed, scenario, ser, outdir, label="series", prov=Non
             # lines, which all print BEFORE the write: memos reached the
             # flagship a full game late, and any worker churn in that window
             # lost them for good — that's where g1's and g3's memos went.)
-            print(json.dumps({"memos_saved": g, "file": gpath}), flush=True)
+            _emit({"memos_saved": g, "file": gpath})
             if g == ser["games"]:
                 final_memos = memos
         games.append(row)
@@ -359,8 +374,8 @@ def run_series(named_bots, seed, scenario, ser, outdir, label="series", prov=Non
             lead = ranked[0]
             second = ranked[1] if len(ranked) > 1 else 0
             if lead > second + remaining:
-                print(json.dumps({"clinched": True, "after_game": g,
-                                  "games": ser["games"]}), flush=True)
+                _emit({"clinched": True, "after_game": g,
+                       "games": ser["games"]})
                 break
     # end of series: ask the admirals, as playtesters, how to improve the game
     sim_feedback = {}
@@ -378,8 +393,7 @@ def run_series(named_bots, seed, scenario, ser, outdir, label="series", prov=Non
                 b.timeout = keep
             sim_feedback[name] = {"feedback": fb.get("feedback", ""),
                                   "err": fb.get("err")}
-            print(json.dumps({"sim_feedback": name, "err": fb.get("err")}),
-                  flush=True)
+            _emit({"sim_feedback": name, "err": fb.get("err")})
     with open(os.path.join(outdir, "series.json"), "w") as fh:
         json.dump({"games": [dict(game=r["game"], seed=r["seed"],
                                   file=os.path.basename(r["file"]),
@@ -435,51 +449,102 @@ def run_tournament(cfg, adm, scenario, outdir, prov=None):
     seed0 = int(cfg.get("seed", 42))
     midx = 0
 
-    def play_matchup(group, rnd):
-        nonlocal midx
-        midx += 1
+    # parallel matchups (tournament.parallel > 1): up to N matchups run in
+    # worker threads. Each parallel matchup gets FRESH admiral instances (the
+    # shared-bot mind would race), so persistent memos force sequential.
+    par = max(1, int(t.get("parallel", 1)))
+    stag = max(0, int(t.get("stagger_s", 480)))
+    if par > 1 and t["memo_policy"] == "persistent":
+        _emit({"warning": "memo_policy=persistent carries one mind across "
+                          "matchups — parallel forced back to sequential"})
+        par = 1
+    spec_of = dict(zip(names, specs))
+    MU_LOCK = threading.Lock()             # matchups/standings/tournament.json
+    _gate = {"next": 0.0}
+    _gate_lock = threading.Lock()
+
+    def _stagger():
+        # successive parallel STARTS at least stagger_s apart, so concurrent
+        # games don't slam the model APIs in the same instant
+        with _gate_lock:
+            now = time.monotonic()
+            wait = max(0.0, _gate["next"] - now)
+            _gate["next"] = max(now, _gate["next"]) + stag
+        if wait:
+            time.sleep(wait)
+
+    def play_matchup(group, rnd, midx, fresh=False):
         # group entries are operator-supplied labels — strip anything that
         # could escape outdir (a label of ../../tmp/x otherwise wrote there)
         import re as _re
         tag = _re.sub(r"[^A-Za-z0-9_-]", "", "_v_".join(group))[:60]
         mdir = os.path.join(outdir, f"m{midx:02d}_" + tag)
-        if t["memo_policy"] == "per_series":
-            for n in group:
-                if isinstance(bots[n], LLMAdmiral):
-                    bots[n].notes = ""
-        named = [(n, bots[n]) for n in group]
+        if fresh:
+            mbots = {n: make_bot(spec_of[n], adm) for n in group}
+        else:
+            mbots = bots
+            if t["memo_policy"] == "per_series":
+                for n in group:
+                    if isinstance(bots[n], LLMAdmiral):
+                        bots[n].notes = ""
+        named = [(n, mbots[n]) for n in group]
         ser = dict(ser_defaults)
         # run_series now debriefs after EVERY game incl. the last, so persistent
         # memo carry-over needs no extra pass — notes simply survive on the bot
         rows = run_series(named, seed0 + midx * 1000, scenario, ser, mdir,
-                          prov=dict(prov or {}, matchup=os.path.basename(mdir)))
+                          prov=dict(prov or {}, matchup=os.path.basename(mdir)),
+                          live=not fresh)
         w = matchup_winner(rows, group)
-        for n in group:
-            standings[n]["games"] += len(rows)
-            standings[n]["wins"] += sum(1 for r in rows if r["winner"] == n)
-            standings[n]["score"] += sum(r["scores"].get(n, 0) for r in rows)
-        matchups.append({"round": rnd, "players": group, "dir": os.path.basename(mdir),
-                         "games": [dict(game=r["game"], seed=r["seed"],
-                                        file=os.path.relpath(r["file"], outdir),
-                                        scores=r["scores"], winner=r["winner"])
-                                   for r in rows],
-                         "winner": w})
-        # incremental bracket: spectators (and the aux callback stream) follow the
-        # tournament as it runs, not only after the last matchup
-        with open(os.path.join(outdir, "tournament.json"), "w") as fh:
-            json.dump({"config": cfg, "matchups": matchups,
-                       "standings": standings, "partial": True}, fh, indent=1)
+        with MU_LOCK:
+            for n in group:
+                standings[n]["games"] += len(rows)
+                standings[n]["wins"] += sum(1 for r in rows if r["winner"] == n)
+                standings[n]["score"] += sum(r["scores"].get(n, 0) for r in rows)
+            matchups.append({"round": rnd, "players": group,
+                             "dir": os.path.basename(mdir),
+                             "games": [dict(game=r["game"], seed=r["seed"],
+                                            file=os.path.relpath(r["file"], outdir),
+                                            scores=r["scores"], winner=r["winner"])
+                                       for r in rows],
+                             "winner": w})
+            # incremental bracket: spectators (and the aux callback stream)
+            # follow the tournament as it runs, not just after the last matchup
+            with open(os.path.join(outdir, "tournament.json"), "w") as fh:
+                json.dump({"config": cfg, "matchups": matchups,
+                           "standings": standings, "partial": True}, fh, indent=1)
         return w
+
+    def play_round(groups, rnd):
+        """One round's matchups — the sequential classic path, or a thread
+        pool of `parallel` workers with staggered starts. Returns winners in
+        group order (single_elim pairs the next round off this)."""
+        nonlocal midx
+        if par <= 1 or len(groups) <= 1:
+            out = []
+            for g in groups:
+                midx += 1
+                out.append(play_matchup(g, rnd, midx))
+            return out
+        import concurrent.futures as _cf
+
+        def _task(g, mi):
+            _stagger()
+            return play_matchup(g, rnd, mi, fresh=True)
+
+        with _cf.ThreadPoolExecutor(max_workers=par) as ex:
+            futs = []
+            for g in groups:
+                midx += 1
+                futs.append(ex.submit(_task, g, midx))
+            return [f.result() for f in futs]
 
     if rounds == "ELIM":
         alive = order
         rnd = 0
         while len(alive) > 1:
             rnd += 1
-            nxt = []
-            for i in range(0, len(alive), 2):
-                nxt.append(play_matchup([alive[i], alive[i + 1]], rnd))
-            alive = nxt
+            pairs = [[alive[i], alive[i + 1]] for i in range(0, len(alive), 2)]
+            alive = play_round(pairs, rnd)   # round barrier: winners pair next
         champion = alive[0]
     else:
         if not any(groups for groups in rounds):
@@ -489,8 +554,7 @@ def run_tournament(cfg, adm, scenario, outdir, prov=None):
                 f"tournament shape yields ZERO matchups ({len(names)} "
                 f"participants, {ppm} per match) — fix players_per_match")
         for rnd, groups in enumerate(rounds, 1):
-            for g in groups:
-                play_matchup(g, rnd)
+            play_round(groups, rnd)
         played = [n for n in names if standings[n]["games"] > 0]
         if not played:
             raise SystemExit("no games were played — refusing to name a champion")

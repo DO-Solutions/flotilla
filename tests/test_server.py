@@ -254,6 +254,25 @@ ok(st == 200 and "trade-first" not in r, "empty text deletes the prompt")
 st, r = req("/api/prompts", {"name": "", "text": "x"})
 ok(st == 400, "unnamed prompt rejected")
 
+# ships: the Configure designer's store — save, list-fresh, delete, validate
+st, r = req("/api/ships")
+ok(st == 200 and set(r["builtin"]) == {"trawler", "raider", "frigate", "scout"}
+   and r["saved"] == {}, "ships endpoint lists the built-ins")
+st, r = req("/api/ships", {"name": "gunboat", "stats":
+                           {"speed": 2, "hold": 1, "guns": 5, "armor": 2,
+                            "hull": 1, "lookout": 1}})
+ok(st == 200 and r["saved"].get("gunboat", {}).get("guns") == 5, "ship saved")
+st, r = req("/api/ships")
+ok(st == 200 and "gunboat" in r["saved"], "saved ship listed on a fresh read")
+st, r = req("/api/ships", {"name": "trawler", "stats":
+                           {"speed": 1, "hold": 1, "guns": 1, "armor": 1,
+                            "hull": 1, "lookout": 1}})
+ok(st == 400, "a built-in class name is rejected")
+st, r = req("/api/ships", {"name": "bad", "stats": {"speed": 0}})
+ok(st == 400, "sub-1 stats are rejected")
+st, r = req("/api/ships", {"name": "gunboat", "delete": True})
+ok(st == 200 and "gunboat" not in r["saved"], "ship deleted")
+
 # showcase: unconfigured 400 -> config roundtrip -> graceful upload failure
 st, r = req("/api/showcase", {"series": "test-series"})
 ok(st == 400 and "not configured" in r["error"], "showcase unconfigured -> 400")

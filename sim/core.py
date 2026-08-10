@@ -188,7 +188,7 @@ class Node:
 DEFAULT_SCENARIO = dict(
     win="timed_score",       # timed_score (cargo+kills) | territory (control points)
                              # | domination (last admiral standing, no clock)
-    regions=16,              # territory mode: number of control regions
+    territories=16,          # territory mode: number of control territories
     max_ticks=MAX_TICKS,
     description="Timed match: score = cargo hauled to port + 8/enemy ship sunk + "
                 "150/flagship destroyed. Highest score at the bell wins; "
@@ -224,18 +224,19 @@ class Engine:
                     "outbuild, and destroy every enemy flagship.")
             elif c["win"] == "territory":
                 c["description"] = (
-                    "TERRITORY match: the sea is split into named regions. Hold a region "
-                    "by being the only fleet with ships in it; the holder keeps it until "
-                    "ALL its ships leave or sink while a rival's ship remains. "
-                    + (f"CAPTURING takes {c['region_capture_ticks'] / 10:g}s of SOLE "
+                    "TERRITORY match: the sea is split into named territories. Hold a "
+                    "territory by being the only fleet with ships in it; the holder "
+                    "keeps it until ALL its ships leave or sink while a rival's ship "
+                    "remains. "
+                    + (f"CAPTURING takes {c['territory_capture_ticks'] / 10:g}s of SOLE "
                        f"possession: your clock only runs while no enemy ship (the "
-                       f"holder included) stands in the region — clear the sea first. "
+                       f"holder included) stands in the territory — clear the sea first. "
                        f"An enemy entering PAUSES your progress where it is; progress "
-                       f"only resets if ALL your ships leave the region. Ship counts "
+                       f"only resets if ALL your ships leave the territory. Ship counts "
                        f"never matter (state.regions shows contested_by + capture_pct). "
-                       if c.get("region_capture_ticks", 0) > 0 else "")
+                       if c.get("territory_capture_ticks", 0) > 0 else "")
                     + "Score = +1 "
-                    f"per held region per {c['territory_tick'] / 10:g}s. Cargo funds "
+                    f"per held territory per {c['territory_tick'] / 10:g}s. Cargo funds "
                     "ships but does NOT score; kills do NOT score. Highest territory "
                     "score at the bell wins; losing your flagship still eliminates you.")
             else:
@@ -251,14 +252,14 @@ class Engine:
             if bad:
                 raise ValueError(f"roles_allowed contains unknown roles: {sorted(bad)}")
         self.shared_designs = {}           # operator classes, symmetric for all fleets
-        if c["ship_designs"]:
-            raw = json.loads(c["ship_designs"])          # invalid = fail loud
+        if c["default_designs"]:
+            raw = json.loads(c["default_designs"])       # invalid = fail loud
             if not isinstance(raw, dict):
-                raise ValueError("ship_designs must be a JSON object of classes")
+                raise ValueError("default_designs must be a JSON object of classes")
             for name, st in raw.items():
                 clean = self._clean_design(name, st)
                 if clean is None:
-                    raise ValueError(f"ship_designs[{name!r}] invalid: every stat "
+                    raise ValueError(f"default_designs[{name!r}] invalid: every stat "
                                      f">=1, total == {c['design_points']}")
                 self.shared_designs[name] = clean
         self.signal_presets = {}
@@ -408,7 +409,7 @@ class Engine:
                f"per {c['income_period'] / 10:g}s" if c["income_amount"] > 0 else "")
             + ".")
         self.scenario = dict(win=c["win"], description=c["description"],
-                             rules=c["rules"], regions=c["regions"],
+                             rules=c["rules"], regions=c["territories"],
                              max_ticks=self.max_ticks,
                              signal_mode=c["signal_mode"],
                              signal_flags=sorted(self.signal_presets)
@@ -581,13 +582,13 @@ class Engine:
         return f"{near.name} Sea {len(pts)}"
 
     def _gen_regions(self):
-        n = int(self.cfg['regions'])
-        if int(self.cfg.get('region_size', 0)) > 0:
+        n = int(self.cfg['territories'])
+        if int(self.cfg.get('territory_size', 0)) > 0:
             # average size in CELLS drives the count; the explicit count knob
-            # only applies when region_size is 0
+            # only applies when territory_size is 0
             n = max(4, min(48, round(self.W * self.H
-                                     / int(self.cfg['region_size']))))
-        sym = bool(self.cfg.get('region_symmetry', True))
+                                     / int(self.cfg['territory_size']))))
+        sym = bool(self.cfg.get('territory_symmetry', True))
         pts = []
         tries = 0
         while len(pts) < n and tries < 500:
@@ -597,28 +598,36 @@ class Engine:
             if any(cheb(x, y, px, py) < 10 for px, py, _ in pts):
                 continue
             if sym:
-                # 180-degree symmetry (same scheme as the contested-center
-                # wrecks): each seed lands with its mirror, so no admiral's
-                # side of the map carves into systematically bigger regions
-                mx, my = self.W - 1 - x, self.H - 1 - y
-                if len(pts) == n - 1:
-                    # the single odd slot: prefer the self-symmetric center,
-                    # else place the roll alone — count beats perfection.
-                    # (Taking the center EARLY on any near-center roll broke
-                    # pair parity: 9 of the first 40 seeds shipped n-1
-                    # regions because the last slot could only re-offer the
-                    # already-occupied center.)
+                # 4-WAY symmetry (both axes, the fish-shoal scheme): every
+                # seed lands with its three mirrors, so every admiral's CORNER
+                # of the map carves into the same territory layout. (180°
+                # pairs still favored the two fleets whose harbors sat on the
+                # pair axis in 3-4 player games.)
+                quad = [(x, y), (self.W - 1 - x, y),
+                        (x, self.H - 1 - y), (self.W - 1 - x, self.H - 1 - y)]
+                if len(pts) >= n - 3:
+                    # fewer than 4 slots left: prefer the self-symmetric
+                    # center for ONE, then let the relaxed fill below finish —
+                    # count beats perfection (the parity lesson from the
+                    # 180° version: 9 of 40 seeds shipped n-1 regions)
                     x2, y2 = self.W // 2, self.H // 2
                     if not any(cheb(x2, y2, px, py) < 6 for px, py, _ in pts):
-                        x, y = x2, y2
-                    pts.append((x, y, self._name_region(x, y, pts)))
+                        pts.append((x2, y2, self._name_region(x2, y2, pts)))
+                    break
+                # the set must be self-spaced AND clear of everything placed
+                ok = True
+                for i, (ax, ay) in enumerate(quad):
+                    if any(cheb(ax, ay, bx, by) < 10
+                           for bx, by in quad[i + 1:]):
+                        ok = False
+                        break
+                    if any(cheb(ax, ay, px, py) < 10 for px, py, _ in pts):
+                        ok = False
+                        break
+                if not ok:
                     continue
-                if cheb(x, y, mx, my) < 10:
-                    continue        # its mirror would collide with it: reroll
-                if any(cheb(mx, my, px, py) < 10 for px, py, _ in pts):
-                    continue
-                pts.append((x, y, self._name_region(x, y, pts)))
-                pts.append((mx, my, self._name_region(mx, my, pts)))
+                for ax, ay in quad:
+                    pts.append((ax, ay, self._name_region(ax, ay, pts)))
                 continue
             pts.append((x, y, self._name_region(x, y, pts)))
         while len(pts) < n and tries < 800:
@@ -636,18 +645,73 @@ class Engine:
                                  (cheb(cx, cy, r["x"], r["y"]), r["id"]))["id"]
                              for cy in range(self.H)] for cx in range(self.W)]
 
-    def _territory_tick(self):
+    def _presence(self):
         present = {r["id"]: {} for r in self.regions}
         for s in self.ships.values():
             rid = self._cellregion[s.x][s.y]
             present[rid][s.fleet] = present[rid].get(s.fleet, 0) + 1
+        return present
+
+    def _capture_tick(self):
+        """Timed captures (2026-08-09 rules): a capture PROGRESSES only in
+        SOLE possession — no ship of any hostile fleet (the owner included)
+        may stand in the territory. A hostile arriving PAUSES the clock where
+        it is; the claim only LAPSES (progress zeroed, territory kept by its
+        owner) when every capturing ship leaves. Ship counts never matter —
+        you clear the sea, then you hold it.
+
+        Runs EVERY tick, +1 per tick: capture_ticks means exactly what it
+        says, and the viewer's pie fills smoothly. (When this only ran on the
+        scoring cadence, a 50-tick capture on the 50-tick default cadence
+        jumped 0→done in one step — the pie was born full.)"""
+        cap = self.cfg["territory_capture_ticks"]
+        present = self._presence()
         for r in self.regions:
             rid = r["id"]
             owner = self.region_owner[rid]
             occ = present[rid]
-            cap = self.cfg.get("region_capture_ticks", 0)
             took = None
+            hostile_here = lambda f: any(
+                c > 0 and g != f and self._hostile(g, f)
+                for g, c in occ.items())
+            c2 = self._contest.get(rid)
+            if c2 and occ.get(c2[0], 0) <= 0:
+                self._contest.pop(rid, None)        # claimant left: lapses
+                c2 = None
+            if c2:
+                if not hostile_here(c2[0]):
+                    c2[1] += 1
+                    if c2[1] >= cap:
+                        took = c2[0]
+                # else: an enemy is in the territory — progress holds, paused
+            elif not (owner is not None and occ.get(owner, 0) > 0):
+                # no capture underway and the holder is absent: a hostile
+                # fleet alone in the territory starts the clock
+                cands = sorted(
+                    f for f, c in occ.items()
+                    if c > 0 and f != owner
+                    and (owner is None or self._hostile(f, owner))
+                    and not hostile_here(f))
+                if cands:
+                    self._contest[rid] = [cands[0], 1]
+            if took is not None:
+                self._contest.pop(rid, None)
+                self.region_owner[rid] = took
+                self._ev("region", region=rid, name=r["name"], fleet=took,
+                         prev=owner)
+
+    def _territory_tick(self):
+        """The scoring cadence (every territory_tick ticks): +1 point per held
+        territory — plus the legacy INSTANT-flip rules when capture_ticks=0
+        (timed captures live in _capture_tick, which runs every tick)."""
+        cap = self.cfg.get("territory_capture_ticks", 0)
+        present = self._presence() if cap <= 0 else None
+        for r in self.regions:
+            rid = r["id"]
+            owner = self.region_owner[rid]
             if cap <= 0:
+                occ = present[rid]
+                took = None
                 # legacy instant flips: holder on station keeps it, else the
                 # clear strongest hostile presence takes it (pre-timer rules)
                 if owner is not None and occ.get(owner, 0) > 0:
@@ -661,48 +725,10 @@ class Engine:
                         best = sorted(f for f, c in rivals.items() if c == top)
                         if len(best) == 1:
                             took = best[0]
-            else:
-                # timed captures (2026-08-09 rules): a capture PROGRESSES only
-                # in SOLE possession — no ship of any hostile fleet (the owner
-                # included) may stand in the region. A hostile arriving PAUSES
-                # the clock where it is; the claim only LAPSES (progress zeroed,
-                # region kept by its owner) when every capturing ship leaves.
-                # Ship counts never matter — you clear the sea, then you hold it.
-                hostile_here = lambda f: any(
-                    c > 0 and g != f and self._hostile(g, f)
-                    for g, c in occ.items())
-                # the clock advances in TICKS (matching the knob's unit and
-                # the seconds shown to admirals) — this evaluation runs only
-                # every territory_tick ticks, so each call credits that many.
-                # (Counting 1 per CALL made captures 50× slower than
-                # documented: a default territory game ended 0-0 with every
-                # region unowned.)
-                step = self.cfg["territory_tick"]
-                c2 = self._contest.get(rid)
-                if c2 and occ.get(c2[0], 0) <= 0:
-                    self._contest.pop(rid, None)        # claimant left: lapses
-                    c2 = None
-                if c2:
-                    if not hostile_here(c2[0]):
-                        c2[1] += step
-                        if c2[1] >= cap:
-                            took = c2[0]
-                    # else: an enemy is in the region — progress holds, paused
-                elif not (owner is not None and occ.get(owner, 0) > 0):
-                    # no capture underway and the holder is absent: a hostile
-                    # fleet alone in the region starts the clock
-                    cands = sorted(
-                        f for f, c in occ.items()
-                        if c > 0 and f != owner
-                        and (owner is None or self._hostile(f, owner))
-                        and not hostile_here(f))
-                    if cands:
-                        self._contest[rid] = [cands[0], step]
-            if took is not None:
-                self._contest.pop(rid, None)
-                self.region_owner[rid] = took
-                self._ev("region", region=rid, name=r["name"], fleet=took,
-                         prev=owner)
+                if took is not None:
+                    self.region_owner[rid] = took
+                    self._ev("region", region=rid, name=r["name"], fleet=took,
+                             prev=owner)
             owner = self.region_owner[rid]
             if owner is not None and self.fleets[owner].alive:
                 self.fleets[owner].territory += 1
@@ -755,7 +781,7 @@ class Engine:
                        if self.region_owner[r["id"]] is not None else -1]
                       + (lambda c2: [c2[0], min(99, (c2[1] * 100)
                                                 // max(1, self.cfg.get(
-                                                    "region_capture_ticks", 1)))]
+                                                    "territory_capture_ticks", 1)))]
                          if c2 else [])(self._contest.get(r["id"]))
                       for r in self.regions]} if self.regions else {}),
         })
@@ -816,7 +842,7 @@ class Engine:
                                 self.fleets[self._contest[r["id"]][0]].name,
                                 "capture_pct": min(99, self._contest[r["id"]][1]
                                 * 100 // max(1, self.cfg.get(
-                                    "region_capture_ticks", 1)))}
+                                    "territory_capture_ticks", 1)))}
                                if r["id"] in self._contest else {}))
                        for r in self.regions] if self.regions else None
         out = dict(
@@ -2374,8 +2400,10 @@ class Engine:
                         g._bel_v = getattr(g, "_bel_v", 0) + 1
                 self._ev("flag_sunk", fleet=f.id,
                          by=best.fleet if best is not None else None)
+        if self.regions and self.cfg.get("territory_capture_ticks", 0) > 0:
+            self._capture_tick()               # per-tick capture clocks
         if self.regions and t % self.cfg['territory_tick'] == 0:
-            self._territory_tick()
+            self._territory_tick()             # scoring (and legacy flips)
         # node regen
         for n in self.nodes.values():
             if n.kind == "fish" and n.remaining < n.cap:

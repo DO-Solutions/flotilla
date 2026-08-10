@@ -74,7 +74,39 @@
   .tile h3 { color:var(--accent); font-size:13px; margin-bottom:8px;
              text-transform:uppercase; letter-spacing:1px; }
   .tile label { display:flex; justify-content:space-between; align-items:center;
-                gap:8px; font-size:12px; padding:3px 0; }
+                gap:8px; font-size:12px; padding:3px 6px; margin:0 -6px;
+                border-radius:6px; }
+  /* subtle zebra over the VISIBLE rows (JS restripes on show/hide) so long
+     tiles don't read as one unbroken block of text */
+  .tile label.odd { background:#121f38; }
+  /* the knob name + its ⓘ stay glued on ONE line — the icon wrapping under
+     the text made rows read as two items */
+  .tile label > span:first-child { white-space:nowrap; display:inline-flex;
+                                   align-items:center; min-width:0; }
+  .tile label.hiddenknob { display:none; }
+  /* ship roster (default_designs) */
+  .shiprow { display:flex; flex-wrap:wrap; gap:7px; margin:5px 0 6px; }
+  .shiptile { position:relative; width:64px; height:44px; background:#0a1b33;
+              border:1px solid var(--line); border-radius:8px; display:flex;
+              align-items:center; justify-content:center; cursor:help; }
+  .shiptile.extra { border-color:var(--accent); }
+  .shiptile.badpts { border-color:#fbbf24; }
+  .shiptile .rm { position:absolute; top:-7px; right:-7px; width:16px;
+                  height:16px; line-height:13px; text-align:center;
+                  background:#16223c; border:1px solid var(--line);
+                  border-radius:50%; color:#ff6b6b; font-size:10px;
+                  cursor:pointer; }
+  .designer { border:1px dashed var(--line); border-radius:8px; padding:8px;
+              margin-top:6px; }
+  .designer .strow { display:flex; justify-content:space-between;
+                     align-items:center; padding:2px 0; font-size:12px; }
+  .stepbtn { width:20px; height:20px; line-height:17px; text-align:center;
+             background:#16223c; border:1px solid var(--line); border-radius:5px;
+             cursor:pointer; user-select:none; display:inline-block;
+             font-size:13px; }
+  .stepbtn.dis { opacity:.35; cursor:default; }
+  .rolegrid { display:flex; flex-wrap:wrap; gap:2px 12px; margin:3px 0 5px; }
+  .rolegrid label { padding:1px 0; margin:0; }
   .pname { width:150px; background:transparent; border:none; border-bottom:1px dashed var(--line);
            border-radius:0; color:var(--accent); font-size:13px; text-transform:uppercase;
            letter-spacing:1px; padding:0 0 2px; }
@@ -218,7 +250,10 @@
     single self-contained HTML file you can send to anyone — it works offline,
     no server needed. <b>🌐</b> (when publishing is configured) uploads that
     same file to a public bucket and hands you a link anyone can open in a
-    browser — no login, no download. <b>📦 Archive</b> hides a series from the
+    browser — no login, no download; once a link exists the button becomes
+    <b>📋</b> (copy it to the clipboard) plus a yellow broken-link button that
+    retires the link — the URL stops working, and publishing again mints the
+    same address. <b>📦 Archive</b> hides a series from the
     list without touching its data — tick <i>show archived</i> at the top right
     to see archived series (dimmed) and <b>📤 Unarchive</b> them. <b>🗑</b>
     deletes a series from the library after a confirmation — that one is
@@ -540,6 +575,56 @@ function gameRows(s, liveJob, byFile) {
   return html + `</tbody></table>`;
 }
 
+// ---- public links: create → copy + retire, keyed on identity ----
+// mirror of the server's _san(), so the dashboard can predict a row's
+// showcase identity (showcase/<ident>.html) and know whether a link exists
+function sanName(n) {
+  return String(n).replace(/[^a-zA-Z0-9 _.-]/g, "").trim()
+    .replace(/ +/g, "-").replace(/^\.+/, "").slice(0, 60);
+}
+function pubIdent(d) {
+  if (d.series) return "series-" + sanName(d.series);
+  const base = String(d.match || "").split("/").pop().replace(/\.[^.]*$/, "");
+  return "match-" + sanName(base);
+}
+let PUBLINKS = {};                       // ident -> public url
+async function refreshPubLinks() {
+  try {
+    const d = await (await fetch("api/showcase")).json();
+    PUBLINKS = {};
+    for (const e2 of d.published || []) {
+      const id = e2.ident || (String(e2.url || "").match(/showcase\/(.+)\.html$/) || [])[1];
+      if (id) PUBLINKS[id] = e2.url;
+    }
+  } catch {}
+}
+// wireframe broken-link icon in a warm tint: removes ACCESS, destroys nothing
+// (re-publishing mints the very same URL)
+const ICO_UNLINK = '<svg width="13" height="13" viewBox="0 0 16 16" fill="none" ' +
+  'stroke="#fbbf24" stroke-width="1.6" stroke-linecap="round">' +
+  '<path d="M6.5 9.5l3-3"/><path d="M8.5 4.5l1.2-1.2a2.4 2.4 0 0 1 3.4 3.4L11.9 7.9"/>' +
+  '<path d="M7.5 11.5l-1.2 1.2a2.4 2.4 0 0 1-3.4-3.4L4.1 8.1"/>' +
+  '<path d="M12.5 12.5l2 2M2.5 2.5l-1-1" stroke-width="1.2"/></svg>';
+function pubBtns(d, dataAttr) {
+  if (!SHOWCASE) return "";
+  const url = PUBLINKS[pubIdent(d)];
+  if (!url) {
+    return `<a class="btn btn-dl shpub" href="#" ${dataAttr} ` +
+      `title="publish a public link — anyone can watch, no login">🌐</a>`;
+  }
+  return `<a class="btn btn-dl shcopy" href="#" data-url="${esc(url)}" ` +
+    `title="copy the public link">📋</a>` +
+    `<a class="btn btn-dl shdel" href="#" ${dataAttr} ` +
+    `title="delete the public link — the URL stops working (publishing again ` +
+    `mints the same address)">${ICO_UNLINK}</a>`;
+}
+function flashCopied(url) {
+  const b = document.querySelector(`.shcopy[data-url="${CSS.escape(url)}"]`);
+  if (!b) return;
+  b.textContent = "copied ✓";
+  setTimeout(() => { b.textContent = "📋"; }, 1600);
+}
+
 // icon-only buttons: solid archive box (lid + slot) and box-with-up-arrow —
 // inline SVGs take the button's own color (no colored-emoji archive)
 const ICO_ARCH = '<svg width="13" height="13" viewBox="0 0 16 16" ' +
@@ -625,8 +710,7 @@ function renderSeriesTable() {
         `<td><div class="rowbtns"><a class="btn btn-dl dlh" href="#" data-file="${esc(m.file)}" ` +
         `data-name="${esc(m.display_name || m.type + "-s" + m.seed)}" ` +
         `title="download a self-contained page of this match">⬇</a>` +
-        (SHOWCASE ? `<a class="btn btn-dl shpub" href="#" data-match="${esc(m.file)}" ` +
-          `title="publish a public link">🌐</a>` : "") +
+        pubBtns({ match: m.file }, `data-match="${esc(m.file)}"`) +
         archBtns(`data-match="${esc(base)}"`, m.archived) +
         (SERVER ? `<a class="btn btn-dl sdel" href="#" style="color:#ff5d5d" ` +
           `data-match="${esc(base)}" data-label="${esc(matchLabel(m))}" ` +
@@ -663,8 +747,7 @@ function renderSeriesTable() {
       `<td><div class="rowbtns">` +
       `<a class="btn btn-dl dls" href="#" data-series="${esc(s.name)}" ` +
       `title="download a self-contained page of this series">⬇</a>` +
-      (SHOWCASE ? `<a class="btn btn-dl shpub" href="#" data-series="${esc(s.name)}" ` +
-        `title="publish a spoiler-free public link — no login needed to view">🌐</a>` : "") +
+      pubBtns({ series: s.name }, `data-series="${esc(s.name)}"`) +
       archBtns(`data-series="${esc(s.name)}"`, s.archived) +
       (SERVER ? (liveJob
         ? `<a class="btn btn-dl scancel" href="#" style="color:#ff5d5d" ` +
@@ -821,10 +904,38 @@ document.addEventListener("click", async e => {
     try {
       const r = await (await fetch("api/showcase", {
         method: "POST", body: JSON.stringify(body) })).json();
-      t.textContent = "🌐";
-      if (r.ok) window.prompt("Public link (copy it — anyone can watch, no login):", r.url);
-      else window.alert("publish failed: " + r.error);
+      if (!r.ok) { t.textContent = "🌐"; window.alert("publish failed: " + r.error); return; }
+      // published: the row flips to 📋 copy + retire IN PLACE (no reload),
+      // and the fresh link is already on the clipboard
+      PUBLINKS[r.ident || pubIdent(body)] = r.url;
+      renderSeriesTable();
+      try { await navigator.clipboard.writeText(r.url); flashCopied(r.url); }
+      catch (err2) { window.prompt("Public link (copy it):", r.url); }
     } catch (err) { t.textContent = "🌐"; window.alert("publish failed: " + err); }
+    return;
+  }
+  if (t.classList.contains("shcopy")) {
+    e.preventDefault();
+    try {
+      await navigator.clipboard.writeText(t.dataset.url);
+      flashCopied(t.dataset.url);
+    } catch (err) { window.prompt("Public link (copy it):", t.dataset.url); }
+    return;
+  }
+  if (t.classList.contains("shdel")) {
+    e.preventDefault();
+    if (!window.confirm("Delete this public link?\nAnyone holding the URL " +
+        "loses access. Publishing again later mints the same address.")) return;
+    const body = t.dataset.series ? { series: t.dataset.series }
+                                  : { match: t.dataset.match };
+    try {
+      const r = await (await fetch("api/showcase-delete", {
+        method: "POST", body: JSON.stringify(body) })).json();
+      if (!r.ok) { window.alert("delete failed: " + r.error); return; }
+      delete PUBLINKS[r.ident || pubIdent(body)];
+      renderSeriesTable();                 // 🌐 comes back, no reload
+    } catch (err) { window.alert("delete failed: " + err); }
+    return;
   }
   if (t.classList && (t.classList.contains("jpause") || t.classList.contains("jresume"))) {
     e.preventDefault();
@@ -1231,6 +1342,16 @@ function renderConfigForm() {
           `</select>`;
       } else if (s.t === "bool") {
         input = `<input type="checkbox" id="${id}" data-sec="${sec}" data-k="${k}" ${s.d ? "checked" : ""}>`;
+      } else if (k === "default_designs") {
+        // the ship ROSTER: built-ins as locked tiles + saved ships added from
+        // a dropdown + an expandable designer. The hidden input carries the
+        // JSON the schema expects — the rest of the form machinery (diff,
+        // presets, buildConfig) reads it like any text knob.
+        input = `<span style="display:block;flex-basis:100%" id="shipwidget"></span>` +
+                `<input type="hidden" id="${id}" data-sec="${sec}" data-k="${k}" value="">`;
+      } else if (k === "roles_allowed") {
+        input = `<span style="display:block;flex-basis:100%" id="rolewidget"></span>` +
+                `<input type="hidden" id="${id}" data-sec="${sec}" data-k="${k}" value="">`;
       } else if (k === "base_prompt") {
         // the one long-text knob: a real editor on its OWN full-width row
         // (inside the flex label it was squeezed to half the tile), themed
@@ -1251,16 +1372,368 @@ function renderConfigForm() {
       }
       // the ⓘ popover text IS the schema doc — identical bytes to what an agent
       // reads in config-schema.json
+      const wide = ["base_prompt", "default_designs", "roles_allowed"].includes(k);
       tile.insertAdjacentHTML("beforeend",
-        `<label${k === "base_prompt" ? ' style="flex-wrap:wrap"' : ""}><span>${k}` +
+        `<label${wide ? ' style="flex-wrap:wrap"' : ""}><span>${k}` +
         `<span class="info">i<span class="pop">${(s.doc || "").replace(/</g, "&lt;")}` +
         `${"lo" in s ? `<br><span class="dim">range ${s.lo}–${s.hi} · default ${s.d}</span>` :
           `<br><span class="dim">default ${s.d}</span>`}</span></span></span>${input}</label>`);
     }
     holder.appendChild(tile);
   }
+  renderShipWidget();
+  syncShipInput();      // the rebuilt hidden input starts empty — restore it
+  renderRoleWidget();
+  applyShowIf();
   masonryLayout();
 }
+
+// ---- conditional knobs: schema `show_if` drives row visibility ----
+// a knob only matters when another knob has a given value (domination_cap in
+// domination games, the territory block in territory games, stagger_s when
+// parallel > 1, …). The hint ships in config-schema.json for agents too.
+let KNOB_SEC = {};                       // key -> section (built with CSCHEMA)
+function applyShowIf() {
+  if (!CSCHEMA) return;
+  for (const [sec, knobs] of Object.entries(CSCHEMA)) {
+    for (const [k, s] of Object.entries(knobs)) {
+      if (!s.show_if) continue;
+      const el = document.querySelector(`#cform [data-k="${k}"]`);
+      const row = el && el.closest("label");
+      if (!row) continue;
+      let show = true;
+      for (const [ck, cond] of Object.entries(s.show_if)) {
+        const v = effKnob(KNOB_SEC[ck] || sec, ck);
+        if (cond && typeof cond === "object" && "not" in cond) {
+          if (String(v) === String(cond.not)) show = false;
+        } else if (Array.isArray(cond)) {
+          if (!cond.map(String).includes(String(v))) show = false;
+        } else if (String(v) !== String(cond)) show = false;
+      }
+      row.classList.toggle("hiddenknob", !show);
+    }
+  }
+  for (const tile of document.querySelectorAll("#cform .tile")) {
+    [...tile.querySelectorAll(":scope > label:not(.hiddenknob)")]
+      .forEach((el, i) => el.classList.toggle("odd", i % 2 === 1));
+  }
+}
+// mode-dependent DISPLAYED defaults, and refit tracking build_ticks: the form
+// shows the value the engine will actually use, never a sentinel
+function syncLinkedDefaults() {
+  const winEl = document.querySelector('#cform [data-k="win"]');
+  const fs = document.querySelector('#cform [data-k="flag_salvage"]');
+  if (winEl && fs && !fs.dataset.touched) {
+    // domination's engine default is 50 (an unset knob becomes 50 there) —
+    // show the truth; buildConfig always sends the value in domination
+    fs.value = winEl.value === "domination" ? 50 : CSCHEMA.scenario.flag_salvage.d;
+  }
+}
+document.addEventListener("input", e => onKnobEdit(e));
+document.addEventListener("change", e => onKnobEdit(e));
+function onKnobEdit(e) {
+  const el = e.target;
+  if (!el.dataset || !el.dataset.k || !el.closest("#cform")) return;
+  // any EVENTED edit marks the knob as the operator's — the programmatic
+  // syncs below (refit-follows-build, mode defaults) set .value silently
+  el.dataset.touched = "1";
+  if (el.dataset.k === "build_ticks") {
+    const rt = document.querySelector('#cform [data-k="refit_ticks"]');
+    if (rt && !rt.dataset.touched) rt.value = el.value;   // refit rides along
+  }
+  if (el.dataset.k === "win") syncLinkedDefaults();
+  if (["design_points", "flex_design", "design_points_max"]
+      .includes(el.dataset.k)) renderShipWidget();
+  applyShowIf();
+}
+
+// ---- the ship roster (default_designs) + designer ----
+let SHIPS = { builtin: {}, saved: {},
+              stats: ["speed", "hold", "guns", "armor", "hull", "lookout"] };
+let SELECTED_SHIPS = {};                 // name -> stats: EXTRA classes aboard
+let DESIGNER = null;                     // open designer state, or null
+async function refreshShips() {
+  // read fresh on every page load — a hand-edited ships.json shows up
+  // immediately, no restart
+  try {
+    const d = await (await fetch("api/ships")).json();
+    SHIPS.builtin = d.builtin || {};
+    SHIPS.saved = d.saved || {};
+    if (d.stats) SHIPS.stats = d.stats;
+  } catch {}
+  renderShipWidget();
+}
+function shipTotal(st) { return SHIPS.stats.reduce((a, k) => a + (+st[k] || 0), 0); }
+function designBudget() {
+  const flex = effKnob("scenario", "flex_design") === true;
+  return { flex,
+           cap: flex ? (parseInt(effKnob("scenario", "design_points_max")) || 24)
+                     : (parseInt(effKnob("scenario", "design_points")) || 12) };
+}
+function shipFits(st) {
+  const b = designBudget(), tot = shipTotal(st);
+  return b.flex ? tot >= 6 && tot <= b.cap : tot === b.cap;
+}
+function statLine(st) {
+  return SHIPS.stats.map(k => `${k} ${+st[k] || 0}`).join(" · ");
+}
+function syncShipInput() {
+  const inp = document.querySelector('#cform [data-k="default_designs"]');
+  if (!inp) return;
+  inp.value = Object.keys(SELECTED_SHIPS).length
+    ? JSON.stringify(SELECTED_SHIPS) : "";
+}
+function shipSelFromInput() {
+  const inp = document.querySelector('#cform [data-k="default_designs"]');
+  SELECTED_SHIPS = {};
+  try {
+    const d = JSON.parse(inp && inp.value || "{}");
+    if (d && typeof d === "object") {
+      for (const [n, st] of Object.entries(d)) {
+        if (st && typeof st === "object") SELECTED_SHIPS[n] = st;
+      }
+    }
+  } catch {}
+}
+// compact port of the viewer's silhouette rules: built-ins get their branded
+// shapes, everything else derives from stats (length~speed, beam~hold, studs
+// = guns, bright ring = armor, mast = lookout)
+function dashDrawShip(c2, preset, st, color) {
+  const cx = c2;
+  if (preset === "trawler") {
+    cx.strokeStyle = color + "cc"; cx.lineWidth = 1;
+    for (const dy of [-1, 1]) {
+      cx.beginPath(); cx.moveTo(-4.4, dy * 3); cx.lineTo(-12.8, dy * 6.4); cx.stroke();
+    }
+    cx.fillStyle = color;
+    cx.beginPath(); cx.moveTo(9, 0); cx.lineTo(4.5, 4.3); cx.lineTo(-7, 4.3);
+    cx.lineTo(-7, -4.3); cx.lineTo(4.5, -4.3); cx.closePath(); cx.fill();
+    cx.fillStyle = "#0b122088"; cx.fillRect(-6, -2.4, 3.6, 4.8);
+    return;
+  }
+  if (preset === "frigate") {
+    cx.fillStyle = color;
+    cx.beginPath(); cx.moveTo(9.5, 0); cx.lineTo(3, 4.2); cx.lineTo(-5, 4.2);
+    cx.lineTo(-6.5, 2.6); cx.lineTo(-6.5, -2.6); cx.lineTo(-5, -4.2);
+    cx.lineTo(3, -4.2); cx.closePath(); cx.fill();
+    cx.strokeStyle = "#ffffffdd"; cx.lineWidth = 1.6; cx.stroke(); cx.lineWidth = 1;
+    cx.fillStyle = "#ffffffcc";
+    for (const sy of [-1, 1]) {
+      cx.fillRect(-3, sy * 4.4 - .9, 2, 1.8);
+      cx.fillRect(0.5, sy * 4.4 - .9, 2, 1.8);
+    }
+    return;
+  }
+  if (preset === "raider") {
+    cx.fillStyle = color;
+    cx.beginPath(); cx.moveTo(8, 0); cx.lineTo(-5, 2.6); cx.lineTo(-3, 0);
+    cx.lineTo(-5, -2.6); cx.closePath(); cx.fill();
+    return;
+  }
+  if (preset === "scout" || !st) {
+    cx.fillStyle = color;
+    cx.beginPath(); cx.moveTo(6, 0); cx.lineTo(-4, 1.8); cx.lineTo(-4, -1.8);
+    cx.closePath(); cx.fill();
+    return;
+  }
+  const L = 4.5 + (+st.speed || 1) * 0.9, B = 1.6 + (+st.hold || 1) * 0.55;
+  cx.fillStyle = color;
+  cx.beginPath(); cx.moveTo(L, 0); cx.lineTo(L * 0.3, B);
+  cx.lineTo(-L * 0.8, B * 0.85); cx.lineTo(-L * 0.8, -B * 0.85);
+  cx.lineTo(L * 0.3, -B); cx.closePath(); cx.fill();
+  if ((+st.armor || 0) >= 3) {
+    cx.strokeStyle = "#ffffffdd"; cx.lineWidth = 1.6; cx.stroke(); cx.lineWidth = 1;
+  } else { cx.strokeStyle = "#ffffff55"; cx.stroke(); }
+  const guns = +st.guns || 0;
+  if (guns >= 2) {
+    const pairs = Math.min(5, Math.floor(guns / 2));
+    const fore = L * 0.28, aft = -L * 0.68;
+    cx.fillStyle = "#0b1220dd"; cx.strokeStyle = "#ffffffbb"; cx.lineWidth = 0.7;
+    for (let p2 = 0; p2 < pairs; p2++) {
+      const gx = pairs === 1 ? (fore + aft) / 2
+                             : fore + (aft - fore) * (p2 / (pairs - 1));
+      for (const sy of [-1, 1]) {
+        cx.fillRect(gx - 0.8, sy * (B * 0.85) - (sy < 0 ? 2.4 : 0), 1.6, 2.4);
+        cx.strokeRect(gx - 0.8, sy * (B * 0.85) - (sy < 0 ? 2.4 : 0), 1.6, 2.4);
+      }
+    }
+    if (guns % 2) { cx.fillRect(L * 0.55, 0.3, 2.6, 1.2); cx.strokeRect(L * 0.55, 0.3, 2.6, 1.2); }
+    cx.lineWidth = 1;
+  }
+  if ((+st.lookout || 0) >= 2) {
+    cx.strokeStyle = "#ffffffbb";
+    cx.beginPath(); cx.moveTo(-1, 0); cx.lineTo(-1, -(B + 2 + (+st.lookout || 0)));
+    cx.stroke();
+  }
+}
+function shipTileHtml(name, st, extra) {
+  const bad = extra && !shipFits(st);
+  const b = designBudget();
+  const title = extra
+    ? `${name} — ${statLine(st)} · ${shipTotal(st)} pts` +
+      (bad ? ` ⚠ this run's budget is ${b.flex ? "6–" + b.cap : b.cap} — ` +
+             `the launch will be rejected` : "")
+    : `${name} — built-in, always aboard · ${statLine(st)}`;
+  return `<span class="shiptile${extra ? " extra" : ""}${bad ? " badpts" : ""}" ` +
+    `title="${esc(title)}"><canvas width="56" height="36" ` +
+    `data-ship="${esc(name)}"></canvas>` +
+    (extra ? `<span class="rm" data-rm="${esc(name)}" title="remove ${esc(name)} ` +
+             `from this run">✕</span>` : "") + `</span>`;
+}
+function renderShipWidget() {
+  const box = $("shipwidget");
+  if (!box) return;
+  const b = designBudget();
+  const savedNames = Object.keys(SHIPS.saved).filter(n => !(n in SELECTED_SHIPS));
+  let h = `<div class="dim" style="font-size:11px">the four built-ins are always
+    aboard; add saved classes or design a new one (every fleet gets them)</div>`;
+  h += `<div class="shiprow">` +
+    Object.entries(SHIPS.builtin).map(([n, st]) => shipTileHtml(n, st, false)).join("") +
+    Object.entries(SELECTED_SHIPS).map(([n, st]) => shipTileHtml(n, st, true)).join("") +
+    `</div>`;
+  h += `<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">` +
+    `<select id="shipadd" style="max-width:170px">` +
+    `<option value="">＋ add a saved ship…</option>` +
+    savedNames.map(n =>
+      `<option value="${esc(n)}">${esc(n)} (${shipTotal(SHIPS.saved[n])} pts)</option>`).join("") +
+    Object.keys(SHIPS.builtin).map(n =>
+      `<option disabled>${esc(n)} — built-in, already aboard</option>`).join("") +
+    `</select>` +
+    `<a href="#" class="btn btn-dl" id="shipdesign">🛠 ${DESIGNER ? "close the designer" : "design a new ship"}</a></div>`;
+  if (DESIGNER) {
+    const tot = shipTotal(DESIGNER.stats);
+    const left = b.cap - tot;
+    const okname = /^[A-Za-z0-9_-]{1,24}$/.test(DESIGNER.name) &&
+      !(DESIGNER.name in SHIPS.builtin);
+    const fits = b.flex ? tot >= 6 && tot <= b.cap : tot === b.cap;
+    h += `<div class="designer">` +
+      `<div style="display:flex;gap:8px;align-items:center;margin-bottom:4px">` +
+      `<input class="sname" id="shipname" style="width:130px" maxlength="24" ` +
+      `placeholder="ship name" value="${esc(DESIGNER.name)}">` +
+      `<canvas width="56" height="36" id="designpreview"></canvas>` +
+      `<span class="dim">${tot} / ${b.cap} pts${b.flex ? " (flex: 6 min)" : ""}</span></div>` +
+      SHIPS.stats.map(k =>
+        `<div class="strow"><span>${k}</span><span>` +
+        `<span class="stepbtn${DESIGNER.stats[k] <= 1 ? " dis" : ""}" data-step="${k}|-1">−</span>` +
+        ` <b style="display:inline-block;width:18px;text-align:center">${DESIGNER.stats[k]}</b> ` +
+        `<span class="stepbtn${left <= 0 ? " dis" : ""}" data-step="${k}|1">＋</span>` +
+        `</span></div>`).join("") +
+      `<div style="display:flex;gap:8px;align-items:center;margin-top:6px">` +
+      `<a href="#" class="btn ${okname && fits ? "btn-watch" : "btn-dl"}" id="shipsave">💾 save ship</a>` +
+      `<span class="dim" id="shipmsg">${!okname ? "name: letters/digits/-/_ (not a built-in)"
+        : !fits ? (b.flex ? `total must be 6–${b.cap}` : `distribute all ${b.cap} points`)
+        : "saved ships appear in the dropdown for every run"}</span></div></div>`;
+  }
+  box.innerHTML = h;
+  for (const cv of box.querySelectorAll("canvas[data-ship]")) {
+    const n = cv.dataset.ship;
+    const st = SHIPS.builtin[n] || SELECTED_SHIPS[n] || SHIPS.saved[n];
+    const c2 = cv.getContext && cv.getContext("2d");
+    if (!c2) continue;
+    c2.setTransform(1, 0, 0, 1, 0, 0);
+    c2.clearRect(0, 0, cv.width, cv.height);
+    c2.translate(cv.width / 2, cv.height / 2);
+    c2.scale(1.5, 1.5);
+    dashDrawShip(c2, n in SHIPS.builtin ? n : "", st, "#7fb2ff");
+  }
+  const pv = box.querySelector("#designpreview");
+  const pvc = pv && DESIGNER && pv.getContext && pv.getContext("2d");
+  if (pvc) {
+    const c2 = pvc;
+    c2.setTransform(1, 0, 0, 1, 0, 0);
+    c2.clearRect(0, 0, pv.width, pv.height);
+    c2.translate(pv.width / 2, pv.height / 2);
+    c2.scale(1.5, 1.5);
+    dashDrawShip(c2, "", DESIGNER.stats, "#7fb2ff");
+  }
+}
+document.addEventListener("click", async e => {
+  const t = e.target;
+  if (t.closest && t.closest("#shipwidget")) {
+    const rm = t.closest(".rm");
+    if (rm) {
+      delete SELECTED_SHIPS[rm.dataset.rm];
+      syncShipInput(); renderShipWidget();
+      return;
+    }
+    const step = t.closest(".stepbtn");
+    if (step && DESIGNER && !step.classList.contains("dis")) {
+      const [k, d] = step.dataset.step.split("|");
+      DESIGNER.stats[k] = Math.max(1, DESIGNER.stats[k] + (+d));
+      renderShipWidget();
+      return;
+    }
+    if (t.id === "shipdesign" || t.closest("#shipdesign")) {
+      e.preventDefault();
+      DESIGNER = DESIGNER ? null
+        : { name: "", stats: Object.fromEntries(SHIPS.stats.map(k => [k, 1])) };
+      renderShipWidget();
+      return;
+    }
+    if (t.id === "shipsave" || t.closest("#shipsave")) {
+      e.preventDefault();
+      if (!DESIGNER) return;
+      const tot = shipTotal(DESIGNER.stats), b = designBudget();
+      const fits = b.flex ? tot >= 6 && tot <= b.cap : tot === b.cap;
+      if (!/^[A-Za-z0-9_-]{1,24}$/.test(DESIGNER.name) ||
+          DESIGNER.name in SHIPS.builtin || !fits) return;
+      try {
+        const r = await (await fetch("api/ships", { method: "POST",
+          body: JSON.stringify({ name: DESIGNER.name,
+                                 stats: DESIGNER.stats }) })).json();
+        if (!r.ok) { window.alert("save failed: " + r.error); return; }
+        SHIPS.builtin = r.builtin || SHIPS.builtin;
+        SHIPS.saved = r.saved || SHIPS.saved;
+        SELECTED_SHIPS[DESIGNER.name] = SHIPS.saved[DESIGNER.name];
+        DESIGNER = null;
+        syncShipInput(); renderShipWidget();
+      } catch (err) { window.alert("save failed: " + err); }
+      return;
+    }
+  }
+});
+document.addEventListener("input", e => {
+  if (e.target && e.target.id === "shipname" && DESIGNER) {
+    DESIGNER.name = e.target.value;
+    // no full re-render on each keystroke — just re-arm the save row
+    const ok = /^[A-Za-z0-9_-]{1,24}$/.test(DESIGNER.name) &&
+      !(DESIGNER.name in SHIPS.builtin);
+    const sv = $("shipsave");
+    if (sv) sv.className = "btn " + (ok ? "btn-watch" : "btn-dl");
+  }
+});
+document.addEventListener("change", e => {
+  if (e.target && e.target.id === "shipadd" && e.target.value) {
+    const n = e.target.value;
+    if (SHIPS.saved[n]) SELECTED_SHIPS[n] = SHIPS.saved[n];
+    syncShipInput(); renderShipWidget();
+  }
+});
+
+// ---- roles_allowed: a checkbox picker over the seven roles ----
+const ALL_ROLES = ["forage", "scout", "escort", "raid", "guard", "blockade",
+                   "assault"];
+function renderRoleWidget() {
+  const box = $("rolewidget");
+  if (!box) return;
+  const inp = document.querySelector('#cform [data-k="roles_allowed"]');
+  const cur = (inp && inp.value || "").split(",").map(s => s.trim())
+    .filter(Boolean);
+  const on = cur.length ? new Set(cur) : new Set(ALL_ROLES);
+  box.innerHTML = `<div class="rolegrid">` + ALL_ROLES.map(r =>
+    `<label><input type="checkbox" class="rolecb" value="${r}"` +
+    `${on.has(r) ? " checked" : ""}> ${r}</label>`).join("") + `</div>` +
+    `<div class="dim" style="font-size:11px">all checked = every role (the default)</div>`;
+}
+document.addEventListener("change", e => {
+  if (!e.target.classList || !e.target.classList.contains("rolecb")) return;
+  const inp = document.querySelector('#cform [data-k="roles_allowed"]');
+  if (!inp) return;
+  const on = [...document.querySelectorAll(".rolecb:checked")].map(c => c.value);
+  // every role (or none) = the empty-string default; anything else = the list
+  inp.value = on.length === 0 || on.length === ALL_ROLES.length
+    ? "" : on.join(",");
+});
 // pack the knob tiles into the shortest column (leftmost on ties) so the form
 // fills left-first at any width. Heights are estimated from row counts —
 // knob rows are uniform, so the estimate packs as well as measuring would
@@ -1368,29 +1841,43 @@ async function refreshPresets() {
   try { USER_PRESETS = await (await fetch("api/presets")).json(); } catch {}
   renderPresetOptions();
 }
+// renamed knobs: presets saved before 2026-08-10 carry the old names
+const KNOB_ALIAS = { regions: "territories", region_size: "territory_size",
+                     region_symmetry: "territory_symmetry",
+                     region_capture_ticks: "territory_capture_ticks",
+                     ship_designs: "default_designs" };
 function applyPreset(name) {
   const p = GAME_PRESETS[name] || USER_PRESETS[name];
   if (!p) return;
   renderConfigForm();                        // clean slate: defaults first
-  for (const [k, v] of Object.entries(p.knobs || {})) {
+  for (const [k0, v] of Object.entries(p.knobs || {})) {
+    const k = KNOB_ALIAS[k0] || k0;
     const el = document.querySelector(`#cform [data-k="${k}"]`);
     if (!el) continue;
     if (el.type === "checkbox") el.checked = !!v;
     else el.value = v;
+    el.dataset.touched = "1";     // a preset value must not be re-synced away
   }
   if (Array.isArray(p.players) && p.players.length) {
     PLAYERS.length = 0;
     for (const m of p.players) PLAYERS.push({ model: m });
     renderPlayers();
   }
+  shipSelFromInput();             // a preset may carry a default_designs JSON
+  renderShipWidget();
+  renderRoleWidget();
+  applyShowIf();
   $("cpresetdesc").textContent = p.desc || "";
   updateAuxHint();
   updateThinkWarn();
 }
 function currentKnobDiff() {
-  // every non-default form value, flat — the same diff buildConfig writes
+  // every non-default form value, flat — the same diff buildConfig writes.
+  // Rows hidden by show_if don't count: invisible = not part of this config.
   const out = {};
   for (const el of document.querySelectorAll("#cform [data-sec]")) {
+    const row = el.closest("label");
+    if (row && row.classList.contains("hiddenknob")) continue;
     const sec = el.dataset.sec, k = el.dataset.k, spec = CSCHEMA[sec][k];
     let v = el.type === "checkbox" ? el.checked :
             spec.t === "int" ? parseInt(el.value) :
@@ -1545,6 +2032,10 @@ function updateAuxHint() {
     const mt = sc.win === "domination" ? (sc.domination_cap || 18000)
                                        : (sc.max_ticks || 6000);
     load = ((sc.width || 90) * (sc.height || 60) * mt) / (90 * 60 * 6000);
+    if ($("cmode").value === "tournament") {
+      // parallel matchups each hold a live replay in RAM on the worker
+      load *= Math.max(1, parseInt(effKnob("tournament", "parallel")) || 1);
+    }
   } catch (e) { /* form mid-edit */ }
   const sug = load <= 1.5 ? "s-1vcpu-1gb" : load <= 4 ? "s-1vcpu-2gb"
             : load <= 10 ? "s-2vcpu-4gb" : "s-4vcpu-8gb";
@@ -1558,6 +2049,9 @@ function buildConfig() {
   const buckets = { scenario: {}, admirals: {}, series: {}, tournament: {} };
   const engineSecs = ["world", "economy", "combat", "pacing", "scenario"];
   for (const el of document.querySelectorAll("#cform [data-sec]")) {
+    // show_if-hidden rows are not part of this config, whatever they hold
+    const row = el.closest("label");
+    if (row && row.classList.contains("hiddenknob")) continue;
     const sec = el.dataset.sec, k = el.dataset.k, spec = CSCHEMA[sec][k];
     let v = el.type === "checkbox" ? el.checked :
             spec.t === "int" ? parseInt(el.value) :
@@ -1649,6 +2143,10 @@ document.addEventListener("click", e => {
 });
 fetch("config-schema.json").then(r => r.json()).then(s => {
   CSCHEMA = s;
+  KNOB_SEC = {};
+  for (const [sec, knobs] of Object.entries(s)) {
+    for (const k of Object.keys(knobs)) KNOB_SEC[k] = sec;
+  }
   renderConfigForm();
   estimateCost();
 }).catch(() => {});
@@ -1672,6 +2170,8 @@ fetch("api/health").then(r => r.json()).then(async h => {
     COST_MAX = +(MODELS.max_series_cost || 0);   // the server-tab ceiling
     estimateCost();                              // prices just arrived
     refreshPresets();
+    refreshShips();                              // saved ship classes (fresh read)
+    await refreshPubLinks();                     // which rows already have links
     // one-time migration: push anything stored browser-side to the server
     const ln = customNames();
     for (const [series, val] of Object.entries(ln)) {

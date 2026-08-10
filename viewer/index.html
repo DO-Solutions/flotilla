@@ -113,9 +113,21 @@
   .hull i { display: block; height: 100%; border-radius: 2px; background: var(--fc); }
   .dead { opacity: .45; }
   #inspector { background: var(--card); border: 1px solid var(--accent); border-radius: 10px;
-               padding: 8px 10px; font-size: 12px; display: none; }
+               padding: 8px 10px 8px 26px; font-size: 12px; display: none;
+               position: relative; }
   #inspector.on { display: block; }
   #inspector h3 { font-size: 13px; margin-bottom: 4px; }
+  /* soft close, upper-left — for anyone who'd rather not click empty sea */
+  #inspector .iclose { position: absolute; top: 6px; left: 7px; width: 15px;
+    height: 15px; line-height: 13px; text-align: center; color: var(--dim);
+    border: 1px solid var(--line); border-radius: 50%; font-size: 9px;
+    cursor: pointer; user-select: none; }
+  #inspector .iclose:hover { color: #fff; border-color: var(--accent); }
+  /* a MAP ENTITY mentioned by name in a feed: hover lights it up on the
+     chart, click selects it (same tile as clicking the map) */
+  .entlink { text-decoration: underline dotted; text-underline-offset: 2px;
+             cursor: pointer; }
+  .entlink:hover { color: #fff; background: #0069ff22; border-radius: 3px; }
   #inspector .stats { display: grid; grid-template-columns: repeat(3, 1fr); gap: 2px 10px;
                       color: var(--dim); margin: 4px 0; }
   #inspector .intent { color: #ffd76a; margin-top: 4px; }
@@ -167,6 +179,23 @@
                    border-radius: 10px; padding: 8px 10px; max-height: 560px;
                    overflow-y: auto; font-size: 12px; }
   #settingspanel h3 { font-size: 13px; color: var(--accent); margin: 6px 0 3px; }
+  /* the match configuration as collapsed-by-default sections */
+  #settingspanel details { border: 1px solid var(--line); border-radius: 8px;
+                           margin: 5px 0; padding: 0 8px; }
+  #settingspanel summary { cursor: pointer; color: var(--accent);
+    font-size: 12px; padding: 5px 0; text-transform: uppercase;
+    letter-spacing: 1px; user-select: none; }
+  #settingspanel summary .dim { text-transform: none; letter-spacing: 0; }
+  #settingspanel details[open] { padding-bottom: 5px; }
+  /* the fullscreen control lives ON the map: wakes on mouse movement, fades
+     away when the pointer rests (same manners as the coordinate readout) */
+  #fsmap { position: absolute; top: 10px; right: 10px; z-index: 4;
+           background: #0b1220cc; border: 1px solid var(--line);
+           border-radius: 8px; padding: 4px 10px; font-size: 15px;
+           opacity: 0; transition: opacity .35s; pointer-events: none; }
+  #fsmap.show { opacity: 1; pointer-events: auto; }
+  #fsmap:hover { border-color: var(--accent); }
+  body.fsmode #fsmap { display: none; }   /* the ✕ overlay owns fullscreen */
   #helppanel { background: var(--card); border: 1px solid var(--line);
     border-radius: 10px; padding: 10px 12px; font-size: 12px;
     max-height: 78vh; overflow-y: auto; }
@@ -315,7 +344,6 @@ at your own pace, then jump to the one being played now"></button>
       <option value="-1">👁 all-seeing</option>
     </select>
     <button id="spoil" title="spoiler shield: hides the winner, future timeline marks and future chart lines until playback reaches them — click to toggle">🙈 spoilers hidden</button>
-    <button id="fs" title="fullscreen — panel + bar become overlays (P and B toggle them, Esc exits)">⛶</button>
     <input id="scrub" type="range" min="0" max="0" value="0">
     <span id="clock">00:00</span>
     <button id="dl" title="download a self-contained page of this replay">⬇ replay</button>
@@ -339,6 +367,7 @@ at your own pace, then jump to the one being played now"></button>
         <div id="introhint">press ▶ Play (top bar) — click any ship or island to inspect it</div>
       </div>
     </div>
+    <button id="fsmap" title="fullscreen — panel + bar become overlays (P and B toggle them, Esc exits)">⛶</button>
     <canvas id="sea" width="1152" height="648"></canvas>
     <div id="becalmed" style="display:none;position:absolute;top:12px;left:50%;
          transform:translateX(-50%);background:#0a1b33ee;border:1px solid var(--line);
@@ -413,11 +442,15 @@ const S = { rp: null, fi: 0, playing: false, last: 0, acc: 0, sel: null,
             bundle: null, gameIdx: 0, spoiler: true, nodePos: {},
             cat: {}, sinkAt: {}, byShip: {}, frameMaps: [], screenPos: {},
             heading: {}, smooth: {}, tl: [], pmode: "fleet",
-            pov: -1, povCache: null };
-// spoiler shield + map names: sticky viewer preferences (spoilers default ON)
+            pov: -1, povCache: null,
+            flagPos: {}, regionPos: {},    // hit targets: flagships + territory seats
+            hoverEnt: null,                // entity under a feed-name hover
+            showGrid: false };
+// spoiler shield + map names + grid: sticky viewer preferences
 try {
   S.spoiler = localStorage.getItem("flotilla-spoiler") !== "off";
   S.showNames = localStorage.getItem("flotilla-names") === "on";
+  S.showGrid = localStorage.getItem("flotilla-grid") === "on";
 } catch (e) {}
 const $ = id => document.getElementById(id);
 const canvas = $("sea");
@@ -508,6 +541,18 @@ if (location.protocol.startsWith("http")) {
         SCHEMA_SECTIONS[k] = sec;
       }
     }
+    // replays stamped before the 2026-08-10 renames still carry the old
+    // knob names — point them at the new docs/sections
+    const LEGACY = { regions: "territories", region_size: "territory_size",
+                     region_symmetry: "territory_symmetry",
+                     region_capture_ticks: "territory_capture_ticks",
+                     ship_designs: "default_designs" };
+    for (const [oldK, newK] of Object.entries(LEGACY)) {
+      if (SCHEMA_DOCS[newK] && !SCHEMA_DOCS[oldK]) {
+        SCHEMA_DOCS[oldK] = SCHEMA_DOCS[newK];
+        SCHEMA_SECTIONS[oldK] = SCHEMA_SECTIONS[newK];
+      }
+    }
     if (S.rp) renderSettingsPanel();       // re-render with tooltips attached
   }).catch(() => {});
 }
@@ -550,52 +595,78 @@ function renderSettingsPanel() {
   const cfgp = $("settingspanel");
   const conf = rp.meta.config;
   const scn = rp.meta.scenario || {};
-  cfgp.innerHTML =
-    `<h3>view</h3><label style="display:block;margin-bottom:8px">` +
+  // the viewer's own toggles stay in the open — everything about the MATCH
+  // lives in collapsed sections below (click a section to unfold it)
+  let h =
+    `<h3>view</h3><label style="display:block;margin-bottom:6px">` +
     `<input type="checkbox" id="shownames"${S.showNames ? " checked" : ""}> ` +
     `show names on the map — islands, shoals, admirals, squadrons</label>` +
+    `<label style="display:block;margin-bottom:6px">` +
+    `<input type="checkbox" id="showgrid"${S.showGrid ? " checked" : ""}> ` +
+    `grid lines (faint cell grid, brighter every 8 cells)</label>` +
     `<label style="display:block;margin-bottom:8px">` +
     `<input type="checkbox" id="hidpi"${S.quality !== "standard" ? " checked" : ""}> ` +
     `sharp rendering (match display resolution — uncheck on slow machines)` +
-    `</label>` +
-    `<h3>scenario</h3><div class="desc">${(scn.description || "")
-      .replace(/</g, "&lt;")}</div>`;
+    `</label>`;
+  const sec = (title, body, note) =>
+    `<details><summary>${title}` +
+    (note ? ` <span class="dim">${note}</span>` : "") +
+    `</summary>${body}</details>`;
+  h += sec("scenario",
+    `<div class="desc">${(scn.description || "").replace(/</g, "&lt;")}</div>`);
   const prompted = rp.fleets.filter(f => f.prompt);
   if (prompted.length) {
     // custom prompts break the identical-framing symmetry — say so loudly
-    cfgp.innerHTML += `<h3>⚠ operator prompts in play</h3>` +
-      `<div class="desc">These admirals carry custom operator directives — this ` +
-      `match is NOT a level-framing model comparison.</div>` +
+    h += sec("⚠ operator prompts in play",
+      `<div class="desc">These admirals carry custom operator directives — ` +
+      `this match is NOT a level-framing model comparison.</div>` +
       prompted.map(f => `<div class="desc"><b style="color:${COLORS[f.id % COLORS.length]}">` +
-        `${f.name}</b>: ${f.prompt.replace(/</g, "&lt;")}</div>`).join("");
+        `${escHtml(f.name)}</b>: ${String(f.prompt).replace(/</g, "&lt;")}</div>`).join(""));
   }
   const run = rp.run || rp.meta.run;
   if (run && run.players) {
-    cfgp.innerHTML += `<h3>players — exact settings</h3>` +
-      run.players.map((p2, i) =>
-        `<div class="desc"><b style="color:${COLORS[i % COLORS.length]}">` +
-        `${p2.label}</b> — ${p2.scripted ? "scripted bot" : p2.model}` +
+    for (const [i, p2] of run.players.entries()) {
+      h += sec(`<b style="color:${COLORS[i % COLORS.length]}">` +
+        `${escHtml(p2.label)}</b>`,
+        `<div class="desc">${p2.scripted ? "scripted bot"
+          : escHtml(p2.model || "")}` +
         (p2.scripted ? "" :
          ` · temp ${p2.temperature} · max_tok ${p2.max_tokens} · ` +
          `timeout ${p2.timeout_s}s · think ${p2.think} · ` +
          `hist ${p2.history_chars} · memo ${p2.memo_chars}` +
-         (p2.base_prompt ? " · CUSTOM BASE PROMPT" : "")) + `</div>`).join("");
+         (p2.base_prompt ? " · CUSTOM BASE PROMPT" : "")) + `</div>`,
+        p2.scripted ? "bot" : "admiral");
+    }
   }
   if (conf) {
-    cfgp.innerHTML += `<h3>full configuration</h3>` +
-      Object.entries(conf).filter(([k]) => k !== "description").sort()
-        .map(([k, v]) => `<div class="kv"><span>${k}${knobInfo(k)}</span>` +
-                         `<span>${v}</span></div>`)
-        .join("") +
-      `<div class="desc" style="margin-top:6px">Every value above is the ` +
+    // the resolved config, grouped by its schema section — each group a
+    // collapsed sub-list, ⓘ docs on every knob the schema knows
+    const groups = {};
+    for (const [k, v] of Object.entries(conf)) {
+      if (k === "description") continue;
+      const g2 = SCHEMA_SECTIONS[k] || "other";
+      (groups[g2] = groups[g2] || []).push([k, v]);
+    }
+    const ORDER = ["scenario", "world", "economy", "combat", "pacing",
+                   "admirals", "series", "tournament", "other"];
+    for (const g2 of ORDER) {
+      if (!groups[g2]) continue;
+      h += sec(g2,
+        groups[g2].sort((a, b) => a[0] < b[0] ? -1 : 1).map(([k, v]) =>
+          `<div class="kv"><span>${k}${knobInfo(k)}</span>` +
+          `<span>${escHtml(String(v))}</span></div>`).join(""),
+        `${groups[g2].length} knobs`);
+    }
+    h += `<div class="desc" style="margin-top:6px">Every value above is the ` +
       `RESOLVED setting this match ran with — defaults included, so a ` +
       `different install reproduces it exactly.</div>` +
       `<a href="#" class="btn btn-dl" id="repro">⬇ reproduce.json — rerun ` +
       `this exact match</a>`;
   } else {
-    cfgp.innerHTML += `<div class="desc">(default settings — this replay predates ` +
+    h += `<div class="desc">(default settings — this replay predates ` +
       `config stamping)</div>`;
   }
+  cfgp.innerHTML = h;
 }
 
 function updateRealRate() {
@@ -826,6 +897,9 @@ function load(rp) {
   S.tl = rp.events.filter(e => ["sink", "flag_sunk", "signal", "region"].includes(e.k));
   S.cellRegion = null;
   S.borderPath = null;
+  S.gridPaths = null;                    // map size may differ game to game
+  S.hoverEnt = null;
+  S.flagPos = {}; S.regionPos = {};
   S.parley = rp.events.filter(e => e.k === "parley");
   // sink ripples index: draw() used to scan ALL events (~75k, 98% intents)
   // every animation frame to find ~77 sinks — measured 2.7ms/frame of the
@@ -890,7 +964,8 @@ function load(rp) {
   cards.innerHTML = "";
   // the fresh cards start EMPTY — stale content caches would skip the first
   // rebuild and leave blank panels on a same-content reload
-  S.stCache = {}; S.padCache = {}; S.xpCache = {};
+  S.stCache = {}; S.padCache = {}; S.xpCache = {}; S.thCache = {};
+  buildEntIndex();                       // names in feeds -> live map links
   for (const f of rp.fleets) {
     const d = document.createElement("div");
     d.className = "fleet"; d.id = "fl" + f.id;
@@ -1278,8 +1353,66 @@ function povHidden(sid, fleetId, fi) {
 }
 
 function updateInspector(fr) {
+  updateInspectorBody(fr);
+  // soft close in the upper-left — clicking empty sea still works, this is
+  // for anyone who'd rather not touch the map
+  const ibox = $("inspector");
+  if (ibox.className === "on" && !ibox.querySelector(".iclose")) {
+    ibox.insertAdjacentHTML("afterbegin",
+      `<span class="iclose" title="close" onclick="select(null)">✕</span>`);
+  }
+}
+function updateInspectorBody(fr) {
   const box = $("inspector");
   if (S.sel === null) { box.className = ""; return; }
+  if (S.sel.k === "f") {                 // flagship + harbor: the fleet's HQ tile
+    const fid = S.sel.id;
+    const fmeta = S.rp.fleets.find(f => f.id === fid);
+    if (!fmeta) { box.className = ""; return; }
+    const row = fr.f.find(r2 => r2[0] === fid);
+    const [cargo, bank, score] = row ? fleetDyn(row) : [0, 0, 0];
+    const st = fleetStatic(S.fi, fid) || [0, 0, 1, 0, 0];
+    const alive = st[2];
+    const maxFlag = (S.rp.meta.config || {}).flag_hull || 200;
+    const mine = fr.s.filter(s2 => shipFleet(s2[0]) === fid).length;
+    box.className = "on";
+    box.style.borderColor = COLORS[fid % COLORS.length];
+    box.innerHTML =
+      `<h3 style="color:${COLORS[fid % COLORS.length]}">⚓ ${escHtml(fmeta.name)}` +
+      ` — flagship &amp; harbor</h3>` +
+      `<div>${fmeta.model ? escHtml(fmeta.model) : "scripted bot"}` +
+      (alive ? "" : " · ☠ ELIMINATED") + `</div>` +
+      `<div>anchorage (${st[3]}, ${st[4]}) · command circle r=` +
+      `${S.rp.meta.harbor_r || 3}</div>` +
+      `<div>flagship hull ${Math.max(0, st[1])}/${maxFlag}</div>` +
+      `<div>treasury ${cargo} · hauled ${bank} · score ${score} · ` +
+      `${mine} ship${mine === 1 ? "" : "s"} afloat</div>` +
+      `<div class="dim">ships deposit, repair, and collect fresh orders inside ` +
+      `the circle; the flagship battery fires on hostiles in it</div>`;
+    return;
+  }
+  if (S.sel.k === "r") {                 // a territory's seat
+    const reg = (S.rp.meta.regions || []).find(r2 => r2.id === S.sel.id);
+    if (!reg) { box.className = ""; return; }
+    const row = (fr.r || []).find(r2 => r2[0] === reg.id) || [reg.id, -1];
+    const owner = row[1] >= 0 ? row[1] : null;
+    const names = S.rp.result.names;
+    const oc = owner != null ? COLORS[owner % COLORS.length] : "#9fb0c8";
+    box.className = "on";
+    box.style.borderColor = oc;
+    box.innerHTML =
+      `<h3 style="color:${oc}">🏴 ${escHtml(reg.name)}</h3>` +
+      `<div>territory · seat (${reg.x}, ${reg.y})</div>` +
+      `<div>${owner != null
+        ? `held by <b style="color:${oc}">${escHtml(names[owner] ?? owner)}</b>`
+        : "unclaimed"}</div>` +
+      (row.length >= 4
+        ? `<div class="intent">⚔ being captured by ` +
+          `${escHtml(names[row[2]] ?? row[2])} — ${row[3]}%</div>` : "") +
+      `<div class="dim">sole possession captures it; the holder scores +1 per ` +
+      `scoring tick</div>`;
+    return;
+  }
   if (S.sel.k === "n") {
     const nd = S.rp.nodes.find(n => n.id === S.sel.id);
     if (!nd) { box.className = ""; return; }
@@ -1708,7 +1841,9 @@ function updatePanels(fr) {
       // making the expanded scratchpad unscrollable during playback
       const pb = el.querySelector(".padbox");
       const ph = pad && S.expandedCard === id
-        ? `<div class="pad">📝 ${pad.replace(/</g, "&lt;")}</div>` : "";
+        ? `<div class="pad"><span title="Scratchpad — the admiral's own ` +
+          `persistent notes, rewritten as it thinks">📝</span> ` +
+          `${linkify(escHtml(pad), id)}</div>` : "";
       if ((S.padCache = S.padCache || {})[id] !== ph) {
         S.padCache[id] = ph;
         pb.innerHTML = ph;
@@ -1723,7 +1858,7 @@ function updatePanels(fr) {
       }
       const sigs = S.tl.filter(e => e.k === "signal" && e.fleet === id && e.t <= fr.t).length;
       const msgs = (S.parley || []).filter(e => e.fleet === id && e.t <= fr.t).length;
-      const terr = fr.r ? ` · 🏴 ${fr.r.filter(x => x[1] === id).length} regions` : "";
+      const terr = fr.r ? ` · 🏴 ${fr.r.filter(x => x[1] === id).length} territories` : "";
       const mine = fr.s.filter(s => shipFleet(s[0]) === id);
       const byCls = {};
       const sqs = new Set();
@@ -1833,8 +1968,14 @@ function updatePanels(fr) {
       }
     }
     el.querySelector(".hull i").style.width = Math.max(0, flag) / 2 + "%";
-    el.querySelector(".th").textContent =
-      S.pmode === "admiral" ? latestThought(id, fr.t) : "";
+    // thoughts carry entity links — content-guarded so a per-frame rebuild
+    // doesn't destroy the node under the pointer mid-hover
+    const thh = S.pmode === "admiral"
+      ? linkify(escHtml(latestThought(id, fr.t)), id) : "";
+    if ((S.thCache = S.thCache || {})[id] !== thh) {
+      S.thCache[id] = thh;
+      el.querySelector(".th").innerHTML = thh;
+    }
   }
   // spoiler shield hides the TOTAL: a fixed end-time (or a live clock that
   // stopped advancing) would give away that — and roughly when — the game ended
@@ -1855,7 +1996,7 @@ function updatePanels(fr) {
          (e.by != null ? ` by ${nm(e.by)}` : "")) + `</div>`;
       if (e.k === "flag_sunk") return `<div>${fmtTime(e.t)} — 💥 ${nm(e.fleet)} ` +
         `FLAGSHIP DESTROYED${e.by != null ? ` by ${nm(e.by)}` : ""}</div>`;
-      if (e.k === "region") return `<div>${fmtTime(e.t)} — 🏴 ${nm(e.fleet)} seizes ${escHtml(e.name)}</div>`;
+      if (e.k === "region") return `<div>${fmtTime(e.t)} — 🏴 ${nm(e.fleet)} seizes ${linkify(escHtml(e.name))}</div>`;
       return `<div>${fmtTime(e.t)} — ${nm(e.fleet)} hoists signal flags</div>`;
     }).join("");
     tick.scrollTop = keep;
@@ -1870,7 +2011,7 @@ function updatePanels(fr) {
         const to = e.to === "all" ? "<b>all</b>" : nm(e.to);
         return `<div class="msg" style="--mc:${COLORS[e.fleet % COLORS.length]}">` +
                `<div class="hd"><span>${fmtTime(e.t)}</span> ${nm(e.fleet)} → ${to}</div>` +
-               `${e.text.replace(/</g, "&lt;")}</div>`;
+               `${linkify(escHtml(e.text), e.fleet)}</div>`;
       }).join("") : `<div class="empty">(no parley messages in this match)</div>`;
       feed.scrollTop = feed.scrollHeight;
     }
@@ -2022,6 +2163,30 @@ function draw(fr, prev, alpha) {
   g.addColorStop(0, "#0a1b33"); g.addColorStop(1, "#081426");
   ctx.fillStyle = g; ctx.fillRect(0, 0, LW, LH);
 
+  // optional coordinate grid (off by default — territory outlines carry the
+  // structure): faint cell lines, slightly brighter every 8th. Static
+  // geometry, cached as Path2D per canvas scale like the region borders.
+  if (S.showGrid && typeof Path2D !== "undefined") {
+    const gkey = cw + "x" + ch;
+    if (!S.gridPaths || S.gridKey !== gkey) {
+      const minor = new Path2D(), major = new Path2D();
+      for (let x = 1; x < rp.meta.w; x++) {
+        const p = x % 8 ? minor : major;
+        p.moveTo(x * cw, 0); p.lineTo(x * cw, LH);
+      }
+      for (let y = 1; y < rp.meta.h; y++) {
+        const p = y % 8 ? minor : major;
+        p.moveTo(0, y * ch); p.lineTo(LW, y * ch);
+      }
+      S.gridPaths = { minor, major };
+      S.gridKey = gkey;
+    }
+    ctx.lineWidth = 0.5;
+    ctx.strokeStyle = "#e6edf70b"; ctx.stroke(S.gridPaths.minor);
+    ctx.strokeStyle = "#e6edf71c"; ctx.stroke(S.gridPaths.major);
+    ctx.lineWidth = 1;
+  }
+
   if (rp.meta.regions && fr.r) {                     // territory: tint by holder
     const owners = Object.fromEntries(fr.r);
     if (!S.cellRegion) {                               // nearest-center map (matches sim)
@@ -2046,8 +2211,10 @@ function draw(fr, prev, alpha) {
       }
     }
     ctx.font = "10px sans-serif"; ctx.fillStyle = "#e6edf755";
+    S.regionPos = {};                    // territory seats are CLICKABLE
     for (const r of rp.meta.regions) {
       ctx.fillText(r.name, (r.x + .5) * cw - 24, (r.y + .5) * ch - 6);
+      S.regionPos[r.id] = [(r.x + .5) * cw, (r.y + .5) * ch];
     }
     // dashed borders on every region boundary (static geometry — cached per
     // canvas scale). Slate, deliberately off every fleet + terrain color.
@@ -2138,6 +2305,7 @@ function draw(fr, prev, alpha) {
   }
 
   const harbors = {};
+  S.flagPos = {};                        // flagships are CLICKABLE
   for (const f of rp.fleets) {
     // flagship relocation + elimination live in the static change list —
     // fleetStatic() forward-fills to this frame; old headers fall back
@@ -2145,6 +2313,7 @@ function draw(fr, prev, alpha) {
     const [hx2, hy2] = st && st[3] != null ? [st[3], st[4]] : f.harbor;
     const [x, y] = [(hx2 + .5) * cw, (hy2 + .5) * ch];
     harbors[f.id] = [x, y, hx2, hy2];
+    S.flagPos[f.id] = [x, y];
     const alive = st ? st[2] : 1;
     ctx.strokeStyle = COLORS[f.id % COLORS.length] + (alive ? "66" : "22");
     ctx.setLineDash([4, 4]);
@@ -2445,6 +2614,39 @@ function draw(fr, prev, alpha) {
       ctx.drawImage(fog, 0, 0);
     }
   }
+  // an entity NAMED in a side panel is being hovered: light it up on the
+  // chart exactly like a cursor hover would
+  if (S.hoverEnt) {
+    const rings = [];
+    const he = S.hoverEnt;
+    if (he.k === "n" && S.nodePos[he.id]) {
+      const [nx, ny, nr] = S.nodePos[he.id];
+      rings.push([nx, ny, Math.max(12, nr + 6)]);
+    } else if (he.k === "r" && S.regionPos[he.id] != null) {
+      const [rx2, ry2] = S.regionPos[he.id];
+      rings.push([rx2, ry2, Math.min(cw, ch) * 2.4]);
+    } else if (he.k === "f" && S.flagPos[he.id]) {
+      const [fx2, fy2] = S.flagPos[he.id];
+      rings.push([fx2, fy2, (hr + 1) * Math.min(cw, ch)]);
+    } else if (he.k === "q") {
+      for (const [sid2, pos] of Object.entries(S.screenPos)) {
+        const c4 = S.cat[sid2] || {};
+        if (c4.fleet === he.fleet && squadAt(+sid2, fr.t) === he.squad) {
+          rings.push([pos[0], pos[1], 12]);
+        }
+      }
+    } else if (he.k === "s" && S.screenPos[he.id]) {
+      rings.push([S.screenPos[he.id][0], S.screenPos[he.id][1], 13]);
+    }
+    ctx.strokeStyle = "#ffffffcc";
+    ctx.lineWidth = 1.6;
+    ctx.setLineDash([5, 4]);
+    for (const [hx3, hy3, hr3] of rings) {
+      ctx.beginPath(); ctx.arc(hx3, hy3, hr3, 0, 7); ctx.stroke();
+    }
+    ctx.setLineDash([]);
+    ctx.lineWidth = 1;
+  }
   ctx.setTransform(RS, 0, 0, RS, 0, 0);
   if ((S.zoom || 1) > 1) {                       // zoom badge: you are navigating
     ctx.fillStyle = "#e6edf7aa"; ctx.font = "11px sans-serif";
@@ -2569,7 +2771,27 @@ document.addEventListener("fullscreenchange", () => {
   if (!document.fullscreenElement) document.body.classList.remove("fsmode");
   setTimeout(fitCanvas, 100);
 });
-$("fs").addEventListener("click", () => setFs(true));
+// the fullscreen control lives on the MAP: any mouse movement over the sea
+// wakes it, and it fades after a couple of idle seconds (the coordinate
+// readout's manners). In fullscreen the ✕ overlay takes over.
+$("fsmap").addEventListener("click", () =>
+  setFs(!document.body.classList.contains("fsmode")));
+let fsBtnFade = null;
+canvas.addEventListener("mousemove", () => {
+  if (!S.rp || document.body.classList.contains("fsmode")) return;
+  const b = $("fsmap");
+  b.classList.add("show");
+  clearTimeout(fsBtnFade);
+  fsBtnFade = setTimeout(() => b.classList.remove("show"), 2600);
+});
+canvas.addEventListener("mouseleave", () => {
+  clearTimeout(fsBtnFade);
+  fsBtnFade = setTimeout(() => $("fsmap").classList.remove("show"), 800);
+});
+$("fsmap").addEventListener("mouseenter", () => {   // resting ON the button
+  clearTimeout(fsBtnFade);                          // must not fade it away
+  $("fsmap").classList.add("show");
+});
 $("fsexit").addEventListener("click", () => setFs(false));
 function toggleOverlay(which) {           // pinned (dim until hover) ⇄ auto (edge)
   const cls = "auto" + which;
@@ -2692,6 +2914,66 @@ function programPickups(sid) {
   }
   return out;
 }
+
+// ---- entity links: map names mentioned in the side panels come alive ----
+// Hovering an island/territory/admiral name (or "squad X") in parley,
+// thoughts, the scratchpad, or the game log rings it on the chart; clicking
+// selects it — the same tile a map click opens.
+let ENT_RE = null, ENT_MAP = null;
+function buildEntIndex() {
+  ENT_MAP = {}; ENT_RE = null;
+  if (!S.rp) return;
+  const add = (name, tgt) => {
+    if (name && String(name).length >= 3) ENT_MAP[String(name)] = tgt;
+  };
+  for (const nd of S.rp.nodes || []) add(nodeName(nd), { k: "n", id: nd.id });
+  for (const r of (S.rp.meta.regions || [])) add(r.name, { k: "r", id: r.id });
+  for (const [i, n] of Object.entries((S.rp.result || {}).names || {})) {
+    add(n, { k: "f", id: +i });          // names is an id-keyed object
+  }
+  const names = Object.keys(ENT_MAP)
+    .sort((a, b) => b.length - a.length)
+    .map(n => escHtml(n).replace(/[.*+?^${}()|[\]\\]/g, "\\$&"));
+  ENT_RE = new RegExp("\\b(?:squad(?:ron)?\\s+([A-Za-z0-9]{1,3})" +
+                      (names.length ? "|" + names.join("|") : "") + ")\\b", "g");
+}
+function linkify(escaped, ctxFleet) {
+  // operates on ALREADY-ESCAPED text; the index keys are escaped to match
+  if (!ENT_RE) return escaped;
+  return escaped.replace(ENT_RE, (m, sq) => {
+    let tgt;
+    if (sq !== undefined) {
+      if (ctxFleet == null) return m;    // a bare squad id needs its fleet
+      tgt = { k: "q", fleet: ctxFleet, squad: sq };
+    } else {
+      // the match is escaped text — unescape to hit the index key
+      const raw = m.replace(/&amp;/g, "&").replace(/&lt;/g, "<")
+        .replace(/&gt;/g, ">").replace(/&quot;/g, '"').replace(/&#39;/g, "'");
+      tgt = ENT_MAP[raw];
+    }
+    if (!tgt) return m;
+    return `<span class="entlink" data-ent="${escHtml(JSON.stringify(tgt))}">${m}</span>`;
+  });
+}
+document.addEventListener("mouseover", e => {
+  const el = e.target.closest && e.target.closest(".entlink");
+  if (!el) return;
+  try { S.hoverEnt = JSON.parse(el.dataset.ent); } catch (err) { S.hoverEnt = null; }
+  if (S.rp && !S.playing) seek(S.fi);    // playback redraws on its own
+});
+document.addEventListener("mouseout", e => {
+  if (!e.target.closest || !e.target.closest(".entlink") || !S.hoverEnt) return;
+  S.hoverEnt = null;
+  if (S.rp && !S.playing) seek(S.fi);
+});
+document.addEventListener("click", e => {
+  const el = e.target.closest && e.target.closest(".entlink");
+  if (!el) return;
+  try {
+    const tgt = JSON.parse(el.dataset.ent);
+    select(tgt.k === "s" ? tgt.id : tgt);
+  } catch (err) {}
+});
 
 function setMode(mode) {
   S.pmode = mode;
@@ -2949,6 +3231,11 @@ document.addEventListener("change", e => {
     try { localStorage.setItem("flotilla-names", S.showNames ? "on" : "off"); } catch (e2) {}
     if (S.rp) seek(S.fi);              // instant, in any replay or live view
   }
+  if (e.target && e.target.id === "showgrid") {
+    S.showGrid = e.target.checked;
+    try { localStorage.setItem("flotilla-grid", S.showGrid ? "on" : "off"); } catch (e2) {}
+    if (S.rp) seek(S.fi);
+  }
   if (e.target && e.target.id === "hidpi") {
     S.quality = e.target.checked ? "auto" : "standard";
     try { localStorage.setItem("flotilla-quality", S.quality); } catch (e2) {}
@@ -3081,6 +3368,16 @@ canvas.addEventListener("click", e => {
     const d = (nx - x) ** 2 + (ny - y) ** 2;
     const rr = Math.max(14, r + 6) ** 2;
     if (d < rr && d < bd) { bd = d; best = { k: "n", id: +id }; }
+  }
+  // flagships and territory seats are first-class picks too — EVERY map item
+  // opens an info tile
+  for (const [id, [fx2, fy2]] of Object.entries(S.flagPos || {})) {
+    const d = (fx2 - x) ** 2 + (fy2 - y) ** 2;
+    if (d < 12 * 12 && d < bd) { bd = d; best = { k: "f", id: +id }; }
+  }
+  for (const [id, [rx2, ry2]] of Object.entries(S.regionPos || {})) {
+    const d = (rx2 - x) ** 2 + (ry2 - y) ** 2;
+    if (d < 16 * 16 && d < bd) { bd = d; best = { k: "r", id: +id }; }
   }
   select(best);
 });

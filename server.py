@@ -53,6 +53,10 @@ Inference providers (dashboard "Server" tab — see docs/PROVIDERS.md):
 Public showcase (see docs/FLEET_AUXILIARIES.md):
   POST /api/showcase-config  {access_key, secret_key, endpoint, bucket, region?}
   POST /api/showcase         {"series"|"match"} -> publish a public, no-login link
+  GET  /api/showcase         {"enabled", "published": [{name, ident, url, ...}]}
+  POST /api/showcase-delete  {"series"|"match"} -> retire that public link
+  GET/POST /api/ships        operator ship classes for the Configure designer
+                             (POST {"name","stats"} saves, {"name","delete"} removes)
   The public spectator player is player.html?livejsonl=<prefix> / ?replay=<path>
   / ?live=<job> / ?series=<name> (URL params are same-origin-only).
 
@@ -985,6 +989,46 @@ def _s3_put_public(cfg, key, data, content_type="text/html"):
         return r.status
 
 
+# ---------------- saved ship classes (the Configure page's designer) ---------
+SHIPS_LOCK = threading.Lock()
+SHIP_STATS = ("speed", "hold", "guns", "armor", "hull", "lookout")
+
+
+def _ships_path():
+    return os.path.join(LIB, "ships.json")
+
+
+def _load_ships():
+    """Operator-saved ship classes. Read FRESH on every call — a hand-edited
+    ships.json shows up on the next page load, no restart needed."""
+    try:
+        with open(_ships_path()) as fh:
+            d = json.load(fh)
+        return d if isinstance(d, dict) else {}
+    except Exception:
+        return {}
+
+
+def _clean_ship(name, st):
+    """(name, stats) validated for storage: safe name, every stat an int 1-40.
+    Point-total rules are per-run (design_points) — the engine enforces them
+    at match start, where the run's own budget is known."""
+    import core as _core
+    name = re.sub(r"[^A-Za-z0-9_-]", "", str(name))[:24]
+    if not name or name in _core.PRESETS or not isinstance(st, dict):
+        return None, None
+    clean = {}
+    for k in SHIP_STATS:
+        try:
+            v = int(st.get(k, 0))
+        except (TypeError, ValueError):
+            return None, None
+        if not 1 <= v <= 40:
+            return None, None
+        clean[k] = v
+    return name, clean
+
+
 def _showcase_list_path():
     return os.path.join(LIB, "showcase-list.json")
 
@@ -1010,6 +1054,49 @@ def _showcase_list_update(mutate):
         with open(tmp, "w") as fh:
             json.dump(pub, fh, indent=1)
         os.replace(tmp, _showcase_list_path())
+
+
+def _s3_delete_public(cfg, key):
+    """SigV4 S3 DELETE — the inverse of _s3_put_public, for retiring a public
+    link. A 404 counts as deleted (the object was already gone)."""
+    import datetime as _dt
+    import hmac
+    import urllib.request as _rq
+    host = f"{cfg['bucket']}.{cfg['endpoint']}"
+    now = _dt.datetime.now(_dt.timezone.utc)
+    amzdate = now.strftime("%Y%m%dT%H%M%SZ")
+    datestamp = now.strftime("%Y%m%d")
+    region = cfg.get("region", "nyc3")
+    payload_hash = hashlib.sha256(b"").hexdigest()
+    uri = "/" + urllib.parse.quote(key)
+    headers = {"host": host, "x-amz-content-sha256": payload_hash,
+               "x-amz-date": amzdate}
+    signed = ";".join(sorted(headers))
+    canonical = ("DELETE\n" + uri + "\n\n"
+                 + "".join(f"{k}:{headers[k]}\n" for k in sorted(headers))
+                 + "\n" + signed + "\n" + payload_hash)
+    scope = f"{datestamp}/{region}/s3/aws4_request"
+    sts = ("AWS4-HMAC-SHA256\n" + amzdate + "\n" + scope + "\n"
+           + hashlib.sha256(canonical.encode()).hexdigest())
+
+    def _hm(k, m):
+        return hmac.new(k, m.encode(), hashlib.sha256).digest()
+
+    sk = _hm(_hm(_hm(_hm(("AWS4" + cfg["secret_key"]).encode(), datestamp),
+                     region), "s3"), "aws4_request")
+    sig = hmac.new(sk, sts.encode(), hashlib.sha256).hexdigest()
+    auth = (f"AWS4-HMAC-SHA256 Credential={cfg['access_key']}/{scope}, "
+            f"SignedHeaders={signed}, Signature={sig}")
+    req = _rq.Request(f"https://{host}{uri}", method="DELETE",
+                      headers={**{k: v for k, v in headers.items()
+                                  if k != "host"}, "Authorization": auth})
+    try:
+        with _rq.urlopen(req, timeout=60) as r:
+            return r.status
+    except urllib.error.HTTPError as e:
+        if e.code == 404:
+            return 404
+        raise
 
 
 # ---------------- public show: auto-mirror a PUBLIC job to the bucket ---------
@@ -2058,6 +2145,12 @@ class H(BaseHTTPRequestHandler):
         if path == "/api/showcase":
             return self._send(200, {"enabled": _showcase_cfg() is not None,
                                     "published": _showcase_list()})
+        if path == "/api/ships":
+            import core as _core
+            return self._send(200, {"builtin": {k: dict(v) for k, v
+                                                in _core.PRESETS.items()},
+                                    "saved": _load_ships(),
+                                    "stats": list(SHIP_STATS)})
         if path == "/api/runs":
             with JOBS_LOCK:
                 out = [dict(j, log=j["log"][-8:]) for j in JOBS[-20:]][::-1]
@@ -2629,14 +2722,63 @@ class H(BaseHTTPRequestHandler):
                     return self._send(502, {"error": f"upload failed: "
                                             f"{type(e).__name__}: {e}"[:200]})
                 url = f"https://{cfg['bucket']}.{cfg['endpoint']}/{key}"
-                entry = {"name": title, "url": url,
+                entry = {"name": title, "ident": ident, "url": url,
                          "bytes": len(payload), "when": time.strftime(
                              "%Y-%m-%dT%H:%M:%SZ", time.gmtime())}
                 _showcase_list_update(
                     lambda pub: [x for x in pub if x.get("url") != url]
                     + [entry])
                 return self._send(200, {"ok": True, "url": url,
+                                        "ident": ident,
                                         "bytes": len(payload)})
+            if path == "/api/showcase-delete":
+                # retire a public link: delete the bucket object AND drop the
+                # registry entry — the dashboard's 🌐 button comes back
+                cfg = _showcase_cfg()
+                if cfg is None:
+                    return self._send(400, {"error": "showcase not configured"})
+                d = json.loads(body)
+                ident = (f"series-{_san(str(d['series']))}" if d.get("series")
+                         else f"match-{_san(os.path.basename(str(d.get('match', ''))).rsplit('.', 1)[0])}")
+                if ident in ("series-", "match-"):
+                    return self._send(400, {"error": "give series or match"})
+                key = f"showcase/{ident}.html"
+                url = f"https://{cfg['bucket']}.{cfg['endpoint']}/{key}"
+                try:
+                    _s3_delete_public(cfg, key)
+                except Exception as e:
+                    return self._send(502, {"error": f"delete failed: "
+                                            f"{type(e).__name__}: {e}"[:200]})
+                _showcase_list_update(
+                    lambda pub: [x for x in pub if x.get("url") != url])
+                return self._send(200, {"ok": True, "ident": ident})
+            if path == "/api/ships":
+                # save/remove an operator ship class (the Configure designer).
+                # ships.json is hand-editable; the GET reads it fresh.
+                d = json.loads(body)
+                nm = str(d.get("name", ""))
+                with SHIPS_LOCK:
+                    ships = _load_ships()
+                    if d.get("delete"):
+                        ships.pop(re.sub(r"[^A-Za-z0-9_-]", "", nm)[:24], None)
+                    else:
+                        name, clean = _clean_ship(nm, d.get("stats") or {})
+                        if name is None:
+                            return self._send(400, {
+                                "error": "invalid ship: name must be letters/"
+                                "digits/-/_ (not a built-in class name) and "
+                                "every stat an integer 1-40"})
+                        ships[name] = clean
+                    tmp = _ships_path() + ".tmp"
+                    with open(tmp, "w") as fh:
+                        json.dump(ships, fh, indent=1, sort_keys=True)
+                    os.replace(tmp, _ships_path())
+                import core as _core
+                return self._send(200, {"ok": True,
+                                        "builtin": {k: dict(v) for k, v
+                                                    in _core.PRESETS.items()},
+                                        "saved": ships,
+                                        "stats": list(SHIP_STATS)})
             if path == "/api/rename":
                 d = json.loads(body)
                 disp = str(d.get("display_name", "")).strip()[:120]

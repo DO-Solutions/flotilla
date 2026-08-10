@@ -97,5 +97,41 @@ with tempfile.TemporaryDirectory() as td:
     ok(a2.notes == "memo-2",
        f"memo_history=False keeps latest-memo-only ({a2.notes!r})")
 
+# --- parallel tournaments: matchups in worker threads, staggered starts,
+# fresh bots per matchup, a consistent bracket at the end ---
+with tempfile.TemporaryDirectory() as td:
+    cfg = {"mode": "tournament", "seed": 11,
+           "participants": ["merchant", "corsair", "admiralty"],
+           "scenario": {"max_ticks": 300, "warmup": False},
+           "series": {},
+           "tournament": {"format": "round_robin", "players_per_match": 2,
+                          "games_per_match": 1, "memo_policy": "none",
+                          "parallel": 3, "stagger_s": 0}}
+    adm = rc.section_defaults("admirals")
+    scenario = rc.merged_scenario(cfg)
+    rc.run_tournament(cfg, adm, scenario, td)
+    tj = json.load(open(os.path.join(td, "tournament.json")))
+    ok(len(tj["matchups"]) == 3, f"parallel round_robin plays all 3 matchups")
+    ok(tj.get("champion") in ("merchant", "corsair", "admiralty"),
+       "parallel tournament crowns a champion")
+    games = sum(st["games"] for st in tj["standings"].values())
+    ok(games == 6, f"standings count every game exactly once ({games})")
+    dirs = sorted(d for d in os.listdir(td) if d.startswith("m"))
+    ok(len(dirs) == 3 and all(os.path.isfile(os.path.join(td, d, "g1.json"))
+                              for d in dirs),
+       "every matchup dir holds its replay")
+# persistent memos force sequential (shared mind can't be parallelized)
+with tempfile.TemporaryDirectory() as td:
+    cfg = {"mode": "tournament", "seed": 11,
+           "participants": ["merchant", "corsair"],
+           "scenario": {"max_ticks": 300, "warmup": False},
+           "tournament": {"format": "round_robin", "games_per_match": 1,
+                          "memo_policy": "persistent", "parallel": 4,
+                          "stagger_s": 0}}
+    rc.run_tournament(cfg, rc.section_defaults("admirals"),
+                      rc.merged_scenario(cfg), td)
+    tj = json.load(open(os.path.join(td, "tournament.json")))
+    ok(len(tj["matchups"]) == 1, "persistent-memo tournament still completes")
+
 print("FAILURES:", fails)
 sys.exit(1 if fails else 0)
