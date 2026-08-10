@@ -192,6 +192,22 @@
   #logcard h3, #chartcard h3 { font-size: 13px; color: var(--accent); margin-bottom: 4px; }
   #gamelog { max-height: 44vh; overflow-y: auto; }
   #gamelog div { font-size: 12px; margin-bottom: 4px; color: var(--dim); }
+  #seriespanel { font-size: 13px; }
+  #seriespanel h3 { font-size: 13px; color: var(--accent); margin: 10px 0 4px; }
+  #seriespanel canvas { background: var(--card); border: 1px solid var(--line);
+    border-radius: 6px; width: 100%; }
+  table.sstats { border-collapse: collapse; width: 100%; font-size: 12px; }
+  table.sstats th, table.sstats td { border: 1px solid var(--line);
+    padding: 3px 8px; text-align: left; }
+  table.sstats th { color: var(--dim); font-weight: 600; }
+  .ssgames { display: flex; flex-wrap: wrap; gap: 6px; }
+  .ssg { background: var(--card); border: 1px solid var(--line);
+    border-radius: 5px; padding: 2px 8px; font-size: 12px; }
+  .ssmemo { background: #0a1424; border: 1px solid var(--line);
+    border-radius: 6px; padding: 6px 9px; margin-bottom: 6px; }
+  .ssmemo b { color: var(--accent); }
+  .ssmemo div { color: #8fa3c4; white-space: pre-wrap; margin-top: 3px;
+    overflow-wrap: anywhere; }
   #gamelog b { color: var(--ink); }
   #parleyfeed { background: var(--card); border: 1px solid var(--line);
                 border-radius: 10px; padding: 8px 10px;
@@ -236,6 +252,7 @@
     <button id="prevg" style="display:none">⏮ previous game</button>
     <button id="nextg" style="display:none">⏭ next game</button>
     <button id="lastg" style="display:none" title="jump to the last game">last game ⏭</button>
+    <button id="seriesbtn" style="display:none" title="series stats — the whole series at a glance"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round" style="vertical-align:-2px"><path d="M3 4.5h6.5a2.5 2.5 0 0 1 2.5 2.5v13a2 2 0 0 0-2-2H3z"/><path d="M21 4.5h-6.5A2.5 2.5 0 0 0 12 7v13a2 2 0 0 1 2-2h7z"/></svg> Series stats</button>
     <button id="nextlive" style="display:none; background:#c22432; color:#fff"
       title="the game you are watching already ended in real time — finish it
 at your own pace, then jump to the one being played now"></button>
@@ -333,6 +350,7 @@ at your own pace, then jump to the one being played now"></button>
         <div id="gamelog"></div>
       </div>
     </div>
+    <div id="seriespanel" style="display:none"></div>
   </div>
 </div>
 
@@ -606,11 +624,13 @@ function fmtTime(t) {
 // state changes under the viewer (refreshNav polls every 30s).
 function renderNav() {
   const pg = $("prevg"), ng = $("nextg"), fg = $("firstg"), lg = $("lastg");
+  const sb = $("seriesbtn");
   if (!S.bundle || S.liveMode) {
-    for (const b of [pg, ng, fg, lg]) b.style.display = "none";
+    for (const b of [pg, ng, fg, lg, sb]) b.style.display = "none";
     ng.dataset.live = ""; lg.dataset.live = "";
     return;
   }
+  sb.style.display = S.bundle.games.length >= 2 ? "" : "none";
   const x = S.gameIdx + 1;
   const fin = S.bundle.games.length;
   const y = Math.max(S.bundle.expected || 0, fin + (S.bundle.liveJobId ? 1 : 0));
@@ -2643,7 +2663,103 @@ function setMode(mode) {
   $("statspanel").style.display = mode === "stats" ? "" : "none";
   $("settingspanel").style.display = mode === "settings" ? "" : "none";
   $("helppanel").style.display = mode === "help" ? "" : "none";
+  $("seriespanel").style.display = mode === "series" ? "" : "none";
+  if (mode === "series") { renderSeriesStats(); return; }   // its own async render
   seek(S.fi);
+}
+$("seriesbtn").addEventListener("click", () => setMode("series"));
+
+// The whole SERIES at a glance — computed from the embedded game replays, so
+// it ships with a downloaded/showcase bundle and works offline. Score
+// progression, standings, per-game winners, cost, and the final memos.
+async function renderSeriesStats() {
+  const panel = $("seriespanel"), b = S.bundle;
+  if (!b) { panel.innerHTML = "<p class='dim'>no series loaded</p>"; return; }
+  panel.innerHTML = "<div class='dim'>crunching the series…</div>";
+  const games = [];
+  for (let i = 0; i < b.games.length; i++) {
+    let rp; try { rp = await ensureGame(b, i); } catch (e) { continue; }
+    if (rp && rp.result) games.push({ n: b.games[i].game, rp });
+  }
+  if (!games.length) { panel.innerHTML = "<p class='dim'>no finished games yet</p>"; return; }
+  const fleets = games[0].rp.fleets.map(f => ({ id: f.id, name: f.name }));
+  const col = f => COLORS[f.id % COLORS.length];
+  const sc = (res, id) => (res.scores && (res.scores[id] ?? res.scores[String(id)])) || 0;
+  const per = {}; fleets.forEach(f => per[f.id] = { scores: [], cost: [], wins: 0 });
+  const rows = [];
+  for (const g of games) {
+    const res = g.rp.result || {}, cost = {};
+    for (const d of (g.rp.decisions || [])) {
+      if (d.u) cost[d.fleet] = (cost[d.fleet] || 0) + (d.u.cost || 0);
+    }
+    fleets.forEach(f => { per[f.id].scores.push(sc(res, f.id));
+                          per[f.id].cost.push(cost[f.id] || 0); });
+    if (res.winner != null && per[res.winner]) per[res.winner].wins++;
+    rows.push({ n: g.n, win: res.winner });
+  }
+  const standings = fleets.map(f => ({ f, wins: per[f.id].wins,
+    total: per[f.id].scores.reduce((a, x) => a + x, 0),
+    cost: per[f.id].cost.reduce((a, x) => a + x, 0) }))
+    .sort((a, c) => c.wins - a.wins || c.total - a.total);
+  const nameOf = {}; fleets.forEach(f => nameOf[f.id] = f.name);
+  let h = `<h2 style="font-size:16px;margin:2px 0">${escHtml(b.name)} — series stats</h2>`;
+  h += `<div class="dim" style="margin-bottom:6px">${games.length} game` +
+    `${games.length > 1 ? "s" : ""} · ` +
+    fleets.map(f => `<b style="color:${col(f)}">${escHtml(f.name)}</b>`).join(" vs ") +
+    `</div>`;
+  h += `<table class="sstats"><thead><tr><th>admiral</th><th>wins</th>` +
+    `<th>total score</th><th>LLM cost</th></tr></thead><tbody>`;
+  standings.forEach((s, i) => { h += `<tr><td><b style="color:${col(s.f)}">` +
+    `${escHtml(s.f.name)}</b>${i === 0 ? " 🏆" : ""}</td><td>${s.wins}</td>` +
+    `<td>${s.total}</td><td>$${s.cost.toFixed(2)}</td></tr>`; });
+  h += `</tbody></table>`;
+  h += `<h3>score by game</h3><canvas id="ss_score" width="284" height="120"></canvas>`;
+  h += `<h3>LLM cost by game ($)</h3><canvas id="ss_cost" width="284" height="90"></canvas>`;
+  h += `<h3>who won each game</h3><div class="ssgames">`;
+  rows.forEach(r => { const w = r.win != null ? nameOf[r.win] : "—";
+    const wc = r.win != null ? COLORS[r.win % COLORS.length] : "#889";
+    h += `<div class="ssg"><span class="dim">g${r.n}</span> ` +
+      `<b style="color:${wc}">${escHtml(w || "—")}</b></div>`; });
+  h += `</div>`;
+  const memos = games[games.length - 1].rp.memos || {};
+  const mk = Object.keys(memos).filter(k => memos[k] && (memos[k].memo || memos[k]));
+  if (mk.length) {
+    h += `<h3>post-series notes — each admiral's last memo</h3>`;
+    for (const k of mk) {
+      const txt = String((memos[k] && (memos[k].memo || memos[k])) || "");
+      if (!txt.trim()) continue;
+      h += `<div class="ssmemo"><b>${escHtml(k)}</b><div>${escHtml(txt)}</div></div>`;
+    }
+  }
+  panel.innerHTML = h;
+  drawSeriesLines($("ss_score"), fleets, per, "scores");
+  drawSeriesLines($("ss_cost"), fleets, per, "cost");
+}
+function drawSeriesLines(cnv, fleets, per, key) {
+  if (!cnv) return; const cx = cnv.getContext && cnv.getContext("2d");
+  if (!cx) return;
+  const W = cnv.width, H = cnv.height; cx.clearRect(0, 0, W, H);
+  let max = 1, n = 0;
+  for (const f of fleets) { const a = per[f.id][key]; n = Math.max(n, a.length);
+    for (const v of a) if (v > max) max = v; }
+  if (!n) return;
+  const px = i => n > 1 ? i / (n - 1) * (W - 10) + 5 : W / 2;
+  const py = v => H - 16 - (v / max) * (H - 24);
+  cx.strokeStyle = "#24304d"; cx.beginPath();
+  cx.moveTo(0, H - 15); cx.lineTo(W, H - 15); cx.stroke();
+  for (const f of fleets) {
+    const a = per[f.id][key]; if (!a.length) continue;
+    cx.strokeStyle = COLORS[f.id % COLORS.length]; cx.lineWidth = 2;
+    cx.beginPath();
+    a.forEach((v, i) => { const x = px(i), y = py(v);
+      i ? cx.lineTo(x, y) : cx.moveTo(x, y); });
+    cx.stroke();
+    cx.fillStyle = COLORS[f.id % COLORS.length];
+    a.forEach((v, i) => { cx.beginPath(); cx.arc(px(i), py(v), 2.5, 0, 7); cx.fill(); });
+  }
+  cx.fillStyle = "#7f8ea8"; cx.font = "9px system-ui";
+  for (let i = 0; i < n; i++) cx.fillText("g" + (i + 1), px(i) - 6, H - 4);
+  cx.lineWidth = 1;
 }
 for (const b of document.querySelectorAll(".pbtn")) {
   b.addEventListener("click", () => setMode(b.dataset.mode));
