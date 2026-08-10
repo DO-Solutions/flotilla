@@ -2775,6 +2775,19 @@ class H(BaseHTTPRequestHandler):
                                                    fh.read(),
                                                    "application/json")
                                 nfiles += 1
+                        # the matchup-series slice of the index rides along so
+                        # the PUBLIC page can show in-flight lanes + their
+                        # landed games, same as the flagship view
+                        try:
+                            with open(os.path.join(LIB, "index.json")) as fh:
+                                full = json.load(fh)
+                            slc = [s for s in full.get("series", [])
+                                   if s.get("tournament") == tname]
+                            _s3_put_public(cfg, f"{prefix}/series-index.json",
+                                           json.dumps({"series": slc}).encode(),
+                                           "application/json")
+                        except Exception:
+                            pass
                     except Exception as e:
                         return self._send(502, {"error": f"upload failed: "
                                                 f"{type(e).__name__}: {e}"[:200]})

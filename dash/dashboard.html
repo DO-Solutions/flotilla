@@ -545,7 +545,7 @@ function gameRows(s, liveJob, byFile) {
   // per-game sub-table: results (winner/scores) start HIDDEN — the reveal
   // chip flips them for this series only, keeping the view spoiler-free
   let html = `<div style="margin:4px 0 6px">` +
-    `<a class="btn btn-dl reveal" href="#" data-series="${s.name}">🙈 results hidden — click to reveal</a></div>` +
+    `<a class="btn btn-dl reveal" href="#" data-series="${esc(s.name)}">🙈 results hidden — click to reveal</a></div>` +
     `<table class="subgames"><thead><tr><th style="width:90px"></th>` +
     `<th>game</th><th>when (UTC)</th>` +
     `<th>length</th><th>LLM cost</th><th class="res" style="display:none">winner</th>` +
@@ -573,7 +573,7 @@ function gameRows(s, liveJob, byFile) {
       `<td class="res" style="display:none"></td><td class="res" style="display:none"></td>` +
       // Cancel sits on the RIGHT, in the same trailing cell the ⬇ uses
       `<td><div class="rowbtns"><a class="btn btn-dl scancel" href="#" ` +
-      `style="color:#ff5d5d" data-job="${liveJob.id}" ` +
+      `style="color:#ff5d5d" data-job="${esc(liveJob.id)}" ` +
       `data-label="${esc(displayName(s))}" ` +
       `title="cancel — stops this game AND the rest of the series ` +
       `(finished games are kept)">✖</a></div></td></tr>`;
@@ -851,7 +851,7 @@ function renderSeriesTable() {
           archBtns(`data-series="${esc(s.name)}"`, s.archived) +
           (SERVER ? (liveJob
             ? `<a class="btn btn-dl scancel" href="#" style="color:#ff5d5d" ` +
-              `data-job="${liveJob.id}" data-label="${esc(displayName(s))}" ` +
+              `data-job="${esc(liveJob.id)}" data-label="${esc(displayName(s))}" ` +
               `title="cancel this run (asks first; finished games are kept)">✖</a>`
             : `<a class="btn btn-dl sdel" href="#" style="color:#ff5d5d" ` +
               `data-series="${esc(s.name)}" ` +
@@ -1016,9 +1016,11 @@ document.addEventListener("click", async e => {
         method: "POST", body: JSON.stringify(body) })).json();
       if (!r.ok) { t.textContent = "🌐"; window.alert("publish failed: " + r.error); return; }
       // published: the row flips to 📋 copy + retire IN PLACE (no reload),
-      // and the fresh link is already on the clipboard
+      // and the fresh link is already on the clipboard. Tournament rows live
+      // on BOTH tabs — re-render both or one keeps the stale 🌐.
       PUBLINKS[r.ident || pubIdent(body)] = r.url;
       renderSeriesTable();
+      renderTournList();
       try { await navigator.clipboard.writeText(r.url); flashCopied(r.url); }
       catch (err2) { window.prompt("Public link (copy it):", r.url); }
     } catch (err) { t.textContent = "🌐"; window.alert("publish failed: " + err); }
@@ -1045,6 +1047,7 @@ document.addEventListener("click", async e => {
       if (!r.ok) { window.alert("delete failed: " + r.error); return; }
       delete PUBLINKS[r.ident || pubIdent(body)];
       renderSeriesTable();                 // 🌐 comes back, no reload
+      renderTournList();
     } catch (err) { window.alert("delete failed: " + err); }
     return;
   }
@@ -1241,7 +1244,7 @@ function renderTournDetail() {
   let h = `<div class="dim" style="margin-bottom:8px">` +
     `format <b>${esc(tcfg.format || "round_robin")}</b> · ` +
     `${esc(tcfg.games_per_match || 1)} game(s)/matchup · memos ${esc(tcfg.memo_policy || "none")} ` +
-    `<a class="btn btn-dl treveal" data-t="${name}" href="#">` +
+    `<a class="btn btn-dl treveal" data-t="${esc(name)}" href="#">` +
     `${rev ? "🙈 Hide results" : "👁 Reveal results (spoilers)"}</a></div>`;
   h += `<div class="brkt">`;
   for (const r of rkeys) {
@@ -2375,6 +2378,7 @@ fetch("api/health").then(r => r.json()).then(async h => {
     try {                              // renames may have landed — refresh the index
       IDX = await (await fetch("index.json")).json();
       renderSeriesTable();
+      renderTournList();               // published-link state arrived above
     } catch {}
   }
 }).catch(() => {});

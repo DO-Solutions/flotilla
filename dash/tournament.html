@@ -87,6 +87,10 @@ async function loadAll() {
   TJ = await (await fetch(base + "tournament.json")).json();
   if (TNAME) {                    // flagship: the library index adds live
     try { IDX = await (await fetch("index.json")).json(); } catch (e) {}
+  } else {
+    // public copy: the publish mirrors the matchup slice of the index, so
+    // in-flight lanes and their landed games show here too
+    try { IDX = await (await fetch("series-index.json")).json(); } catch (e) {}
   }
   render();
 }
@@ -112,9 +116,9 @@ function matchupCards() {
   const strip = (x) => String(x).replace(/[^A-Za-z0-9_-]/g, "");
   const unstrip = (x) => roster0.find(r => strip(r) === x) || x;
   const extra = [];
-  if (IDX && TNAME) {
+  if (IDX) {
     for (const s of IDX.series || []) {
-      if (s.tournament !== TNAME) continue;
+      if (!s.tournament || (TNAME && s.tournament !== TNAME)) continue;
       const dir = s.name.split("/").pop();
       if (seen.has(dir)) continue;
       extra.push({ round: 0, players: dir.split("_", 2).pop()
