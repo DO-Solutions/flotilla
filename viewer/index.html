@@ -613,10 +613,13 @@ function renderSettingsPanel() {
     `<input type="checkbox" id="hidpi"${S.quality !== "standard" ? " checked" : ""}> ` +
     `sharp rendering (match display resolution — uncheck on slow machines)` +
     `</label>` +
-    `<label style="display:block;margin-bottom:8px">` +
-    `<input type="checkbox" id="ecomode"${S.eco ? " checked" : ""}> ` +
-    `⚡ economy playback — render at ~30 fps to leave GPU headroom for a ` +
-    `video call or screen share running alongside</label>`;
+    `<div style="margin-bottom:8px"><a href="#" class="btn btn-dl" id="perfmode">` +
+    (S.eco ? `✨ Quality Mode` : `⚡ Performance Mode`) + `</a> ` +
+    `<span class="desc" style="display:inline">` +
+    (S.eco ? `performance mode is ON (~30 fps, easy on screen shares) — ` +
+             `click to return to full-smoothness rendering`
+           : `render at ~30 fps and halve the paint work — recommended while ` +
+             `screen-sharing or on a video call`) + `</span></div>`;
   const sec = (title, body, note) =>
     `<details><summary>${title}` +
     (note ? ` <span class="dim">${note}</span>` : "") +
@@ -3249,6 +3252,13 @@ document.addEventListener("click", e => {
 });
 $("intro").addEventListener("click", () => { $("intro").style.display = "none"; });
 document.addEventListener("click", e => {
+  if (e.target && e.target.id === "perfmode") {
+    e.preventDefault();
+    S.eco = !S.eco;
+    try { localStorage.setItem("flotilla-eco", S.eco ? "on" : "off"); } catch (e2) {}
+    renderSettingsPanel();               // the button relabels itself
+    return;
+  }
   if (e.target && e.target.id === "repro") {
     e.preventDefault();
     blobDl(JSON.stringify(reproduceConfig(), null, 1),
@@ -3280,10 +3290,6 @@ document.addEventListener("change", e => {
     S.showNames = e.target.checked;
     try { localStorage.setItem("flotilla-names", S.showNames ? "on" : "off"); } catch (e2) {}
     if (S.rp) seek(S.fi);              // instant, in any replay or live view
-  }
-  if (e.target && e.target.id === "ecomode") {
-    S.eco = e.target.checked;
-    try { localStorage.setItem("flotilla-eco", S.eco ? "on" : "off"); } catch (e2) {}
   }
   if (e.target && e.target.id === "showgrid") {
     S.showGrid = e.target.checked;

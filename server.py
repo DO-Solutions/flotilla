@@ -2943,6 +2943,28 @@ class H(BaseHTTPRequestHandler):
                 # untouched: series flip a flag in series.json, standalone
                 # matches flip one in the matches-meta sidecar
                 d = json.loads(body)
+                if d.get("tournament"):
+                    # archiving a TOURNAMENT hides the whole thing: its row on
+                    # the Tournaments tab AND every matchup series/game on the
+                    # Games page (the index inherits the flag)
+                    tn = _san(str(d["tournament"]))
+                    tp = os.path.join(LIB, "tournaments", tn, "tournament.json")
+                    if not os.path.isfile(tp):
+                        return self._send(404, {"error": "no such tournament"})
+                    with META_LOCK:
+                        with open(tp) as fh:
+                            t = json.load(fh)
+                        if d.get("archived"):
+                            t["archived"] = True
+                        else:
+                            t.pop("archived", None)
+                        tmp = tp + ".tmp"
+                        with open(tmp, "w") as fh:
+                            json.dump(t, fh, indent=1)
+                        os.replace(tmp, tp)
+                    build_index(LIB)
+                    return self._send(200, {"ok": True,
+                                            "archived": bool(d.get("archived"))})
                 if d.get("match"):
                     fn = _san(str(d["match"]))
                     if not os.path.isfile(os.path.join(LIB, "matches", fn)):
@@ -2992,6 +3014,27 @@ class H(BaseHTTPRequestHandler):
                         save_matches_meta(LIB, meta)
                 build_index(LIB)
                 return self._send(200, {"ok": True, "deleted": fn})
+            if path == "/api/delete-tournament":
+                # permanent removal of the WHOLE tournament — bracket + every
+                # matchup series + every game (the dashboard confirms first;
+                # the daily restic backup is the only undo). Live job = refuse.
+                d = json.loads(body)
+                tn = _san(str(d.get("tournament", "")))
+                tdir = os.path.join(LIB, "tournaments", tn)
+                if not tn or not os.path.isfile(os.path.join(
+                        tdir, "tournament.json")):
+                    return self._send(404, {"error": "no such tournament"})
+                with JOBS_LOCK:
+                    live = any(j.get("name") == tn and
+                               j.get("state") in ("queued", "running", "paused")
+                               for j in JOBS)
+                if live:
+                    return self._send(400, {"error": "this tournament is "
+                                            "queued/running/paused — cancel "
+                                            "it first"})
+                shutil.rmtree(tdir, ignore_errors=True)
+                build_index(LIB)
+                return self._send(200, {"ok": True})
             if path == "/api/delete-series":
                 # permanent removal from the library (the dashboard confirms
                 # first; the daily restic backup is the only undo). A series

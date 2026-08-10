@@ -180,6 +180,9 @@
   </tr></thead><tbody></tbody></table>
 </div>
 <div class="card" id="tourntab" style="display:none">
+  <label id="tshowarchlbl" style="cursor:pointer; display:none; float:right">
+    <input type="checkbox" id="tshowarch" style="vertical-align:-2px">
+    <span id="tshowarchtxt">show archived</span></label>
   <div class="dim" id="tempty" style="display:none">No tournaments yet — configure one
     under 🧭 Chart a Course (mode: tournament), or run
     <code>python3 sim/run_config.py your-tournament.json</code>.</div>
@@ -1052,13 +1055,23 @@ const TREV = {};                              // name -> results revealed?
 function renderTournList() {
   const tb = document.querySelector("#tt tbody");
   tb.innerHTML = "";
-  const list = IDX.tournaments || [];
+  const all = IDX.tournaments || [];
+  const nArch = all.filter(t => t.archived).length;
+  const lbl = $("tshowarchlbl");
+  if (lbl) {
+    lbl.style.display = nArch ? "" : "none";
+    $("tshowarchtxt").textContent = `show archived (${nArch})`;
+    if (!nArch && $("tshowarch")) $("tshowarch").checked = false;
+  }
+  const showArch = nArch && $("tshowarch") && $("tshowarch").checked;
+  const list = all.filter(t => showArch || !t.archived);
   $("tempty").style.display = list.length ? "none" : "";
   document.getElementById("tt").style.display = list.length ? "" : "none";
   for (const t of list) {
+    const live = t.partial && !t.cancelled;
     const tr = document.createElement("tr");
     tr.innerHTML =
-      `<td>${esc(t.name)}${t.cancelled ? ' <span class="warn">✖ cancelled</span>' : t.partial ? ' <span class="warn">⏳ live</span>' : ""}</td>` +
+      `<td>${esc(t.name)}${t.cancelled ? ' <span class="warn">✖ ended early</span>' : t.partial ? ' <span class="warn">⏳ live</span>' : ""}</td>` +
       `<td class="dim">${esc(t.format)}</td>` +
       `<td class="dim">${t.matchups}</td>` +
       `<td><div class="rowbtns">` +
@@ -1068,11 +1081,57 @@ function renderTournList() {
       `(spoilers hidden by default)">🏆 Open</a>` +
       (SHOWCASE ? pubBtns({ tournament: t.name },
                           `data-tournament="${esc(t.name)}"`) : "") +
+      (SERVER ? `<a class="btn btn-dl tarch" href="#" ` +
+        `data-t="${esc(t.name)}" data-arch="${t.archived ? 0 : 1}" ` +
+        `title="${t.archived ? "unarchive — show this tournament and its "
+          + "series again" : "archive — hide the tournament AND all its "
+          + "series/games from the lists; kept on disk"}">` +
+        `${t.archived ? ICO_UNARCH : ICO_ARCH}</a>` : "") +
+      (SERVER && !live ? `<a class="btn btn-dl tdel" href="#" ` +
+        `style="color:#ff5d5d" data-t="${esc(t.name)}" ` +
+        `title="delete the tournament AND all its series/games (asks first)">` +
+        `🗑</a>` : "") +
       `</div></td>`;
+    if (t.archived) tr.style.opacity = ".55";
     tb.appendChild(tr);
   }
   renderTournDetail();
 }
+document.addEventListener("click", async e => {
+  const t = e.target.closest("a");
+  if (!t) return;
+  if (t.classList.contains("tarch")) {
+    e.preventDefault();
+    try {
+      const r = await (await fetch("api/archive", { method: "POST",
+        body: JSON.stringify({ tournament: t.dataset.t,
+                               archived: t.dataset.arch === "1" }) })).json();
+      if (!r.ok) { window.alert("archive failed: " + r.error); return; }
+      IDX = await (await fetch("index.json")).json();
+      renderTournList(); renderSeriesTable();
+    } catch (err) { window.alert("archive failed: " + err); }
+    return;
+  }
+  if (t.classList.contains("tdel")) {
+    e.preventDefault();
+    const tn = t.dataset.t;
+    const nGames = (IDX.series || []).filter(s => s.tournament === tn)
+      .reduce((a, s) => a + s.games.length, 0);
+    if (!window.confirm(`Delete tournament "${tn}"?\nThe bracket, every ` +
+        `matchup series, and all ${nGames} game(s) are removed for good.`)) return;
+    try {
+      const r = await (await fetch("api/delete-tournament", { method: "POST",
+        body: JSON.stringify({ tournament: tn }) })).json();
+      if (!r.ok) { window.alert("delete failed: " + r.error); return; }
+      IDX = await (await fetch("index.json")).json();
+      renderTournList(); renderSeriesTable();
+    } catch (err) { window.alert("delete failed: " + err); }
+    return;
+  }
+});
+document.addEventListener("change", e => {
+  if (e.target && e.target.id === "tshowarch") renderTournList();
+});
 
 function renderTournDetail() {
   const el = $("tdetail");

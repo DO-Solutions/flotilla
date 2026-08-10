@@ -145,7 +145,8 @@ def build_index(lib):
                         .get("format", "round_robin")),
                 matchups=len(t.get("matchups", [])),
                 partial=bool(t.get("partial")),
-                cancelled=bool(t.get("cancelled"))))
+                cancelled=bool(t.get("cancelled")),
+                archived=bool(t.get("archived"))))
             # every MATCHUP is also a series row, so in-flight tournament
             # series show on the Games page (⏳ live) and finished ones get
             # the normal spoiler-free Watch. Landed games are read from the
@@ -183,7 +184,9 @@ def build_index(lib):
                     tournament=name, games=sorted(games, key=lambda g: g["game"]),
                     partial=bool(t.get("partial")) and mu is None,
                     cancelled=bool(t.get("cancelled")) and mu is None,
-                    archived=False, started=started,
+                    # matchups inherit the TOURNAMENT's archive flag — the
+                    # tournament is the unit you archive, never a lone matchup
+                    archived=bool(t.get("archived")), started=started,
                     started_utc=datetime.datetime.utcfromtimestamp(started)
                     .strftime("%Y-%m-%d %H:%M")))
     bdir = os.path.join(lib, "bundles")

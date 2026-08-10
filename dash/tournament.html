@@ -104,6 +104,12 @@ function matchupCards() {
     round: m.round, players: m.players, dir: m.dir, games: m.games,
     winner: m.winner, live: false }));
   const seen = new Set(done.map(m => m.dir));
+  // dir names carry STRIPPED labels (Qwen35) — translate back to the real
+  // roster labels so colors and schedule-matching line up
+  const roster0 = ((TJ.config || {}).participants || []).map(p =>
+    typeof p === "string" ? p : (p.label || p.model || "?"));
+  const strip = (x) => String(x).replace(/[^A-Za-z0-9_-]/g, "");
+  const unstrip = (x) => roster0.find(r => strip(r) === x) || x;
   const extra = [];
   if (IDX && TNAME) {
     for (const s of IDX.series || []) {
@@ -111,7 +117,7 @@ function matchupCards() {
       const dir = s.name.split("/").pop();
       if (seen.has(dir)) continue;
       extra.push({ round: 0, players: dir.split("_", 2).pop()
-                     ? dir.replace(/^m\d+_/, "").split("_v_") : [],
+                     ? dir.replace(/^m\d+_/, "").split("_v_").map(unstrip) : [],
                    dir, games: s.games.map(g => ({
                      game: g.game, file: g.file.replace(/^tournaments\/[^/]+\//, ""),
                      winner: g.winner, scores: null })),
@@ -121,7 +127,32 @@ function matchupCards() {
   for (const m of [...done, ...extra]) {
     for (const p of m.players) if (!names.includes(p)) names.push(p);
   }
-  return { names, mus: [...done, ...extra] };
+  const mus = [...done, ...extra];
+  // while the tournament is LIVE, show the WHOLE round-robin schedule: a
+  // lane only reaches the library when its first game lands (games run
+  // hours), and an invisible lane reads as "parallelization is off"
+  const cfg = (TJ.config && TJ.config.tournament) || {};
+  if (TJ.partial && (cfg.format || "round_robin") === "round_robin") {
+    const parts = (TJ.config.participants || []).map(p =>
+      typeof p === "string" ? p : (p.label || p.model || "?"));
+    const roster = [...new Set(parts)];
+    for (const p of roster) if (!names.includes(p)) names.push(p);
+    const ppm = cfg.players_per_match === 4 ? 4 : 2;
+    const sofar = new Set(mus.map(m =>
+      m.players.map(x => String(x).replace(/[^A-Za-z0-9_-]/g, "")).join("|")));
+    if (ppm === 2) {
+      for (let i = 0; i < roster.length; i++) {
+        for (let k = i + 1; k < roster.length; k++) {
+          const key = [roster[i], roster[k]].map(x =>
+            String(x).replace(/[^A-Za-z0-9_-]/g, "")).join("|");
+          if (sofar.has(key)) continue;
+          mus.push({ round: 9e9, players: [roster[i], roster[k]], dir: null,
+                     games: [], winner: null, live: false, pendingLane: true });
+        }
+      }
+    }
+  }
+  return { names, mus };
 }
 
 function gameHref(m, g) {
@@ -156,9 +187,19 @@ function render() {
     if (rkeys.length > 1 || elim) {
       const last = elim && r === rkeys[rkeys.length - 1];
       h += `<div class="rlabel">${r === "0" ? "in progress"
+        : r === "9000000000" ? "still to sail"
         : last ? "final" : "round " + r}</div>`;
     }
     for (const m of rounds[r]) {
+      if (m.pendingLane) {                 // scheduled, nothing landed yet
+        h += `<div class="mu" style="opacity:.6">` +
+          `<div class="hd"><span class="stat">⛵ at sea — no games reported ` +
+          `yet</span></div>` +
+          m.players.map(p => `<div class="p"><span style="color:` +
+            `${playerColor(names, p)}">${esc(p)}</span></div>`).join("") +
+          `</div>`;
+        continue;
+      }
       const wins = {};
       for (const g of m.games || []) {
         if (g.winner) wins[g.winner] = (wins[g.winner] || 0) + 1;
