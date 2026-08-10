@@ -411,6 +411,32 @@ st, _ = req("/api/aux/pwatch/done", {"series": {}},
 ok(st == 200 and server._job("pwatch")["state"] == "done",
    "revived job completes on the minted bearer")
 
+# ---- tournaments are EXEMPT from pause-rotation (they cannot checkpoint;
+# the rotation pause request killed champions-cup-1 at the 8h cap) — they run
+# under the tournament_max_age_h runaway ceiling instead ----
+tj1 = dict(id="twatch", name="twatch-cup", mode="tournament", state="done",
+           games_done=6, games_expected=50, submitted=time.time(),
+           started=time.time() - 10 * 3600,      # 10h old: PAST max_age_h=8
+           finished=time.time(), error=None, log=[], aux=True)
+with server.JOBS_LOCK:
+    server.JOBS.append(tj1)
+with open(os.path.join(TMP, "aux.json")) as fh:
+    auxcfg_t = json.load(fh)
+server._aux_watch(tj1, auxcfg_t)         # done -> returns; must NOT fail it
+ok(tj1["state"] == "done" and tj1["error"] is None,
+   "a finished tournament past the rotation cap is left alone")
+ok(any("rotation cap does not apply" in l for l in tj1["log"]),
+   "tournament watcher logs the exemption")
+tj2 = dict(id="twatch2", name="twatch2-cup", mode="tournament",
+           state="running", games_done=3, games_expected=50,
+           submitted=time.time(), started=time.time() - 80 * 3600,  # 80h: past
+           finished=None, error=None, log=[], aux=True)             # the 72h ceiling
+with server.JOBS_LOCK:
+    server.JOBS.append(tj2)
+server._aux_watch(tj2, dict(auxcfg_t, tournament_max_age_h=72))
+ok(tj2["state"] == "failed" and "runaway ceiling" in (tj2["error"] or ""),
+   "a tournament past the runaway ceiling is failed loudly")
+
 # ---- restart survival: bearers + jobs live through a flagship bounce ----
 with open(os.path.join(TMP, "aux.json"), "w") as fh:
     json.dump({"do_token": "fake", "callback_base": "https://cb.example",

@@ -584,6 +584,7 @@ function sanName(n) {
     .replace(/ +/g, "-").replace(/^\.+/, "").slice(0, 60);
 }
 function pubIdent(d) {
+  if (d.tournament) return "tournament-" + sanName(d.tournament);
   if (d.series) return "series-" + sanName(d.series);
   const base = String(d.match || "").split("/").pop().replace(/\.[^.]*$/, "");
   return "match-" + sanName(base);
@@ -722,8 +723,10 @@ function renderSeriesTable() {
       continue;
     }
     const s = it.s;
-    const liveJob = s.partial ? JOBSCACHE.find(j => j.name === s.name &&
-      ["queued", "running", "paused"].includes(j.state)) : null;
+    const isT = !!s.tournament;          // a tournament MATCHUP series: the
+    const liveJob = s.partial && !isT    // tournament owns its lifecycle, so
+      ? JOBSCACHE.find(j => j.name === s.name &&        // no rename/delete/
+        ["queued", "running", "paused"].includes(j.state)) : null;  // publish
     const open = OPENSERIES.has(s.name);
     tr.className = "srow";
     tr.dataset.series = s.name;
@@ -739,8 +742,10 @@ function renderSeriesTable() {
       `&title=${encodeURIComponent(displayName(s))}"` +
       ` title="replay the finished games from game 1">▶ Watch</a></td>` +
       `<td><span class="titlecell"><span class="chev${open ? " open" : ""}">▸</span>` +
-      `<span class="nmtext" data-series="${esc(s.name)}" ` +
-      `title="double-click to rename">${esc(displayName(s))}</span></span></td>` +
+      (isT ? `<span class="nmtext">${esc(displayName(s))}</span>`
+           : `<span class="nmtext" data-series="${esc(s.name)}" ` +
+             `title="double-click to rename">${esc(displayName(s))}</span>`) +
+      `</span></td>` +
       `<td>${s.games.length}${s.cancelled ? ' <span class="warn">✖ cancelled — kept games</span>' : s.partial ? ' <span class="warn">⏳ live</span>' : ""}</td>` +
       `<td class="dim">${seriesPlayers(s)}</td>` +
       `<td class="dim">${s.started_utc || ""}</td>` +
@@ -748,15 +753,19 @@ function renderSeriesTable() {
       `<td><div class="rowbtns">` +
       `<a class="btn btn-dl dls" href="#" data-series="${esc(s.name)}" ` +
       `title="download a self-contained page of this series">⬇</a>` +
-      pubBtns({ series: s.name }, `data-series="${esc(s.name)}"`) +
-      archBtns(`data-series="${esc(s.name)}"`, s.archived) +
-      (SERVER ? (liveJob
-        ? `<a class="btn btn-dl scancel" href="#" style="color:#ff5d5d" ` +
-          `data-job="${liveJob.id}" data-label="${esc(displayName(s))}" ` +
-          `title="cancel this run (asks first; finished games are kept)">✖</a>`
-        : `<a class="btn btn-dl sdel" href="#" style="color:#ff5d5d" ` +
-          `data-series="${esc(s.name)}" ` +
-          `title="delete this series from the library (asks first)">🗑</a>`) : "") +
+      (isT
+        ? `<a class="btn btn-dl" target="_blank" ` +
+          `href="tournament.html?t=${encodeURIComponent(s.tournament)}" ` +
+          `title="open this matchup's tournament">🏆</a>`
+        : pubBtns({ series: s.name }, `data-series="${esc(s.name)}"`) +
+          archBtns(`data-series="${esc(s.name)}"`, s.archived) +
+          (SERVER ? (liveJob
+            ? `<a class="btn btn-dl scancel" href="#" style="color:#ff5d5d" ` +
+              `data-job="${liveJob.id}" data-label="${esc(displayName(s))}" ` +
+              `title="cancel this run (asks first; finished games are kept)">✖</a>`
+            : `<a class="btn btn-dl sdel" href="#" style="color:#ff5d5d" ` +
+              `data-series="${esc(s.name)}" ` +
+              `title="delete this series from the library (asks first)">🗑</a>`) : "")) +
       `</div></td>`;
     if (s.archived) tr.style.opacity = ".55";
     tb.appendChild(tr);
@@ -898,7 +907,9 @@ document.addEventListener("click", async e => {
   if (t.classList.contains("shpub")) {
     e.preventDefault();
     t.textContent = "…";
-    const body = t.dataset.series
+    const body = t.dataset.tournament
+      ? { tournament: t.dataset.tournament }
+      : t.dataset.series
       ? { series: t.dataset.series,
           name: displayName(IDX.series.find(x => x.name === t.dataset.series)) }
       : { match: t.dataset.match };
@@ -927,7 +938,8 @@ document.addEventListener("click", async e => {
     e.preventDefault();
     if (!window.confirm("Delete this public link?\nAnyone holding the URL " +
         "loses access. Publishing again later mints the same address.")) return;
-    const body = t.dataset.series ? { series: t.dataset.series }
+    const body = t.dataset.tournament ? { tournament: t.dataset.tournament }
+               : t.dataset.series ? { series: t.dataset.series }
                                   : { match: t.dataset.match };
     try {
       const r = await (await fetch("api/showcase-delete", {
@@ -1049,8 +1061,14 @@ function renderTournList() {
       `<td>${esc(t.name)}${t.cancelled ? ' <span class="warn">✖ cancelled</span>' : t.partial ? ' <span class="warn">⏳ live</span>' : ""}</td>` +
       `<td class="dim">${esc(t.format)}</td>` +
       `<td class="dim">${t.matchups}</td>` +
-      `<td><a class="btn btn-watch topen" href="#" data-t="${esc(t.name)}">` +
-      `${TOURN_OPEN === t.name ? "▼ Close" : "▶ Open"}</a></td>`;
+      `<td><div class="rowbtns">` +
+      `<a class="btn btn-watch" target="_blank" ` +
+      `href="tournament.html?t=${encodeURIComponent(t.name)}" ` +
+      `title="the tournament page: bracket, live series, standings ` +
+      `(spoilers hidden by default)">🏆 Open</a>` +
+      (SHOWCASE ? pubBtns({ tournament: t.name },
+                          `data-tournament="${esc(t.name)}"`) : "") +
+      `</div></td>`;
     tb.appendChild(tr);
   }
   renderTournDetail();

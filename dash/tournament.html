@@ -1,0 +1,216 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Flotilla — tournament</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns=%27http://www.w3.org/2000/svg%27 viewBox=%270 0 100 100%27%3E%3Ctext y=%27.9em%27 font-size=%2790%27%3E%F0%9F%8F%86%3C/text%3E%3C/svg%3E">
+<style>
+  :root { --bg:#0b1220; --card:#111a2e; --line:#1e2a44; --ink:#e6edf7;
+          --dim:#8b9bb8; --accent:#0069ff; }
+  * { box-sizing:border-box; margin:0; }
+  body { background:var(--bg); color:var(--ink);
+         font:14px/1.5 "Segoe UI",system-ui,sans-serif; padding:18px; }
+  header { display:flex; align-items:baseline; gap:14px; margin-bottom:6px;
+           flex-wrap:wrap; }
+  h1 { font-size:22px; letter-spacing:3px; } h1 span { color:var(--accent); }
+  #sub { color:var(--dim); font-size:12px; }
+  a { color:var(--accent); text-decoration:none; } a:hover { text-decoration:underline; }
+  .btn { display:inline-block; border-radius:6px; padding:3px 12px; font-size:12px; }
+  .btn-watch { background:var(--accent); color:#fff; }
+  .btn-watch:hover { text-decoration:none; filter:brightness(1.15); }
+  .btn-dl { border:1px solid var(--accent); color:var(--accent); background:transparent; }
+  .btn-dl:hover { text-decoration:none; background:#0069ff22; }
+  .warn { color:#fbbf24; }
+  .live { color:#ff5d5d; font-weight:600; }
+  .champ { color:#fbbf24; font-weight:600; }
+  #ttitle { font-size:26px; letter-spacing:1px; margin:10px 0 2px; }
+  #tmeta { color:var(--dim); font-size:13px; margin-bottom:14px; }
+  .rounds { display:flex; gap:18px; overflow-x:auto; padding:6px 0 14px;
+            align-items:stretch; }
+  .rnd { display:flex; flex-direction:column; gap:14px;
+         justify-content:space-around; min-width:280px; }
+  .rlabel { color:var(--dim); font-size:11px; text-transform:uppercase;
+            letter-spacing:2px; text-align:center; }
+  .mu { background:var(--card); border:1px solid var(--line); border-radius:10px;
+        padding:10px 12px; }
+  .mu.liv { border-color:#c2243288; }
+  .mu .hd { display:flex; justify-content:space-between; align-items:center;
+            gap:8px; margin-bottom:6px; }
+  .mu .stat { font-size:11px; color:var(--dim); text-transform:uppercase;
+              letter-spacing:1px; white-space:nowrap; }
+  .mu .p { display:flex; justify-content:space-between; gap:10px; padding:1px 0;
+           font-size:14px; }
+  .mu .adv { font-weight:700; }
+  .gchips { display:flex; flex-wrap:wrap; gap:5px; margin-top:8px; }
+  .gchips .btn { padding:1px 9px; }
+  .mu .foot { margin-top:8px; }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:10px;
+          padding:12px 14px; margin-bottom:14px; max-width:560px; }
+  table { width:100%; border-collapse:collapse; font-size:13px; }
+  th,td { text-align:left; padding:5px 10px 5px 0; border-bottom:1px solid var(--line); }
+  th { color:var(--dim); font-weight:500; font-size:12px; }
+  .shield { filter:blur(6px); user-select:none; pointer-events:none; }
+</style>
+</head>
+<body>
+<header>
+  <h1>FLO<span>TILLA</span> · <span style="color:#fbbf24">🏆</span> tournament</h1>
+  <a class="btn btn-dl reveal" href="#" id="reveal">🙈 results hidden — click to reveal</a>
+  <span id="sub">loading…</span>
+</header>
+<div id="ttitle"></div>
+<div id="tmeta"></div>
+<div id="bracket" class="rounds"></div>
+<div id="standings"></div>
+<script>
+"use strict";
+const $ = id => document.getElementById(id);
+function esc(s) {
+  return String(s == null ? "" : s).replace(/[&<>"']/g,
+    c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;",
+            "'": "&#39;" }[c]));
+}
+const COLORS = ["#4da3ff", "#ff5d5d", "#a3e635", "#c084fc",
+                "#f472b6", "#3fe06a", "#6140e6", "#ca40e6"];
+const qs = new URLSearchParams(location.search);
+const TNAME = qs.get("t");                 // flagship mode; absent = public copy
+let REVEAL = false;
+let TJ = null, IDX = null;
+
+// spoiler-shielded value: blurred until the Reveal toggle
+const sh = (v) => `<span class="res${REVEAL ? "" : " shield"}">${v}</span>`;
+
+async function loadAll() {
+  const base = TNAME ? `tournaments/${encodeURIComponent(TNAME)}/` : "./";
+  TJ = await (await fetch(base + "tournament.json")).json();
+  if (TNAME) {                    // flagship: the library index adds live
+    try { IDX = await (await fetch("index.json")).json(); } catch (e) {}
+  }
+  render();
+}
+
+function playerColor(names, n) {
+  const i = names.indexOf(n);
+  return COLORS[(i >= 0 ? i : 0) % COLORS.length];
+}
+
+function matchupCards() {
+  // decided matchups come from tournament.json; IN-FLIGHT ones (games on
+  // disk, matchup not yet recorded) come from the library index's matchup
+  // series — so a live bracket shows every lane, not just finished ones
+  const names = [...new Set((TJ.matchups || []).flatMap(m => m.players))];
+  const done = (TJ.matchups || []).map(m => ({
+    round: m.round, players: m.players, dir: m.dir, games: m.games,
+    winner: m.winner, live: false }));
+  const seen = new Set(done.map(m => m.dir));
+  const extra = [];
+  if (IDX && TNAME) {
+    for (const s of IDX.series || []) {
+      if (s.tournament !== TNAME) continue;
+      const dir = s.name.split("/").pop();
+      if (seen.has(dir)) continue;
+      extra.push({ round: 0, players: dir.split("_", 2).pop()
+                     ? dir.replace(/^m\d+_/, "").split("_v_") : [],
+                   dir, games: s.games.map(g => ({
+                     game: g.game, file: g.file.replace(/^tournaments\/[^/]+\//, ""),
+                     winner: g.winner, scores: null })),
+                   winner: null, live: !!s.partial });
+    }
+  }
+  for (const m of [...done, ...extra]) {
+    for (const p of m.players) if (!names.includes(p)) names.push(p);
+  }
+  return { names, mus: [...done, ...extra] };
+}
+
+function gameHref(m, g) {
+  if (!TNAME) return `player.html?replay=${encodeURIComponent(m.dir + "/" + g.file.split("/").pop())}`;
+  return `player.html?series=${encodeURIComponent(TNAME + "/" + m.dir)}` +
+         `&title=${encodeURIComponent(m.players.join(" vs "))}`;
+}
+
+function render() {
+  const cfg = (TJ.config && TJ.config.tournament) || {};
+  const tname = TNAME || (TJ.config && TJ.config.name) || "tournament";
+  document.title = `Flotilla — ${tname}`;
+  $("ttitle").textContent = tname;
+  const { names, mus } = matchupCards();
+  const liveN = mus.filter(m => m.live).length;
+  $("tmeta").innerHTML =
+    `${esc(cfg.format || "round_robin")} · best of ${esc(cfg.games_per_match || 1)}` +
+    ` · ${names.map(n => `<b style="color:${playerColor(names, n)}">${esc(n)}</b>`).join(" · ")}` +
+    (TJ.partial ? ` · <span class="live">⏳ in progress` +
+      (liveN ? ` — ${liveN} series live now` : "") + `</span>`
+      : TJ.cancelled ? ` · <span class="warn">✖ ended early</span>`
+      : ` · finished`);
+  $("sub").textContent = "";
+  // bracket: matchups grouped by round (in-flight lanes join round ?)
+  const rounds = {};
+  for (const m of mus) (rounds[m.round] = rounds[m.round] || []).push(m);
+  const rkeys = Object.keys(rounds).sort((a, b) => a - b);
+  const elim = (cfg.format || "round_robin") === "single_elim";
+  let h = "";
+  for (const r of rkeys) {
+    h += `<div class="rnd">`;
+    if (rkeys.length > 1 || elim) {
+      const last = elim && r === rkeys[rkeys.length - 1];
+      h += `<div class="rlabel">${r === "0" ? "in progress"
+        : last ? "final" : "round " + r}</div>`;
+    }
+    for (const m of rounds[r]) {
+      const wins = {};
+      for (const g of m.games || []) {
+        if (g.winner) wins[g.winner] = (wins[g.winner] || 0) + 1;
+      }
+      h += `<div class="mu${m.live ? " liv" : ""}">` +
+        `<div class="hd"><span class="stat">${m.live
+          ? '<span class="live">🔴 series live</span>'
+          : m.winner ? "✓ decided" : "scheduled"}</span>` +
+        `<a class="btn btn-watch" target="_blank" href="${gameHref(m, (m.games || [])[0] || { file: "g1.json", game: 1 })}"` +
+        ` title="watch this series from game 1 — spoiler-free">▶ Watch</a></div>`;
+      for (const p of m.players) {
+        h += `<div class="p"><span style="color:${playerColor(names, p)}"` +
+          `${REVEAL && m.winner === p ? ' class="adv"' : ""}>${esc(p)}` +
+          `${REVEAL && m.winner === p ? " 🏆" : ""}</span>` +
+          `<span class="stat">${sh(esc(wins[p] || 0))}</span></div>`;
+      }
+      h += `<div class="gchips">` + (m.games || []).map(g =>
+        `<a class="btn btn-dl" target="_blank" href="${gameHref(m, g)}">` +
+        `▶ g${esc(g.game)}</a>`).join("") +
+        (m.live ? `<span class="stat live" style="align-self:center">` +
+          `next game playing…</span>` : "") + `</div></div>`;
+    }
+    h += `</div>`;
+  }
+  $("bracket").innerHTML = h || `<div class="card">no matchups yet — the ` +
+    `first games are still being played</div>`;
+  // standings (spoiler-shielded)
+  const rows = Object.entries(TJ.standings || {})
+    .sort((a, b) => b[1].wins - a[1].wins || b[1].score - a[1].score);
+  $("standings").innerHTML = rows.length
+    ? `<div class="card"><h3 style="color:var(--accent);font-size:14px;` +
+      `margin-bottom:6px">Standings${TJ.partial ? " (so far)" : ""}</h3>` +
+      (TJ.champion ? `<div style="margin-bottom:6px">${sh(
+        `<span class="champ">🏆 champion: ${esc(TJ.champion)}</span>`)}</div>` : "") +
+      `<table><thead><tr><th>player</th><th>series wins</th><th>games</th>` +
+      `<th>total score</th></tr></thead><tbody>` +
+      rows.map(([n, s]) =>
+        `<tr><td style="color:${playerColor(names, n)}">${esc(n)}</td>` +
+        `<td>${sh(esc(s.wins))}</td><td>${sh(esc(s.games))}</td>` +
+        `<td>${sh(esc(s.score))}</td></tr>`).join("") +
+      `</tbody></table></div>` : "";
+}
+
+$("reveal").addEventListener("click", e => {
+  e.preventDefault();
+  REVEAL = !REVEAL;
+  $("reveal").textContent = REVEAL ? "👁 results shown — click to hide"
+                                   : "🙈 results hidden — click to reveal";
+  render();
+});
+loadAll().catch(err => { $("sub").textContent = "could not load: " + err; });
+if (TNAME) setInterval(() => loadAll().catch(() => {}), 60000);  // live refresh
+</script>
+</body>
+</html>

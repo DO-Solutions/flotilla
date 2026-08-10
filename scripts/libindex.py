@@ -132,19 +132,60 @@ def build_index(lib):
     if os.path.isdir(tdir):
         for name in sorted(os.listdir(tdir)):
             tpath = os.path.join(tdir, name, "tournament.json")
-            if os.path.isfile(tpath):
-                try:
-                    t = json.load(open(tpath))
-                except Exception:
+            if not os.path.isfile(tpath):
+                continue
+            try:
+                t = json.load(open(tpath))
+            except Exception:
+                continue
+            idx["tournaments"].append(dict(
+                name=name, file=f"tournaments/{name}/tournament.json",
+                champion=t.get("champion"),
+                format=(t.get("config", {}).get("tournament", {})
+                        .get("format", "round_robin")),
+                matchups=len(t.get("matchups", [])),
+                partial=bool(t.get("partial")),
+                cancelled=bool(t.get("cancelled"))))
+            # every MATCHUP is also a series row, so in-flight tournament
+            # series show on the Games page (⏳ live) and finished ones get
+            # the normal spoiler-free Watch. Landed games are read from the
+            # matchup DIRS — tournament.json only records a matchup once it
+            # is decided, but its games stream in one by one.
+            decided = {m.get("dir"): m for m in t.get("matchups", [])}
+            for mdir in sorted(os.listdir(os.path.join(tdir, name))):
+                mpath = os.path.join(tdir, name, mdir)
+                if not os.path.isdir(mpath) or not mdir.startswith("m"):
                     continue
-                idx["tournaments"].append(dict(
-                    name=name, file=f"tournaments/{name}/tournament.json",
-                    champion=t.get("champion"),
-                    format=(t.get("config", {}).get("tournament", {})
-                            .get("format", "round_robin")),
-                    matchups=len(t.get("matchups", [])),
-                    partial=bool(t.get("partial")),
-                    cancelled=bool(t.get("cancelled"))))
+                games = []
+                for gfn in sorted(fn for fn in os.listdir(mpath)
+                                  if fn.startswith("g") and fn.endswith(".json")):
+                    row = _row(os.path.join(mpath, gfn),
+                               f"tournaments/{name}/{mdir}/{gfn}",
+                               f"series:{name}/{mdir} {gfn[:-5]}")
+                    if row:
+                        idx["matches"].append(row)
+                        games.append(dict(game=int(gfn[1:-5]) if
+                                          gfn[1:-5].isdigit() else len(games) + 1,
+                                          winner=row.get("winner"),
+                                          file=f"tournaments/{name}/{mdir}/{gfn}"))
+                if not games:
+                    continue
+                # "m01_Qwen35_v_Opus5" -> "Qwen35 vs Opus5"
+                vs = mdir.split("_", 1)[-1].replace("_v_", " vs ")
+                mu = decided.get(mdir)
+                try:
+                    started = min(os.path.getmtime(os.path.join(
+                        mpath, os.path.basename(g["file"]))) for g in games)
+                except (ValueError, OSError):
+                    started = os.path.getmtime(mpath)
+                idx["series"].append(dict(
+                    name=f"{name}/{mdir}", display_name=f"🏆 {name}: {vs}",
+                    tournament=name, games=sorted(games, key=lambda g: g["game"]),
+                    partial=bool(t.get("partial")) and mu is None,
+                    cancelled=bool(t.get("cancelled")) and mu is None,
+                    archived=False, started=started,
+                    started_utc=datetime.datetime.utcfromtimestamp(started)
+                    .strftime("%Y-%m-%d %H:%M")))
     bdir = os.path.join(lib, "bundles")
     if os.path.isdir(bdir):
         idx["bundles"] = [f"bundles/{fn}" for fn in sorted(os.listdir(bdir))

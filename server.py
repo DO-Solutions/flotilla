@@ -666,9 +666,11 @@ def _publish_partial_tournament(job, outdir):
         pass
 
 
-def _mark_cancelled(job):
-    """A cancelled run's COMPLETED games stay in the library — the series/
-    tournament file just says so instead of pretending it's still live."""
+def _mark_cancelled(job, error=None):
+    """A cancelled/failed run's COMPLETED games stay in the library — the
+    series/tournament file just says so instead of pretending it's still
+    live. (champions-cup-1 sat '⏳ live' on the Tournaments tab for hours
+    after its worker died — the fail paths never finalized the file.)"""
     try:
         paths = {"series": os.path.join(LIB, "series", job["name"], "series.json"),
                  "tournament": os.path.join(LIB, "tournaments", job["name"],
@@ -680,12 +682,39 @@ def _mark_cancelled(job):
             d = json.load(fh)
         d.pop("partial", None)
         d["cancelled"] = True
+        if error:
+            d["error"] = str(error)[:200]
         d["games_completed"] = len(d.get("games", d.get("matchups", [])))
         with open(p, "w") as fh:
             json.dump(d, fh, indent=1)
         build_index(LIB)
     except Exception:
         pass
+
+
+def _heal_stale_tournaments():
+    """Boot sweep: a tournament file claiming to be live with NO live job
+    behind it gets finalized — restarts and old failures otherwise leave
+    permanent '⏳ live' ghosts."""
+    tdir = os.path.join(LIB, "tournaments")
+    if not os.path.isdir(tdir):
+        return
+    with JOBS_LOCK:
+        alive = {j["name"] for j in JOBS
+                 if j["mode"] == "tournament"
+                 and j["state"] in ("queued", "running", "paused")}
+    for name in os.listdir(tdir):
+        tp = os.path.join(tdir, name, "tournament.json")
+        if name in alive or not os.path.isfile(tp):
+            continue
+        try:
+            with open(tp) as fh:
+                d = json.load(fh)
+        except Exception:
+            continue
+        if d.get("partial"):
+            _mark_cancelled({"mode": "tournament", "name": name},
+                            error="run ended without finishing the bracket")
 
 
 def _run_job(job, cfg, resume=False):
@@ -918,6 +947,7 @@ ROUTES_STATIC = {
     "/": ("dash/dashboard.html", "text/html"),
     "/index.html": ("dash/dashboard.html", "text/html"),
     "/player.html": ("viewer/index.html", "text/html"),
+    "/tournament.html": ("dash/tournament.html", "text/html"),
 }
 
 def _showcase_cfg():
@@ -1362,6 +1392,10 @@ def _aux_cfg():
     env.setdefault("region", "nyc3")
     env.setdefault("max_concurrent", 3)
     env.setdefault("max_age_h", 8)
+    # tournaments have NO checkpoint path, so the pause-rotation cap cannot
+    # apply to them — they run to completion under this hard runaway ceiling
+    # instead (champions-cup-1 died at 8h to the rotation it couldn't answer)
+    env.setdefault("tournament_max_age_h", 72)
     return env
 
 
@@ -1946,6 +1980,30 @@ def _auto_resume_pass():
 
 def _aux_watch(job, aux):
     """Babysit a running aux job to its age cap; also respawned on restart."""
+    if job.get("mode") == "tournament":
+        # a tournament cannot pause (no checkpoint path — the runner has
+        # nothing to freeze into), so the rotate-at-max_age_h machinery below
+        # would only ever fail it: request a pause it can't answer, wait out
+        # the grace, mark it failed. That is exactly how champions-cup-1 died
+        # 6 games in. Tournaments instead run to completion under a HARD
+        # runaway ceiling — generous, because a 4-lane best-of-5 bracket of
+        # thinking models legitimately runs a day or two.
+        cap_h = float(aux.get("tournament_max_age_h", 72))
+        deadline = (job.get("started") or time.time()) + cap_h * 3600
+        job["log"].append(f"tournament worker: rotation cap does not apply "
+                          f"(no checkpoint path) — runaway ceiling {cap_h:g}h")
+        _persist_jobs()
+        while job["state"] == "running" and time.time() < deadline:
+            time.sleep(20)
+        if job["state"] == "running":
+            job["state"] = "failed"
+            job["error"] = (f"tournament exceeded the {cap_h:g}h runaway "
+                            "ceiling (tournament_max_age_h)")
+            job["finished"] = time.time()
+            _persist_jobs()
+            _mark_cancelled(job, error=job["error"])
+        _aux_destroy(job["id"])
+        return
     deadline = (job.get("started") or time.time()) \
         + float(aux["max_age_h"]) * 3600
     while job["state"] == "running" and time.time() < deadline:
@@ -1989,6 +2047,7 @@ def _aux_watch(job, aux):
                             "and did not answer a pause request")
             job["finished"] = time.time()
             _persist_jobs()
+            _mark_cancelled(job, error=job["error"])
     _aux_destroy(job["id"])
 
 
@@ -2640,6 +2699,7 @@ class H(BaseHTTPRequestHandler):
                     j["state"] = "failed"
                     j["finished"] = time.time()
                     _showcase_job_done(j)
+                    _mark_cancelled(j, error=j.get("error"))
                 _persist_jobs()
                 threading.Thread(target=_aux_destroy, args=(jid,),
                                  daemon=True).start()
@@ -2677,6 +2737,59 @@ class H(BaseHTTPRequestHandler):
                                             "SHOWCASE_* env"})
                 d = json.loads(body)
                 title = str(d.get("name") or "").strip()
+                if d.get("tournament"):
+                    # a tournament link is a PREFIX, not one file: the
+                    # tournament page (as index.html), the player, and every
+                    # matchup replay + the bracket json. Re-publishing syncs
+                    # newly landed games to the same URL.
+                    tname = _san(str(d["tournament"]))
+                    tdir = os.path.join(LIB, "tournaments", tname)
+                    if not os.path.isfile(os.path.join(tdir, "tournament.json")):
+                        return self._send(404, {"error": "no such tournament"})
+                    prefix = f"showcase/tournament-{tname}"
+                    try:
+                        with open(os.path.join(HERE, "dash",
+                                               "tournament.html"), "rb") as fh:
+                            _s3_put_public(cfg, f"{prefix}/index.html",
+                                           fh.read())
+                        with open(os.path.join(HERE, "viewer",
+                                               "index.html"), "rb") as fh:
+                            _s3_put_public(cfg, f"{prefix}/player.html",
+                                           fh.read())
+                        for lp in (os.path.join(LIB, "logos.json"),
+                                   os.path.join(HERE, "assets", "logos.json")):
+                            if os.path.isfile(lp):
+                                _s3_put_public(cfg, f"{prefix}/logos.json",
+                                               open(lp, "rb").read(),
+                                               "application/json")
+                                break
+                        nfiles = 0
+                        for root, _dirs, files in os.walk(tdir):
+                            for fn in files:
+                                if not fn.endswith(".json"):
+                                    continue
+                                rel = os.path.relpath(os.path.join(root, fn),
+                                                      tdir)
+                                with open(os.path.join(root, fn), "rb") as fh:
+                                    _s3_put_public(cfg, f"{prefix}/{rel}",
+                                                   fh.read(),
+                                                   "application/json")
+                                nfiles += 1
+                    except Exception as e:
+                        return self._send(502, {"error": f"upload failed: "
+                                                f"{type(e).__name__}: {e}"[:200]})
+                    url = (f"https://{cfg['bucket']}.{cfg['endpoint']}/"
+                           f"{prefix}/index.html")
+                    entry = {"name": title or tname,
+                             "ident": f"tournament-{tname}", "url": url,
+                             "bytes": 0, "when": time.strftime(
+                                 "%Y-%m-%dT%H:%M:%SZ", time.gmtime())}
+                    _showcase_list_update(
+                        lambda pub: [x for x in pub if x.get("url") != url]
+                        + [entry])
+                    return self._send(200, {"ok": True, "url": url,
+                                            "ident": f"tournament-{tname}",
+                                            "files": nfiles})
                 if d.get("series"):
                     sname = _san(str(d["series"]))
                     sdir = os.path.join(LIB, "series", sname)
@@ -2738,14 +2851,27 @@ class H(BaseHTTPRequestHandler):
                 if cfg is None:
                     return self._send(400, {"error": "showcase not configured"})
                 d = json.loads(body)
-                ident = (f"series-{_san(str(d['series']))}" if d.get("series")
+                ident = (f"tournament-{_san(str(d['tournament']))}"
+                         if d.get("tournament")
+                         else f"series-{_san(str(d['series']))}" if d.get("series")
                          else f"match-{_san(os.path.basename(str(d.get('match', ''))).rsplit('.', 1)[0])}")
-                if ident in ("series-", "match-"):
-                    return self._send(400, {"error": "give series or match"})
-                key = f"showcase/{ident}.html"
-                url = f"https://{cfg['bucket']}.{cfg['endpoint']}/{key}"
+                if ident in ("series-", "match-", "tournament-"):
+                    return self._send(400, {"error": "give series, match, or "
+                                            "tournament"})
+                if ident.startswith("tournament-"):
+                    # kill the entry points; replay objects linger unlisted
+                    # until a re-publish overwrites the prefix
+                    keys = [f"showcase/{ident}/index.html",
+                            f"showcase/{ident}/tournament.json"]
+                    url = (f"https://{cfg['bucket']}.{cfg['endpoint']}/"
+                           f"showcase/{ident}/index.html")
+                else:
+                    keys = [f"showcase/{ident}.html"]
+                    url = (f"https://{cfg['bucket']}.{cfg['endpoint']}/"
+                           f"showcase/{ident}.html")
                 try:
-                    _s3_delete_public(cfg, key)
+                    for key in keys:
+                        _s3_delete_public(cfg, key)
                 except Exception as e:
                     return self._send(502, {"error": f"delete failed: "
                                             f"{type(e).__name__}: {e}"[:200]})
@@ -2996,6 +3122,7 @@ def main():
     if not os.environ.get("DO_INFERENCE_KEY"):
         print("NOTE: DO_INFERENCE_KEY not set — scripted-bot runs only until you export it.")
     _restore_state()
+    _heal_stale_tournaments()          # no live job -> no '⏳ live' ghost
     threading.Thread(target=_aux_reaper, daemon=True).start()
     threading.Thread(target=_pool_maintain, daemon=True).start()
     threading.Thread(target=_auto_resume_loop, daemon=True).start()
