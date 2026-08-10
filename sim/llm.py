@@ -15,7 +15,11 @@ import http.client
 import urllib.request
 import urllib.error
 
+import config_schema
 import providers
+
+# one source of truth for every admiral default (see LLMAdmiral.__init__)
+_ADM = {k: v["d"] for k, v in config_schema.SCHEMA["admirals"].items()}
 
 API_BASE = os.environ.get("DO_INFERENCE_BASE", "https://inference.do-ai.run/v1")
 
@@ -145,10 +149,20 @@ SHIP PROGRAMMING reference appended below when active.)"""
 
 
 class LLMAdmiral:
-    def __init__(self, model_id, label=None, temperature=0.2, max_tokens=700,
-                 timeout=45, think=False, history_chars=8000, memo_chars=2500,
-                 prompt="", scratchpad=True, scratchpad_chars=2000,
-                 warmup_timeout_s=120, base_prompt=""):
+    # Defaults come from the SCHEMA, never from a second copy here: memo_chars
+    # had drifted to 2500 against the schema's 6000 (and max_tokens to 700
+    # against 4000), with a test pinning the stale value. run_config always
+    # passes resolved config explicitly, so this governs direct construction —
+    # tests and ad-hoc use — which should agree with the documented default.
+    def __init__(self, model_id, label=None,
+                 temperature=_ADM["temperature"], max_tokens=_ADM["max_tokens"],
+                 timeout=_ADM["timeout_s"], think=_ADM["think"],
+                 history_chars=_ADM["history_chars"],
+                 memo_chars=_ADM["memo_chars"],
+                 prompt="", scratchpad=_ADM["scratchpad"],
+                 scratchpad_chars=_ADM["scratchpad_chars"],
+                 warmup_timeout_s=_ADM["warmup_timeout_s"],
+                 base_prompt=_ADM["base_prompt"]):
         self.model_id = model_id
         self.model_label = label or model_id
         self.name = self.model_label
