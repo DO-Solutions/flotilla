@@ -240,7 +240,8 @@ class Engine:
                     "ships but does NOT score; kills do NOT score. Highest territory "
                     "score at the bell wins; losing your flagship still eliminates you. "
                     "GEOGRAPHY: every cell belongs to its NEAREST territory seat "
-                    "(Chebyshev distance, ties to the lower id) — state.regions "
+                    "(Chebyshev distance; ties by straight-line distance, then "
+                    "the lower id) — state.regions "
                     "lists the seats, so you can work out which territory any "
                     "point is in. Ship programs can read terr.owner / terr.mine / "
                     "terr.capture for the territory under their keel.")
@@ -646,8 +647,16 @@ class Engine:
             pts.append((x, y, self._name_region(x, y, pts)))
         self.regions = [dict(id=i, x=p[0], y=p[1], name=p[2]) for i, p in enumerate(pts)]
         self.region_owner = {r["id"]: None for r in self.regions}
+        # cell -> territory: nearest seat by Chebyshev, ties by straight-line
+        # distance, then lower id. The euclidean tiebreak keeps mirrored maps
+        # symmetric along the middle — pure lower-id gave every equidistant
+        # centerline cell to the earlier-placed seat, visibly denting the
+        # 4-way symmetry down the map's spine. (cellmap=2 in replay meta; the
+        # viewer mirrors this rule exactly.)
         self._cellregion = [[min(self.regions, key=lambda r:
-                                 (cheb(cx, cy, r["x"], r["y"]), r["id"]))["id"]
+                                 (cheb(cx, cy, r["x"], r["y"]),
+                                  (cx - r["x"]) ** 2 + (cy - r["y"]) ** 2,
+                                  r["id"]))["id"]
                              for cy in range(self.H)] for cx in range(self.W)]
 
     def _presence(self):
@@ -1620,11 +1629,13 @@ class Engine:
             own = self.region_owner.get(rid)
             c2 = self._contest.get(rid)
             cap = max(1, self.cfg.get("territory_capture_ticks", 1))
+            sen["terr.id"] = rid
             sen["terr.owner"] = -1 if own is None else own
             sen["terr.mine"] = 1.0 if (own is not None and
                                        not self._hostile(own, ship.fleet)) else 0.0
             sen["terr.capture"] = min(99, c2[1] * 100 // cap) if c2 else 0
         else:
+            sen["terr.id"] = -2
             sen["terr.owner"] = -2
             sen["terr.mine"] = 0.0
             sen["terr.capture"] = 0
@@ -2489,7 +2500,8 @@ class Engine:
             teams={f.id: f.team for f in self.fleets.values()}
             if len({f.team for f in self.fleets.values()}) < len(self.fleets)
             else None,
-            regions=self.regions or None),
+            regions=self.regions or None,
+            cellmap=2 if self.regions else None),
             fleets=[dict(id=f.id, name=f.name, harbor=(f.hx, f.hy),
                          model=getattr(f.bot, "model_label", None),
                          designs=dict(f.designs), prompt=None)
@@ -2605,7 +2617,8 @@ class Engine:
                       teams={f.id: f.team for f in self.fleets.values()}
                       if len({f.team for f in self.fleets.values()}) < len(self.fleets)
                       else None,
-                      regions=self.regions or None),
+                      regions=self.regions or None,
+                      cellmap=2 if self.regions else None),
             fleets=[dict(id=f.id, name=f.name, harbor=(f.hx, f.hy),
                          model=getattr(f.bot, "model_label", None),
                          designs=dict(f.designs),
@@ -2774,8 +2787,11 @@ class Engine:
                                                      {}).items()}
             eng._contest = {int(k): list(v)
                             for k, v in data.get("contest", {}).items()}
+            # SAME tiebreak as _gen_regions (cheb, euclid², id) — a thawed
+            # run must land on the identical cell map or resume diverges
             eng._cellregion = [[min(eng.regions, key=lambda r:
                                     (cheb(cx, cy, r["x"], r["y"]),
+                                     (cx - r["x"]) ** 2 + (cy - r["y"]) ** 2,
                                      r["id"]))["id"]
                                 for cy in range(eng.H)]
                                for cx in range(eng.W)] if eng.regions else None

@@ -602,24 +602,22 @@ function renderSettingsPanel() {
   const scn = rp.meta.scenario || {};
   // the viewer's own toggles stay in the open — everything about the MATCH
   // lives in collapsed sections below (click a section to unfold it)
-  let h =
-    `<h3>view</h3><label style="display:block;margin-bottom:6px">` +
-    `<input type="checkbox" id="shownames"${S.showNames ? " checked" : ""}> ` +
-    `show names on the map — islands, shoals, admirals, squadrons</label>` +
-    `<label style="display:block;margin-bottom:6px">` +
-    `<input type="checkbox" id="showgrid"${S.showGrid ? " checked" : ""}> ` +
-    `grid lines (faint cell grid, brighter every 8 cells)</label>` +
-    `<label style="display:block;margin-bottom:6px">` +
-    `<input type="checkbox" id="hidpi"${S.quality !== "standard" ? " checked" : ""}> ` +
-    `sharp rendering (match display resolution — uncheck on slow machines)` +
-    `</label>` +
-    `<div style="margin-bottom:8px"><a href="#" class="btn btn-dl" id="perfmode">` +
-    (S.eco ? `✨ Quality Mode` : `⚡ Performance Mode`) + `</a> ` +
-    `<span class="desc" style="display:inline">` +
-    (S.eco ? `performance mode is ON (~30 fps, easy on screen shares) — ` +
-             `click to return to full-smoothness rendering`
-           : `render at ~30 fps and halve the paint work — recommended while ` +
-             `screen-sharing or on a video call`) + `</span></div>`;
+  const tog = (key, on, label, hint) =>
+    `<div style="display:flex;justify-content:space-between;align-items:center;` +
+    `gap:8px;margin-bottom:6px"><span>${label}` +
+    (hint ? ` <span class="desc" style="display:inline">${hint}</span>` : "") +
+    `</span><a href="#" class="btn ${on ? "btn-watch" : "btn-dl"} togbtn" ` +
+    `data-set="${key}" style="min-width:44px;text-align:center">` +
+    `${on ? "On" : "Off"}</a></div>`;
+  let h = `<h3>view</h3>` +
+    tog("perf", S.eco, "⚡ Performance Mode",
+        "~30 fps, no wakes — keeps GPU headroom for a screen share or call") +
+    tog("names", S.showNames, "Names on the map",
+        "islands, shoals, admirals, squadrons") +
+    tog("grid", S.showGrid, "Grid &amp; territory outlines",
+        "cell grid + dashed territory borders") +
+    tog("sharp", S.quality !== "standard", "Sharp rendering",
+        "match display resolution — turn Off on slow machines");
   const sec = (title, body, note) =>
     `<details><summary>${title}` +
     (note ? ` <span class="dim">${note}</span>` : "") +
@@ -2232,14 +2230,21 @@ function draw(fr, prev, alpha) {
   if (rp.meta.regions && fr.r) {                     // territory: tint by holder
     const owners = Object.fromEntries(fr.r);
     if (!S.cellRegion) {                               // nearest-center map (matches sim)
+      // cellmap 2 (2026-08-11+): Chebyshev, then euclidean, then lower id —
+      // the euclidean tiebreak keeps mirrored maps symmetric. Older replays
+      // ran the pure lower-id rule; render them with THEIR rule or the tint
+      // boundaries lie about where captures actually counted.
+      const v2 = rp.meta.cellmap === 2;
       S.cellRegion = [];
       for (let x = 0; x < rp.meta.w; x++) {
         S.cellRegion.push([]);
         for (let y = 0; y < rp.meta.h; y++) {
-          let best = 0, bd = 1e9;
+          let best = 0, bd = 1e9, be = 1e9;
           for (const r of rp.meta.regions) {
             const d = Math.max(Math.abs(x - r.x), Math.abs(y - r.y));
-            if (d < bd || (d === bd && r.id < best)) { bd = d; best = r.id; }
+            const e2 = v2 ? (x - r.x) ** 2 + (y - r.y) ** 2 : 0;
+            if (d < bd || (d === bd && (e2 < be ||
+                (e2 === be && r.id < best)))) { bd = d; be = e2; best = r.id; }
           }
           S.cellRegion[x].push(best);
         }
@@ -2260,7 +2265,9 @@ function draw(fr, prev, alpha) {
     }
     // dashed borders on every region boundary (static geometry — cached per
     // canvas scale). Slate, deliberately off every fleet + terrain color.
-    if (typeof Path2D !== "undefined") {
+    // They read as grid lines, so they live behind the same toggle: names,
+    // owner tint, and capture pies carry the territory story when it's off.
+    if (S.showGrid && typeof Path2D !== "undefined") {
       const bkey = cw + "x" + ch;
       if (!S.borderPath || S.borderKey !== bkey) {
         const path = new Path2D();
@@ -3313,22 +3320,30 @@ $("spoil").addEventListener("click", () => {
   }
   if (S.rp) seek(S.fi);              // redraw timeline marks + chart lines now
 });
-document.addEventListener("change", e => {
-  if (e.target && e.target.id === "shownames") {
-    S.showNames = e.target.checked;
-    try { localStorage.setItem("flotilla-names", S.showNames ? "on" : "off"); } catch (e2) {}
-    if (S.rp) seek(S.fi);              // instant, in any replay or live view
-  }
-  if (e.target && e.target.id === "showgrid") {
-    S.showGrid = e.target.checked;
-    try { localStorage.setItem("flotilla-grid", S.showGrid ? "on" : "off"); } catch (e2) {}
-    if (S.rp) seek(S.fi);
-  }
-  if (e.target && e.target.id === "hidpi") {
-    S.quality = e.target.checked ? "auto" : "standard";
-    try { localStorage.setItem("flotilla-quality", S.quality); } catch (e2) {}
-    fitCanvas();
-  }
+// the view toggles: one On/Off button per setting (no checkboxes)
+document.addEventListener("click", e => {
+  const b = e.target.closest && e.target.closest(".togbtn");
+  if (!b) return;
+  e.preventDefault();
+  const k = b.dataset.set;
+  try {
+    if (k === "perf") {
+      S.eco = !S.eco;
+      localStorage.setItem("flotilla-eco", S.eco ? "on" : "off");
+    } else if (k === "names") {
+      S.showNames = !S.showNames;
+      localStorage.setItem("flotilla-names", S.showNames ? "on" : "off");
+    } else if (k === "grid") {
+      S.showGrid = !S.showGrid;
+      localStorage.setItem("flotilla-grid", S.showGrid ? "on" : "off");
+    } else if (k === "sharp") {
+      S.quality = S.quality === "standard" ? "auto" : "standard";
+      localStorage.setItem("flotilla-quality", S.quality);
+    }
+  } catch (e2) {}
+  renderSettingsPanel();               // the button relabels itself
+  if (k === "sharp") fitCanvas();
+  else if (S.rp) seek(S.fi);
 });
 $("pov").addEventListener("change", () => {
   S.pov = parseInt($("pov").value);
