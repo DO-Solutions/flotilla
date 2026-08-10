@@ -35,6 +35,8 @@ cd sim && for t in ../tests/test_*.py; do [ "$(basename "$t")" = test_server.py 
 
 Fast smoke set before a PR: `test_config.py`, `test_elimination.py`, `test_parley.py`, `test_territory.py`, `test_server.py`.
 
+`test_viewer_replay.py` is the one test needing **node** (test-only): it runs the replay-canonicalization JS extracted from `viewer/index.html`, gating the viewer half of the replay contract. No node = `SKIPPED` locally; CI sets `FLOTILLA_REQUIRE_NODE=1` so a missing node fails instead of silently skipping.
+
 ### Regenerating generated docs
 
 `test_config.py` fails if the committed `CONFIG.md` / `config-schema.json` drift from the schema:

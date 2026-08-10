@@ -12,8 +12,18 @@ jobs:
       # loop used to stop at the earliest failing file: a broken test_config.py
       # (5th alphabetically) hid the other 28 sim files AND the server step for
       # 12 pushes. A red X must report every failure it knows about.
+      # node is TEST-ONLY (tests/test_viewer_replay.py runs the viewer's real JS
+      # canonicalization). Pinned here so the gate can never silently skip it:
+      # FLOTILLA_REQUIRE_NODE=1 turns a missing node into a failure rather than a
+      # SKIPPED line that reads like a pass. The shipped product is unaffected —
+      # still pure-stdlib Python, still one self-contained viewer HTML file.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
       - name: sim tests
         working-directory: sim
+        env:
+          FLOTILLA_REQUIRE_NODE: "1"
         run: |
           failed=""
           for t in ../tests/test_*.py; do
