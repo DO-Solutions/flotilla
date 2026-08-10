@@ -117,7 +117,8 @@
   .info .pop { display:none; position:absolute; left:18px; top:-4px; z-index:20;
                width:260px; background:#0a1b33; border:1px solid var(--accent);
                border-radius:8px; padding:7px 9px; font-size:11px; color:#c9d6ea;
-               line-height:1.4; }
+               line-height:1.4; white-space:normal; text-align:left;
+               font-weight:normal; text-transform:none; letter-spacing:0; }
   .info:hover .pop { display:block; }
   .brkt { display:flex; gap:22px; align-items:stretch; overflow-x:auto; padding:4px 0; }
   .brkt .rnd { display:flex; flex-direction:column; gap:14px; justify-content:space-around; }
@@ -1337,8 +1338,12 @@ function renderConfigForm() {
       const id = `ck_${sec}_${k}`;
       let input;
       if (s.t === "enum") {
+        // enum labels (schema `labels`): the VALUE stays the stable config id,
+        // the visible text is the friendly name (Score/Territories/Conquest)
         input = `<select id="${id}" data-sec="${sec}" data-k="${k}">` +
-          s.opts.map(o => `<option ${String(o) === String(s.d) ? "selected" : ""}>${o}</option>`).join("") +
+          s.opts.map(o => `<option value="${o}" ` +
+            `${String(o) === String(s.d) ? "selected" : ""}>` +
+            `${(s.labels || {})[o] ?? o}</option>`).join("") +
           `</select>`;
       } else if (s.t === "bool") {
         input = `<input type="checkbox" id="${id}" data-sec="${sec}" data-k="${k}" ${s.d ? "checked" : ""}>`;

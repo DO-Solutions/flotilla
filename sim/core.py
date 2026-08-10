@@ -217,14 +217,14 @@ class Engine:
         if not c["description"]:
             if c["win"] == "domination":
                 c["description"] = (
-                    "DOMINATION match: there is NO clock and NO points-victory. The only "
+                    "CONQUEST match: there is NO clock and NO points-victory. The only "
                     "way to win: be the last admiral afloat — a fleet is eliminated when "
                     "its flagship is destroyed. Cargo funds ships but does not score; "
                     "kills alone win nothing while any rival flag flies. Survive, "
                     "outbuild, and destroy every enemy flagship.")
             elif c["win"] == "territory":
                 c["description"] = (
-                    "TERRITORY match: the sea is split into named territories. Hold a "
+                    "TERRITORIES match: the sea is split into named territories. Hold a "
                     "territory by being the only fleet with ships in it; the holder "
                     "keeps it until ALL its ships leave or sink while a rival's ship "
                     "remains. "
@@ -241,7 +241,7 @@ class Engine:
                     "score at the bell wins; losing your flagship still eliminates you.")
             else:
                 c["description"] = (
-                    f"Timed match: score = cargo hauled to port + {c['kill_score']}/enemy "
+                    f"SCORE match (timed): score = cargo hauled to port + {c['kill_score']}/enemy "
                     f"ship sunk + {c['flag_kill_score']}/flagship destroyed. Highest "
                     "score at the bell wins; losing your flagship eliminates you.")
         self.roles_allowed = set(ROLES)

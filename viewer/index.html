@@ -315,10 +315,10 @@
   <div id="gnav">
     <button id="liveprev" style="display:none"
             title="watch the previous game of this series">⏮ previous game</button>
-    <button id="firstg" style="display:none" title="jump to the first game">⏮ Game 1</button>
-    <button id="prevg" style="display:none">⏮ previous game</button>
-    <button id="nextg" style="display:none">⏭ next game</button>
-    <button id="lastg" style="display:none" title="jump to the last game">last game ⏭</button>
+    <button id="firstg" style="display:none" title="jump to the first game">Game 1</button>
+    <button id="prevg" style="display:none">previous game</button>
+    <button id="nextg" style="display:none">next game</button>
+    <button id="lastg" style="display:none" title="jump to the last game">last game</button>
     <button id="seriesbtn" style="display:none" title="series stats — the whole series at a glance"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round" style="vertical-align:-2px"><path d="M3 4.5h6.5a2.5 2.5 0 0 1 2.5 2.5v13a2 2 0 0 0-2-2H3z"/><path d="M21 4.5h-6.5A2.5 2.5 0 0 0 12 7v13a2 2 0 0 1 2-2h7z"/></svg> Series stats</button>
     <button id="nextlive" style="display:none; background:#c22432; color:#fff"
       title="the game you are watching already ended in real time — finish it
@@ -735,6 +735,14 @@ function fmtTime(t) {
 // (Live) + red when that game is being played right now; watching live shows
 // only Previous (the pollers manage it). Re-rendered whenever the series
 // state changes under the viewer (refreshNav polls every 30s).
+// media-deck arrows: ONE triangle + bar for the single-game steps, TWO for
+// the endpoint jumps — next/previous read less severe than Game 1 / Game Y
+const NAVSVG = (paths) => `<svg width="15" height="12" viewBox="0 0 18 14" ` +
+  `fill="currentColor" style="vertical-align:-1px">${paths}</svg>`;
+const I1R = NAVSVG('<path d="M2 1l10 6-10 6z"/><rect x="13.5" y="1" width="2" height="12"/>');
+const I1L = NAVSVG('<rect x="2.5" y="1" width="2" height="12"/><path d="M16 1L6 7l10 6z"/>');
+const I2R = NAVSVG('<path d="M1 1l7 6-7 6z"/><path d="M8.5 1l7 6-7 6z"/><rect x="15.5" y="1" width="2" height="12"/>');
+const I2L = NAVSVG('<rect x="0.5" y="1" width="2" height="12"/><path d="M9.5 1l-7 6 7 6z"/><path d="M17 1l-7 6 7 6z"/>');
 function renderNav() {
   const pg = $("prevg"), ng = $("nextg"), fg = $("firstg"), lg = $("lastg");
   const sb = $("seriesbtn");
@@ -749,27 +757,30 @@ function renderNav() {
   const y = Math.max(S.bundle.expected || 0, fin + (S.bundle.liveJobId ? 1 : 0));
   if (S.gameIdx > 0) {
     pg.style.display = "";
-    pg.textContent = `⏮ Previous game (${x - 1}/${y})`;
+    pg.innerHTML = `${I1L} Previous game (${x - 1}/${y})`;
   } else pg.style.display = "none";
   if (S.gameIdx < fin - 1) {
-    ng.style.display = ""; ng.textContent = `⏭ Next game (${x + 1}/${y})`;
+    ng.style.display = ""; ng.innerHTML = `${I1R} Next game (${x + 1}/${y})`;
     ng.style.background = ""; ng.dataset.live = "";
   } else if (S.bundle.liveJobId) {
     ng.style.display = "";
-    ng.textContent = `⏭ Next game (${x + 1}/${y}) (Live)`;
+    ng.innerHTML = `${I1R} Next game (${x + 1}/${y}) (Live)`;
     ng.style.background = "#c22432"; ng.dataset.live = S.bundle.liveJobId;
   } else {
     ng.style.display = "none"; ng.dataset.live = "";
   }
-  // ⏮ Game 1 — a one-click jump back to the start, on every game after game 2
-  if (S.gameIdx >= 2) { fg.style.display = ""; } else fg.style.display = "none";
+  // Game 1 — a one-click jump back to the start, on every game after game 2
+  if (S.gameIdx >= 2) {
+    fg.style.display = "";
+    fg.innerHTML = `${I2L} Game 1`;
+  } else fg.style.display = "none";
   // Game Y — jump to the last game; or straight to the LIVE game if the
   // series is playing right now
   if (S.bundle.liveJobId) {
-    lg.style.display = ""; lg.textContent = "⏭ Live game";
+    lg.style.display = ""; lg.innerHTML = `${I2R} Live game`;
     lg.style.background = "#c22432"; lg.dataset.live = S.bundle.liveJobId;
   } else if (fin >= 3 && S.gameIdx < fin - 1) {
-    lg.style.display = ""; lg.textContent = `⏭ Game ${fin}`;
+    lg.style.display = ""; lg.innerHTML = `${I2R} Game ${fin}`;
     lg.style.background = ""; lg.dataset.live = "";
   } else { lg.style.display = "none"; lg.dataset.live = ""; }
 }
@@ -923,8 +934,10 @@ function load(rp) {
       `</div>`);
   }
   const sc = rp.meta.scenario;
+  const WIN_LABELS = { timed_score: "SCORE", territory: "TERRITORIES",
+                       domination: "CONQUEST" };
   $("introhint").textContent = (sc && sc.win !== "timed_score"
-      ? `${sc.win.toUpperCase()} scenario — ` : "") +
+      ? `${WIN_LABELS[sc.win] || String(sc.win).toUpperCase()} scenario — ` : "") +
     "press ▶ Play (top bar) — click any ship or island to inspect it";
   $("introseries").textContent = S.bundle
     ? `${S.bundle.name} — game ${S.bundle.games[S.gameIdx].game} of ${S.bundle.games.length}`
@@ -1978,9 +1991,11 @@ function updatePanels(fr) {
     }
   }
   // spoiler shield hides the TOTAL: a fixed end-time (or a live clock that
-  // stopped advancing) would give away that — and roughly when — the game ended
+  // stopped advancing) would give away that — and roughly when — the game
+  // ended. ??:?? keeps the "current / total" shape so the lone number doesn't
+  // read as the total.
   $("clock").textContent = S.spoiler
-    ? fmtTime(fr.t)
+    ? fmtTime(fr.t) + " / ??:??"
     : fmtTime(fr.t) + " / " + fmtTime(S.rp.frames.at(-1).t);
   const tick = $("gamelog");
   // the WHOLE log to this point, newest first, scrollable — review without
