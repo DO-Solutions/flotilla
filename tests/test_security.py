@@ -12,7 +12,9 @@ sys.path.insert(0, os.path.join(HERE, "scripts"))
 
 
 def load_server():
-    os.environ.setdefault("FLOTILLA_LIB", tempfile.mkdtemp())
+    # server.py reads FLOTILLA_LIBRARY — the old FLOTILLA_LIB spelling made
+    # this isolation a no-op and the module imported against the real ./library
+    os.environ.setdefault("FLOTILLA_LIBRARY", tempfile.mkdtemp())
     spec = importlib.util.spec_from_file_location("srv", os.path.join(HERE, "server.py"))
     m = importlib.util.module_from_spec(spec)
     try:
@@ -119,6 +121,30 @@ def main():
     assert srv._aux_post_bearer_ok("/api/aux/nope/game", "sekret") is False
     assert srv._aux_post_bearer_ok("/api/rename", "sekret") is False
     srv.AUX.pop("job-x", None)
+
+    # F7 — the VIEWER must escape model-authored fleet names.
+    # Server-side _esc killed the stored-XSS on the hub, but the viewer still
+    # interpolated f.name raw into innerHTML at two sites while every other name
+    # render in the same file used escHtml. /api/import accepts any replay dict,
+    # so a fleet named `<img src=x onerror=...>` executed for anyone opening it.
+    # No JS harness exists, so this pins the render sites at source level.
+    import re as _re
+    with open(os.path.join(HERE, "viewer", "index.html"), encoding="utf-8") as fh:
+        viewer = fh.read()
+    raw = [ln for n, ln in enumerate(viewer.split("\n"), 1)
+           if _re.search(r"\$\{(?:f|s\.f)\.name\}", ln)
+           and "escHtml" not in ln
+           and "strokeText" not in ln and "fillText" not in ln]
+    assert not raw, ("viewer interpolates a fleet name without escHtml (XSS): "
+                     + "; ".join(x.strip()[:90] for x in raw))
+    assert "${escHtml(f.name)}'s fog" in viewer, "fog-picker name must be escaped"
+
+    # js_embed_safe must also neutralize the unicode line separators, not just
+    # </script> — U+2028/9 break out of a JS string literal on their own.
+    import make_bundle
+    for ch in ("\u2028", "\u2029"):
+        out = make_bundle.js_embed_safe('a' + ch + 'b')
+        assert ch not in out, f"js_embed_safe passed through {ch!r}: {out!r}"
 
     print("PASS test_security")
 
