@@ -57,6 +57,25 @@ DEFAULT_ORDER = dict(role="guard", rally=None, aggression=1, retreat_hull_pct=35
                      target_fleet=None)
 
 
+def one_line(s, cap):
+    """Collapse model-authored text to a single line, then cap it.
+
+    Parley messages are rendered into a rival admiral's prompt as plain text
+    ("w3 from Rival: <text>"), so the one-line property IS the whole structural
+    defense of that block: a message able to emit a line break can forge engine
+    framing (`truce\\r=== CURRENT STATE — window 9 ===\\r...`) that renders
+    flush-left and reads as trusted context. Replacing only "\\n" left \\r, \\v,
+    U+0085 and U+2028/9 as live carriers, so every C0/C1 control and unicode
+    line separator is folded to a space here.
+    """
+    out = []
+    for ch in str(s):
+        o = ord(ch)
+        out.append(" " if o < 32 or o == 127 or 0x80 <= o <= 0x9F
+                   or o in (0x2028, 0x2029) else ch)
+    return "".join(out).strip()[:cap]
+
+
 def cheb(ax, ay, bx, by):
     return max(abs(ax - bx), abs(ay - by))
 
@@ -1194,16 +1213,52 @@ class Engine:
                     fleet.warnings.append(
                         f"⚠ ship design {str(name)[:20]!r} REJECTED: {reason}")
                     continue
+                # PAY FOR WHAT YOU DEFINED: cost is charged when a build is
+                # queued or a refit starts, but stats resolve at COMPLETION —
+                # so redefining a class with work already paid for handed out a
+                # 24-point hull for a 6-point price under flex_design (and a
+                # free re-spec at fixed points). Refuse while that class has
+                # in-flight work; redefining an idle class is still free.
+                if name in fleet.designs:
+                    inflight = None
+                    if any(p == name for p, _sq in fleet.build_q):
+                        inflight = "a queued build"
+                    elif any(b[0] == name for b in fleet.builds):
+                        inflight = "a build in the yard"
+                    elif any(s.fleet == fleet.id and s.refit_to == name
+                             for s in self.ships.values()):
+                        inflight = "a refit under way"
+                    if inflight:
+                        self._ev("design_rejected", fleet=fleet.id, name=name,
+                                 reason=f"{inflight} already paid for this class")
+                        fleet.warnings.append(
+                            f"⚠ ship design {name!r} REJECTED: {inflight} is "
+                            "already paid for at the current stats — redefine "
+                            "it once that work completes")
+                        continue
                 fleet.designs[name] = clean
                 self._ev("design", fleet=fleet.id, name=name, stats=clean)
         for squad, cls in self._as_dict(actions.get("refit")).items():
             if not isinstance(squad, str) or not squad:
                 continue
             sq = squad[:1].upper()
+            # refit is keyed by SQUADRON, never by ship id. {"refit": {"12": ...}}
+            # used to land in pending_refits["1"], match no squadron, and expire
+            # in silence — docs/ACTIONS.md advertised ship ids, so a model could
+            # follow the documentation and lose the order with no feedback.
+            if not sq.isalpha():
+                fleet.warnings.append(
+                    f"⚠ refit IGNORED: {str(squad)[:20]!r} is not a squadron — "
+                    "refit is keyed by squadron letter (A-F), not by ship id")
+                continue
             if cls is None or cls == "":
                 fleet.pending_refits.pop(sq, None)
             elif isinstance(cls, str) and self.class_stats(fleet, cls) is not None:
                 fleet.pending_refits[sq] = cls
+            else:
+                fleet.warnings.append(
+                    f"⚠ refit of squadron {sq} IGNORED: {str(cls)[:20]!r} is not "
+                    "a class you can build")
         for sid, sq in self._as_dict(actions.get("reassign")).items():
             try:
                 sid = int(sid)
@@ -1274,7 +1329,7 @@ class Engine:
         for pm in self._as_list(actions.get("parley")) if self.cfg["parley"] else []:
             if sent >= 2 or not isinstance(pm, dict):
                 continue
-            text = str(pm.get("text", "")).replace("\n", " ").strip()[:280]
+            text = one_line(pm.get("text", ""), 280)
             if not text:
                 continue
             to = pm.get("to")
@@ -1751,8 +1806,16 @@ class Engine:
             self._intent(ship, f"program L{ln}: assault — no enemy flagship left")
             return None
         if verb == "goto":
-            x = max(0, min(self.W - 1, int(args[0])))
-            y = max(0, min(self.H - 1, int(args[1])))
+            try:
+                x = max(0, min(self.W - 1, int(args[0])))
+                y = max(0, min(self.H - 1, int(args[1])))
+            except (OverflowError, ValueError):
+                # conn._fin now faults on non-finite arithmetic at the source, so
+                # this is reachable only from a pre-fix checkpoint whose pmem
+                # holds Infinity. int() on it raised OverflowError here and took
+                # the whole run down; hold instead, and say so in the intent log.
+                self._intent(ship, f"program L{ln}: goto(non-finite) — holding")
+                return None
             self._intent(ship, f"program L{ln}: goto({x},{y})")
             return (x, y) if (x, y) != (ship.x, ship.y) else None
         if verb == "home":
