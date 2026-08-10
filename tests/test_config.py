@@ -28,7 +28,7 @@ def main():
     assert "cost 5 cargo" in eng.cfg["rules"] and "60x34" in eng.cfg["rules"]
     f = eng.fleets[0]
     f.cargo = 14
-    eng._apply_actions(f, {"build": [{"preset": "trader", "squad": "A"}] * 3})
+    eng._apply_actions(f, {"build": [{"preset": "trawler", "squad": "A"}] * 3})
     assert len(f.build_q) == 2 and f.cargo == 4
     eng3 = Engine([("a", Idle()), ("b", Idle())], seed=1, max_ticks=1,
                   scenario={"signal_cost": 2, "signal_cd": 7})
@@ -40,6 +40,23 @@ def main():
     # …but the RETURN flag is, and charging/cooldown work
     eng3._apply_actions(f3, {"signal": {"return": "all"}})
     assert f3.cargo == 8 and f3.signal_cd == 7
+
+    # the committed docs (CONFIG.md + config-schema.json) must match what the
+    # schema generates — they're checked in so GitHub/bundles can find them,
+    # so this guards them from drifting silently out of date
+    import config_schema
+    root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    md = config_schema.config_md()
+    sj = config_schema.schema_json()
+    sj = sj if isinstance(sj, str) else sj.decode()
+    # tolerate a trailing newline so both `--md > CONFIG.md` (adds one) and a
+    # direct stdout.write (none) pass
+    with open(os.path.join(root, "CONFIG.md")) as fh:
+        assert fh.read().rstrip("\n") == md.rstrip("\n"), \
+            "CONFIG.md is stale — regenerate it (see CONTRIBUTING)"
+    with open(os.path.join(root, "config-schema.json")) as fh:
+        assert fh.read().rstrip("\n") == sj.rstrip("\n"), \
+            "config-schema.json is stale — regenerate it"
     print("PASS test_config")
 
 

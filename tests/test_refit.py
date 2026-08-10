@@ -39,7 +39,8 @@ class Scripted:
 
 # --- refit: docked ships convert, pay, and it's a standing directive ---
 bot = Scripted([{"refit": {"A": "frigate"}}])
-eng = Engine([("R", bot), ("X", Idle())], seed=7)
+eng = Engine([("R", bot), ("X", Idle())], seed=7,
+             scenario={"shipyard_slots": 8})
 f0 = eng.fleets[0]
 f0.cargo = 100
 start_cargo_after_w0 = None
@@ -72,7 +73,7 @@ ok(not any(e["k"] == "refit" for e in engpoor.events),
 
 # --- delayed refit: drydock hold, completes on time, paid up front ---
 engd = Engine([("R", Scripted([{"refit": {"A": "frigate"}}])), ("X", Idle())],
-              seed=7, scenario={"refit_ticks": 200})
+              seed=7, scenario={"refit_ticks": 200, "shipyard_slots": 8})
 engd.fleets[0].cargo = 100
 for _ in range(WINDOW + 5):
     engd.tick()
@@ -113,14 +114,14 @@ ok(rp["fleets"][0]["designs"].get("corvette") == CORVETTE,
 
 bad = Scripted([{"designs": {
     "cheat": {"speed": 9, "hold": 9, "guns": 9, "armor": 9, "hull": 9, "lookout": 9},
-    "trader": CORVETTE,
+    "trawler": CORVETTE,
     "ok-1": CORVETTE, "ok-2": CORVETTE, "ok-3": CORVETTE, "ok-4": CORVETTE,
     "ok-5": CORVETTE}}])
 eng4 = Engine([("B", bad), ("X", Idle())], seed=7)
 eng4.tick()
 f4 = eng4.fleets[0]
 ok("cheat" not in f4.designs, "over-budget design rejected")
-ok("trader" not in f4.designs or f4.designs.get("trader") != CORVETTE,
+ok("trawler" not in f4.designs or f4.designs.get("trawler") != CORVETTE,
    "built-in names are reserved")
 ok(len(f4.designs) <= 4, f"max 4 custom classes ({len(f4.designs)})")
 ok(any(e["k"] == "design_rejected" for e in eng4.events), "rejections are events")
@@ -167,7 +168,7 @@ ok("scales with the total" in engf.scenario["rules"], "digest documents flex pri
 engnf = Engine([("F", Idle()), ("X", Idle())], seed=7)
 ok(engnf._clean_design("cutter", CUTTER) is None,
    "flex off (default): non-12-point class rejected")
-ok(engnf.class_cost(engnf.fleets[0], "trader") == 15,
+ok(engnf.class_cost(engnf.fleets[0], "trawler") == 15,
    "flex off: flat ship_cost")
 
 # allow_designs=False ignores live designs

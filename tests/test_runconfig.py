@@ -50,5 +50,52 @@ with tempfile.TemporaryDirectory() as td:
     g1 = json.load(open(os.path.join(td, "g1.json")))
     ok("memos" in g1, "final game replay carries its debrief block")
 
+# --- memo_history integration: the series log accumulates with per-game
+# headers, a FAILED debrief appends nothing, and memo_history=False keeps
+# the old latest-memo-only behavior (wringer pass 3) ---
+class ScriptedMemos(LLMAdmiral):
+    def __init__(self):
+        super().__init__("stub-model", label="Scripty")
+        self.game_no = 0
+
+    def decide(self, summary, rng):
+        return {"thoughts": "sailing"}
+
+    def plan(self, summary):
+        return {}
+
+    def debrief(self, digest):
+        self.game_no += 1
+        if self.game_no == 3:
+            return dict(memo="", tin=0, tout=0, ms=0, cost=0.0, err="boom")
+        m = f"memo-{self.game_no}"
+        self.notes = m                       # what the real debrief does
+        return dict(memo=m, tin=0, tout=0, ms=0, cost=0.0, err=None)
+
+
+with tempfile.TemporaryDirectory() as td:
+    a = ScriptedMemos()
+    named = [("Scripty", a), ("m", BOTS["merchant"])]
+    ser = {**rc.section_defaults("series"), "games": 3, "memos": True,
+           "sim_feedback": False}          # keep the test offline
+    rc.run_series(named, seed=5, scenario={"max_ticks": 400, "warmup": False},
+                  ser=ser, outdir=td)
+    ok("— your memo after game 1 of 3 —" in a.notes and
+       "— your memo after game 2 of 3 —" in a.notes,
+       f"series log carries per-game headers")
+    ok(a.notes.count("memo-1") == 1 and a.notes.count("memo-2") == 1,
+       "each game's memo appears exactly once (no 2^k re-append)")
+    ok("game 3 of 3" not in a.notes,
+       "a FAILED debrief appends nothing to the log")
+with tempfile.TemporaryDirectory() as td:
+    a2 = ScriptedMemos()
+    named = [("Scripty", a2), ("m", BOTS["merchant"])]
+    ser = {**rc.section_defaults("series"), "games": 2, "memos": True,
+           "memo_history": False, "sim_feedback": False}
+    rc.run_series(named, seed=5, scenario={"max_ticks": 400, "warmup": False},
+                  ser=ser, outdir=td)
+    ok(a2.notes == "memo-2",
+       f"memo_history=False keeps latest-memo-only ({a2.notes!r})")
+
 print("FAILURES:", fails)
 sys.exit(1 if fails else 0)

@@ -51,8 +51,19 @@ e = err_of("set k = 1\nwhen self.x > 0: helm.hold()")
 ok(e and "undeclared" in e, "undeclared set rejected")
 e = err_of("mem a = 1")
 ok(e and "no when" in e, "program without when rejected")
-e = err_of("\n".join(["# pad"] * 100))
-ok(e and "64 lines" in e, "line cap enforced")
+e = err_of("\n".join(f"mem v{i} = 0" for i in range(100)))
+ok(e and "64 statements" in e, "statement cap enforced")
+e = err_of("\n".join(["# pad"] * 100) + "\nwhen self.docked: helm.hold()")
+ok(e is None, "comments and blanks are FREE — only statements count")
+# v1.2: mem declarations hoist — a mem at the BOTTOM still counts
+e = err_of("when mem.late > 0: helm.home()\ndefault: helm.hold()\nmem late = 1")
+ok(e is None, "mem declared after use compiles (hoisted)")
+p2 = conn.compile_program("when self.full and self.rank % 2 == 0: helm.home()\n"
+                     "when self.stuck > 100 or self.idle > 200: helm.home()\n"
+                     "default: helm.hold()")
+out = p2.run({"self.full": 1.0, "self.rank": 2.0, "self.stuck": 0,
+              "self.idle": 0}, p2.init_mem())
+ok(out is not None and out[0] == "home", "v1.2 sensors evaluate in programs")
 e = err_of("when self.x > 0: helm.goto(1)")
 ok(e and "takes 2 args" in e, "action arity checked")
 
@@ -228,6 +239,38 @@ def play(seed):
 
 
 ok(play(9) == play(9), "byte-determinism holds with programs")
+
+# every worked example in the API reference must COMPILE through the real
+# parser — a reference that teaches broken code is worse than none
+ref = conn.api_reference(5)
+blocks, cur = [], None
+for line in ref.splitlines():
+    if line.startswith("Example ("):
+        cur = []
+    elif cur is not None and line.startswith("  "):
+        cur.append(line[2:])
+    elif cur is not None and not line.strip():
+        if cur:
+            blocks.append("\n".join(cur))
+        cur = None
+if cur:
+    blocks.append("\n".join(cur))
+ok(len(blocks) == 5, f"reference carries 5 examples (got {len(blocks)})")
+for i, b in enumerate(blocks):
+    try:
+        conn.compile_program(b)
+        ok(True, f"reference example {i + 1} compiles")
+    except conn.ConnError as e:
+        ok(False, f"reference example {i + 1} does NOT compile: {e}")
+
+# the ladder trims from the top: 2 = bare pair, each step adds one
+ok("PHASE MACHINE" not in conn.api_reference(2)
+   and "LANE SPLIT" in conn.api_reference(2), "examples=2 is the bare pair")
+ok("PHASE MACHINE" in conn.api_reference(3)
+   and "FLAGSHIP HUNT" not in conn.api_reference(3), "examples=3 adds phases")
+ok("FLAGSHIP HUNT" in conn.api_reference(4)
+   and "PACK HUNTER" not in conn.api_reference(4), "examples=4 adds the hunt")
+ok("PACK HUNTER" in conn.api_reference(5), "examples=5 is the full ladder")
 
 print("FAILURES:", fails)
 sys.exit(1 if fails else 0)

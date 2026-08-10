@@ -16,16 +16,20 @@ Grammar (one statement per line, evaluated TOP-DOWN every tick per ship):
   mem <name> = <number>         persistent per-ship variable, initialized once
   set <name> = <expr>           assignment — executes whenever the line is reached
   when <expr>: <action>         first true `when` fires its action; run ends
+  when <expr>: set <n> = <e>; …[; <action>]   compound body: sets run, then the
+                                optional action fires (ends the run if present)
   default: <action>             same as `when 1:`
 
 Actions:  helm.goto(x, y) · helm.gather() · helm.attack() · helm.flee()
           · helm.home() · helm.hold()
 Exprs:    numbers · sensors · mem.<name> · + - * / % · == != < <= > >= ·
-          and or not · ( ) · min(a,b) max(a,b) abs(a) dist(x1,y1,x2,y2)
+          and or not · ( ) · min(a,b) max(a,b) abs(a) sign(a) ·
+          dist(x1,y1,x2,y2)
 
 The SENSORS/ACTIONS tables below are the single source of truth: the interpreter,
 the API reference injected into admiral prompts, and the docs all derive from them.
 """
+import difflib
 import re
 
 SENSORS = {
@@ -36,6 +40,11 @@ SENSORS = {
     "self.speed": "your speed stat",
     "self.docked": "1 inside your harbor circle else 0",
     "self.tick": "current game tick",
+    "self.full": "1 if your hold is full (cargo >= capacity)",
+    "self.rank": "your index among your squadron's LIVING ships (0,1,2… by age) — split lanes with it",
+    "self.count": "how many living ships your squadron has",
+    "self.stuck": "ticks wedged AT SEA (unable to move); 0 while docked",
+    "self.idle": "ticks AT SEA without gaining cargo; 0 while docked",
     "harbor.x": "your harbor x", "harbor.y": "your harbor y",
     "harbor.dist": "distance to your harbor",
     "enemy.found": "1 if an enemy ship is in YOUR ship's sight",
@@ -53,6 +62,11 @@ SENSORS = {
     "node.kind": "0 = fish shoal (regenerates), 1 = wreck (finite)",
     "rival.found": "1 if orders.target_fleet names a living rival",
     "rival.x": "that rival's harbor x", "rival.y": "that rival's harbor y",
+    "rival.flag_x": "nearest hostile FLAGSHIP x (harbors are on the map)",
+    "rival.flag_y": "nearest hostile flagship y",
+    "rival.flag_dist": "distance to the nearest hostile flagship (destroy it to eliminate that fleet)",
+    "rival.flag_hull": "that flagship's hull — revealed ONLY when one of your ships is close enough to scout it, else -1 (get in close to learn it — and risk its guns)",
+    "rival.yard_busy": "that fleet's shipyard works in progress (builds+refits+repairs) — revealed at the same close scouting range as flag_hull, else -1 (read their production tempo up close)",
     "orders.rally_x": "rally x from your squadron's standing orders",
     "orders.rally_y": "rally y from standing orders",
     "orders.aggression": "aggression from standing orders (0-3)",
@@ -62,16 +76,20 @@ SENSORS = {
 ACTIONS = {
     "goto": (2, "sail toward (x, y)"),
     "gather": (0, "gather if ON a stocked island (else holds)"),
-    "attack": (0, "close on the nearest visible enemy (guns fire automatically in range)"),
+    "attack": (0, "close on the nearest visible enemy SHIP (guns fire automatically in range)"),
+    "assault": (0, "close on the nearest hostile FLAGSHIP and batter it — the only way to eliminate a fleet. Flag damage needs adjacency (cheb<=1); the flag's own guns reach 2 cells, so expect to trade hulls. Send mass."),
     "flee": (0, "run directly away from the nearest visible enemy"),
     "home": (0, "make for your harbor (deposits/repairs/new orders in the circle)"),
     "hold": (0, "hold position"),
 }
 
 FUNCS = {"min": 2, "max": 2, "abs": 1, "sign": 1, "dist": 4}
+# dist() is CHEBYSHEV (grid) distance — the same metric the whole game uses
 
 MAX_LINES = 64
-BUDGET = 1500                  # expression-node evaluations per ship per tick
+BUDGET = 3000                  # expression-node evaluations per ship per tick
+                               # (raised with program_chars for richer programs;
+                               # the perf pass gave the headroom)
 
 
 class ConnError(Exception):
@@ -80,12 +98,50 @@ class ConnError(Exception):
         self.line = line
 
 
-def api_reference():
+def api_reference(examples=5):
     """The API card admirals receive — generated from the same tables the
-    interpreter runs on, so documentation can never drift from behavior."""
+    interpreter runs on, so documentation can never drift from behavior.
+    examples (2-5) = how many worked examples to include: the first two are
+    always shown; the PHASE MACHINE / FLAGSHIP HUNT / PACK HUNTER walkthroughs
+    are the difficulty ladder (rank presets trim them — an Admiral gets the
+    bare tables, a Captain gets the full tutorial)."""
     s = "\n".join(f"  {k:<18} {v}" for k, v in SENSORS.items())
     a = "\n".join(f"  helm.{k}({', '.join('xy'[i] for i in range(n)) if n else ''})"
                   f"  — {d}" for k, (n, d) in ACTIONS.items())
+    ladder = ""
+    if examples >= 3:
+        ladder += """
+Example (PHASE MACHINE — explicit state beats clever conditions; declare a
+mem, branch on it, advance it):
+  mem phase = 0
+  when mem.phase == 0 and self.full: set phase = 1
+  when mem.phase == 0 and node.found and node.dist == 0: helm.gather()
+  when mem.phase == 0 and node.found: helm.goto(node.x, node.y)
+  when mem.phase == 1 and self.docked: set phase = 0
+  when mem.phase == 1: helm.home()
+  when self.idle > 300: helm.home()
+  default: helm.goto(orders.rally_x, orders.rally_y)
+"""
+    if examples >= 4:
+        ladder += """
+Example (FLAGSHIP HUNT — domination is won at the enemy flag; mass first,
+press the flag, break off before you sink):
+  when self.hull_pct < 30: helm.home()
+  when self.count < 3: helm.goto(orders.rally_x, orders.rally_y)
+  when enemy.found and enemy.dist <= 1 and rival.flag_dist > 3: helm.attack()
+  default: helm.assault()
+"""
+    if examples >= 5:
+        ladder += """
+Example (PACK HUNTER — fight only with local superiority; alone, fall back
+to the rally and wait for the pack):
+  mem hot = 0
+  when self.hull_pct < orders.retreat: set hot = 0; helm.home()
+  when enemy.found and not enemy.stronger and ally.dist <= 4: set hot = 1; helm.attack()
+  when enemy.found and enemy.stronger and enemy.dist < 6: helm.flee()
+  when mem.hot == 1 and enemy.found: helm.attack()
+  default: helm.goto(orders.rally_x, orders.rally_y)
+"""
     return f"""
 SHIP PROGRAMMING (the conn language) — each ship is a machine; your program HAS THE
 CONN and drives its helm. Send "programs": {{"A": "<script>"}} alongside orders — same
@@ -104,7 +160,8 @@ Statements (one per line, run TOP-DOWN every tick):
   # comment
 
 Expressions: + - * / %  · == != < <= > >=  · and or not · ( ) ·
-  min(a,b) max(a,b) abs(a) sign(a) dist(x1,y1,x2,y2)
+  min(a,b) max(a,b) abs(a) sign(a) dist(x1,y1,x2,y2) — grid (Chebyshev) distance,
+  the same metric every range in the game uses
 
 SENSORS (read-only):
 {s}
@@ -123,12 +180,18 @@ error makes that ship fall back to its standing orders for the tick. Budget:
 Example (a self-preserving forager):
   mem lowfuel = 0
   when self.hull_pct < orders.retreat: helm.home()
-  when self.cargo >= self.hold_cap: helm.home()
+  when self.full: helm.home()
   when enemy.found and enemy.stronger and enemy.dist < 8: helm.flee()
   when node.found and node.dist == 0: helm.gather()
-  when node.found: helm.goto(node.x, node.y)
+
+Example (LANE SPLIT — stop the whole squadron stacking on one shoal;
+self.rank spreads ships WITHOUT signals):
+  when self.full: helm.home()
+  when self.stuck > 150: helm.home()
+  when node.found and self.rank % 2 == 0 and node.dist == 0: helm.gather()
+  when node.found and self.rank % 2 == 0: helm.goto(node.x, node.y)
   default: helm.goto(orders.rally_x, orders.rally_y)
-"""
+{ladder}"""
 
 
 # ---------------- tokenizer / parser ----------------
@@ -235,7 +298,12 @@ class _P:
                 raise ConnError(f"mem.{name} not declared (add: mem {name} = 0)",
                                 self.line)
             return ("mem", name)
-        raise ConnError(f"unknown name {tok!r} — see the sensor list", self.line)
+        cands = list(SENSORS) + [f"mem.{d}" for d in self.decls] + list(FUNCS)
+        sug = difflib.get_close_matches(tok, cands, n=2, cutoff=0.5)
+        hint = (f" — did you mean {' or '.join(sug)}?" if sug else
+                f" — declare your own variable first (mem {tok} = 0, then "
+                f"mem.{tok}) or use a sensor from the list")
+        raise ConnError(f"unknown name {tok!r}{hint}", self.line)
 
 
 def _parse_action(p):
@@ -294,18 +362,25 @@ def compile_program(text):
     decls = {}
     stmts = []                             # ("set", name, expr) | ("when", expr, action)
     lines = text.splitlines()
-    if len(lines) > MAX_LINES:
-        raise ConnError(f"program exceeds {MAX_LINES} lines")
+    meaningful = [l for l in lines if l.split("#", 1)[0].strip()]
+    if len(meaningful) > MAX_LINES:        # comments/blanks are free
+        raise ConnError(f"program exceeds {MAX_LINES} statements "
+                        f"({len(meaningful)}; comments don't count)")
+    # pass 1: HOIST every mem declaration — models paste programs with their
+    # mems at the bottom, and declaration order should never be an error
     for ln, raw in enumerate(lines, 1):
         s = raw.split("#", 1)[0].strip()
-        if not s:
-            continue
         if s.startswith("mem "):
             m = re.fullmatch(r"mem\s+([A-Za-z_][A-Za-z_0-9]*)\s*=\s*(-?\d+\.?\d*)", s)
             if not m:
                 raise ConnError("mem syntax: mem <name> = <number>", ln)
             decls[m.group(1)] = float(m.group(2))
+    for ln, raw in enumerate(lines, 1):
+        s = raw.split("#", 1)[0].strip()
+        if not s:
             continue
+        if s.startswith("mem "):
+            continue                       # hoisted in pass 1
         if s.startswith("set "):
             m = re.match(r"set\s+([A-Za-z_][A-Za-z_0-9]*)\s*=\s*(.+)", s)
             if not m:
@@ -339,7 +414,8 @@ def compile_program(text):
             stmts.append(("when", cond, sets, action, ln))
             continue
         raise ConnError(f"cannot parse {s[:30]!r} — statements are "
-                        "mem/set/when/default", ln)
+                        "mem/set/when/default (an action like helm.home() "
+                        "must sit inside a when/default body)", ln)
     if not any(st[0] == "when" and st[3] is not None for st in stmts):
         raise ConnError("program has no when/default with an ACTION — it can never act")
     return Program(decls, stmts, text)
@@ -360,18 +436,22 @@ class Program:
         """One tick: returns (verb, [arg values], line) or None (no when fired).
         Raises ConnError on budget exhaustion."""
         budget = [BUDGET]
+        staged = dict(mem)                 # ev() reads THIS: later statements
+                                           # see earlier writes, as always
 
         def ev(node):
-            budget[0] -= 1
+            # check-then-decrement: the advertised budget is the real budget
+            # (decrement-first admitted BUDGET-1 evaluations)
             if budget[0] <= 0:
                 raise ConnError(f"instruction budget ({BUDGET}) exhausted")
+            budget[0] -= 1
             k = node[0]
             if k == "num":
                 return node[1]
             if k == "sensor":
                 return float(sensors.get(node[1], 0.0))
             if k == "mem":
-                return float(mem.get(node[1], 0.0))
+                return float(staged.get(node[1], 0.0))
             if k == "neg":
                 return -ev(node[1])
             if k == "not":
@@ -415,14 +495,26 @@ class Program:
                 return 1.0 if a > b else 0.0
             return 1.0 if a >= b else 0.0
 
-        for st in self.stmts:
-            if st[0] == "set":
-                mem[st[1]] = ev(st[2])
-            else:                          # ("when", cond, sets, action, line)
-                if ev(st[1]):
-                    for name, e in st[2]:  # body sets run; evaluation continues…
-                        mem[name] = ev(e)
-                    if st[3] is not None:  # …unless an action fires
-                        verb, argnodes = st[3]
-                        return (verb, [ev(x) for x in argnodes], st[4])
-        return None
+        # writes stage into the scratch overlay and COMMIT only on clean exit —
+        # a budget fault mid-walk used to keep the earlier assignments, so a
+        # too-big program "ran standing orders" while its phase counters
+        # silently advanced every tick
+        try:
+            for st in self.stmts:
+                if st[0] == "set":
+                    staged[st[1]] = ev(st[2])
+                else:                      # ("when", cond, sets, action, line)
+                    if ev(st[1]):
+                        for name, e in st[2]:   # body sets run; evaluation continues…
+                            staged[name] = ev(e)
+                        if st[3] is not None:   # …unless an action fires
+                            verb, argnodes = st[3]
+                            out = (verb, [ev(x) for x in argnodes], st[4])
+                            mem.clear()
+                            mem.update(staged)
+                            return out
+            mem.clear()
+            mem.update(staged)
+            return None
+        except ConnError:
+            raise                          # mem untouched: all-or-nothing

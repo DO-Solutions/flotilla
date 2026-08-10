@@ -4,6 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Flotilla — replay</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns=%27http://www.w3.org/2000/svg%27 viewBox=%270 0 100 100%27%3E%3Ctext y=%27.9em%27 font-size=%2790%27%3E%E2%9B%B5%3C/text%3E%3C/svg%3E">
 <style>
   :root {
     --bg: #0b1220; --card: #111a2e; --line: #1e2a44; --ink: #e6edf7;
@@ -13,9 +14,12 @@
   body { background: var(--bg); color: var(--ink);
          font: 14px/1.45 "Segoe UI", system-ui, sans-serif; padding: 14px; }
   header { display: flex; align-items: baseline; gap: 14px; margin-bottom: 10px; }
+  #gnav { margin-left: auto; display: flex; gap: 6px; align-self: center; }
   header h1 { font-size: 20px; letter-spacing: 3px; }
   header h1 span { color: var(--accent); }
-  #meta { color: var(--dim); font-size: 12px; }
+  #meta { color: var(--ink); font-size: 14px; font-weight: 600; }
+  #meta .mvs { color: var(--dim); font-weight: 400; }
+  #meta .mdim { color: var(--dim); font-weight: 400; }
   #layout { display: flex; gap: 12px; flex-wrap: wrap; }
   #seawrap { flex: 1 1 640px; min-width: 320px; background: var(--card);
              border: 1px solid var(--line); border-radius: 10px; padding: 8px; }
@@ -24,14 +28,87 @@
   #legend { display: flex; gap: 14px; flex-wrap: wrap; margin-top: 6px;
             color: var(--dim); font-size: 11px; }
   #side { width: 310px; display: flex; flex-direction: column; gap: 8px; }
+  /* fullscreen theater: the sea fills the screen, panel + bar float as
+     overlays (twitch-chat style) and each can be hidden */
+  body.fsmode { overflow: hidden; }
+  body.fsmode header, body.fsmode #legend { display: none; }
+  body.fsmode #layout { display: block; }
+  body.fsmode #seawrap { position: fixed; inset: 0; height: 100dvh; z-index: 5;
+    margin: 0; border: 0; border-radius: 0; padding: 0; background: #060d1c;
+    display: flex; align-items: center; justify-content: center; }
+  body.fsmode canvas#sea { width: min(100vw, calc(100dvh * 16 / 9));
+    max-height: 100dvh; border-radius: 0; }
+  body.fsmode #side { position: fixed; right: 0; top: 0; bottom: 0; z-index: 7;
+    width: 330px; overflow-y: auto; background: #0b1220e6; padding: 10px;
+    backdrop-filter: blur(4px);
+    transition: opacity .25s ease, transform .3s ease; }
+  body.fsmode #bar { position: fixed; left: 0; right: 0; top: 0; z-index: 8;
+    background: #0b1220cc; padding: 6px 10px; backdrop-filter: blur(4px);
+    transition: opacity .25s ease, transform .3s ease; }
+  /* a pinned panel owns its column: the bar stops at its edge, and the
+     top-edge summon zone skips that column (reaching for the panel tabs must
+     never yank the bar down over them) */
+  body.fsmode:not(.autopanel) #bar { right: 330px; }
+  /* pinned: present but faded until hovered */
+  body.fsmode #side { opacity: .3; }
+  body.fsmode #side:hover { opacity: 1; }
+  body.fsmode #bar { opacity: .3; }
+  body.fsmode #bar:hover { opacity: 1; }
+  /* auto: parked off-screen until the mouse visits that edge */
+  body.fsmode.autopanel #side { transform: translateX(102%); opacity: 0; }
+  body.fsmode.autopanel.peekpanel #side { transform: none; opacity: 1; }
+  body.fsmode #drop { display: none; }   /* no drop-hint over the theater */
+  body.fsmode.autobar #bar { transform: translateY(-102%); opacity: 0; }
+  body.fsmode.autobar.peekbar #bar { transform: none; opacity: 1; }
+  .fsonly { display: none; }
+  body.fsmode .fsonly { display: inline-block; }
+  #fsexit { position: fixed; left: 10px; top: 10px; z-index: 9;
+    background: #0b1220cc; color: var(--ink); border: 1px solid var(--line);
+    border-radius: 6px; padding: 3px 10px; cursor: pointer; font-size: 13px; }
+  body.fsmode.nobar #fsexit, body.fsmode.autobar #fsexit { z-index: 9; }
+  #barpin, #sidepin { background: #16223c; color: var(--ink);
+    border: 1px solid var(--line); border-radius: 6px; padding: 3px 8px;
+    cursor: pointer; font-size: 11px; }
+  #sidepin { margin-left: auto; }
+  /* themed scrollbars everywhere (the scratchpad's default ones stuck out) */
+  * { scrollbar-width: thin; scrollbar-color: #2c3c5f #0a1424; }
+  ::-webkit-scrollbar { width: 9px; height: 9px; }
+  ::-webkit-scrollbar-track { background: #0a1424; border-radius: 5px; }
+  ::-webkit-scrollbar-thumb { background: #2c3c5f; border-radius: 5px;
+                              border: 2px solid #0a1424; }
+  ::-webkit-scrollbar-thumb:hover { background: #3d5680; }
   .fleet { background: var(--card); border: 1px solid var(--line); border-radius: 10px;
-           padding: 8px 10px; border-left: 4px solid var(--fc, var(--accent)); }
+           padding: 8px 10px; border-left: 4px solid var(--fc, var(--accent));
+           cursor: pointer; }
+  .fleet.xp { border-color: var(--fc, var(--accent)); }
+  .fleet .xpd { display: none; }
+  .fleet.xp .xpd { display: block; margin-top: 6px; border-top: 1px solid #1e2a44;
+                   padding-top: 6px; font-size: 12px; color: var(--dim); }
+  .fleet.xp .st, .fleet.xp .xpd { font-size: 13px; line-height: 1.5; }
+  .sqchips { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 5px; }
+  .sqchip { border: 1px solid var(--line); border-radius: 6px; padding: 1px 8px;
+            cursor: pointer; color: var(--ink); }
+  .sqchip:hover { background: #16223c; }
+  .sqchip.on { border-color: var(--fc, var(--accent));
+               background: #16223c; }
+  .fleet .legend { display: flex; flex-wrap: wrap; gap: 8px 14px; margin: 4px 0; }
+  .fleet .legend .li { display: flex; align-items: center; gap: 5px; }
+  .fleet .legend canvas { background: #0a1b33; border-radius: 5px; }
+  .fleet .yardjobs div { margin-top: 2px; }
   .fleet .row { display: flex; justify-content: space-between; align-items: baseline; }
   .fleet .nm { font-weight: 600; }
   .fleet .sc { font-size: 18px; font-variant-numeric: tabular-nums; }
   .fleet .st { color: var(--dim); font-size: 12px; }
   .fleet .th { font-size: 12px; margin-top: 4px; font-style: italic; color: #b9c6dd;
                min-height: 2.6em; }
+  .fleet .pad { font-size: 11px; margin-top: 5px; color: #8fa3c4; white-space: pre-wrap;
+                background: #0a1424; border: 1px solid #1e2a44; border-radius: 5px;
+                padding: 4px 7px; max-height: 4.5em; overflow-y: auto;
+                overflow-x: hidden; overflow-wrap: anywhere; }
+  .fleet.xp .pad { max-height: 46vh; font-size: 12px; }
+  /* the scratchpad belongs to the Admirals tab ONLY — hard-gate its
+     visibility on the mode so stale DOM can never leak it onto Fleets */
+  #fleetcards:not(.adm) .padbox { display: none; }
   .hull { height: 4px; background: #24304d; border-radius: 2px; margin-top: 6px; }
   .hull i { display: block; height: 100%; border-radius: 2px; background: var(--fc); }
   .dead { opacity: .45; }
@@ -43,6 +120,25 @@
                       color: var(--dim); margin: 4px 0; }
   #inspector .intent { color: #ffd76a; margin-top: 4px; }
   #inspector .ord { color: #b9c6dd; margin-top: 2px; }
+  .mlogo { width:16px; height:16px; border-radius:50%; display:inline-block;
+    vertical-align:-3px; margin-right:5px; }
+  .mlogo.mono { color:#fff; font:bold 10px/16px sans-serif; text-align:center; }
+  #inspector .sqlink { text-decoration: underline dotted; cursor: pointer; }
+  #inspector .sqlink:hover { color: #fff; }
+  #inspector .sqrow { padding: 2px 4px; margin-top: 2px; border-radius: 4px;
+    cursor: pointer; background: #0a1b3355; }
+  #inspector .sqrow:hover { background: #1e2a44; }
+  #inspector .sqrow.dead { opacity: .55; }
+  #inspector .verlist { max-height: 180px; overflow-y: auto; margin: 4px 0;
+                        border: 1px solid #1e2a44; border-radius: 6px; }
+  #inspector .dadd { color: #7ee787; background: #10261a66; display: block; }
+  #inspector .ddel { color: #ff7b72; background: #2b121666; display: block;
+                     text-decoration: line-through; }
+  #inspector .dctx { color: #8b9bb8; display: block; }
+  #inspector pre.prog { background: #060d1c; border: 1px solid #1e2a44;
+    border-radius: 6px; padding: 7px 9px; margin-top: 6px; font-size: 11px;
+    line-height: 1.45; white-space: pre-wrap; word-break: break-word;
+    max-height: 300px; overflow-y: auto; color: #b7e3ff; }
   #bar { margin-bottom: 10px; background: var(--card); border: 1px solid var(--line);
          border-radius: 10px; padding: 8px 12px; }
   #timeline { width: 100%; height: 34px; display: block; cursor: pointer; margin-bottom: 6px; }
@@ -71,19 +167,35 @@
                    border-radius: 10px; padding: 8px 10px; max-height: 560px;
                    overflow-y: auto; font-size: 12px; }
   #settingspanel h3 { font-size: 13px; color: var(--accent); margin: 6px 0 3px; }
+  #helppanel { background: var(--card); border: 1px solid var(--line);
+    border-radius: 10px; padding: 10px 12px; font-size: 12px;
+    max-height: 78vh; overflow-y: auto; }
+  #helppanel h3 { font-size: 13px; color: var(--accent); margin: 8px 0 3px; }
+  #helppanel p, #helppanel li { color: #c9d6ea; line-height: 1.45; }
+  #helppanel ul { padding-left: 16px; margin: 2px 0 6px; }
+  #helppanel b { color: var(--ink); }
   #settingspanel .kv { display: flex; justify-content: space-between; gap: 10px;
                        border-bottom: 1px solid #16223c; padding: 2px 0; }
   #settingspanel .kv span:last-child { color: #b9c6dd; }
   #settingspanel .desc { color: var(--dim); margin-bottom: 6px; white-space: pre-wrap; }
+  .info { position:relative; display:inline-block; color:var(--dim); cursor:help;
+          border:1px solid var(--line); border-radius:50%; width:14px; height:14px;
+          line-height:12px; text-align:center; font-size:9px; margin-left:4px; }
+  .info .pop { display:none; position:absolute; right:18px; top:-4px; z-index:20;
+               width:240px; background:#0a1b33; border:1px solid var(--accent);
+               border-radius:8px; padding:7px 9px; font-size:11px; color:#c9d6ea;
+               line-height:1.4; white-space:normal; text-align:left; }
+  .info:hover .pop { display:block; }
   #logcard { background: var(--card); border: 1px solid var(--line);
              border-radius: 10px; padding: 8px 10px; margin-top: 8px;
              max-height: 300px; overflow-y: auto; }
   #logcard h3, #chartcard h3 { font-size: 13px; color: var(--accent); margin-bottom: 4px; }
+  #gamelog { max-height: 44vh; overflow-y: auto; }
   #gamelog div { font-size: 12px; margin-bottom: 4px; color: var(--dim); }
   #gamelog b { color: var(--ink); }
   #parleyfeed { background: var(--card); border: 1px solid var(--line);
-                border-radius: 10px; padding: 8px 10px; max-height: 520px;
-                overflow-y: auto; }
+                border-radius: 10px; padding: 8px 10px;
+                max-height: calc(100vh - 230px); overflow-y: auto; }
   #parleyfeed .msg { font-size: 12px; margin-bottom: 7px; color: #d5deee;
                      border-left: 3px solid var(--mc, var(--dim));
                      padding-left: 7px; }
@@ -97,6 +209,16 @@
                     color: #d5deee; border-left: 3px solid var(--mc, var(--dim));
                     padding-left: 8px; }
   #memofeed .memo h4 { font-size: 13px; margin-bottom: 3px; color: var(--mc); }
+  #memofeed .memo { cursor: pointer; border: 1px solid transparent;
+                    border-radius: 8px; padding: 5px 7px; }
+  #memofeed .memo:hover { background: #0a1b3355; }
+  #memofeed .memo.open { border-color: var(--mc); background: #0a142466; }
+  /* memos ARE spoilers (each is written post-game): shielded until clicked */
+  #memofeed .memo .shieldnote { display: none; }
+  #memofeed .memo.shield .shieldnote { display: block; color: var(--dim);
+    font-style: italic; }
+  #memofeed .memo.shield .mshort, #memofeed .memo.shield .mfull {
+    filter: blur(6px); user-select: none; }
   #memofeed .note { color: var(--dim); font-size: 11px; margin-bottom: 8px; }
   .fleet .ag { color: var(--dim); font-size: 12px; margin-top: 2px; }
   #drop { margin-top: 10px; color: var(--dim); font-size: 12px; }
@@ -107,29 +229,53 @@
   <h1><a href="/" id="homelink" style="color:inherit;text-decoration:none"
          title="back to the match library">FLO<span>TILLA</span></a></h1>
   <div id="meta">no replay loaded</div>
+  <div id="gnav">
+    <button id="liveprev" style="display:none"
+            title="watch the previous game of this series">⏮ previous game</button>
+    <button id="firstg" style="display:none" title="jump to the first game">⏮ Game 1</button>
+    <button id="prevg" style="display:none">⏮ previous game</button>
+    <button id="nextg" style="display:none">⏭ next game</button>
+    <button id="lastg" style="display:none" title="jump to the last game">last game ⏭</button>
+    <button id="nextlive" style="display:none; background:#c22432; color:#fff"
+      title="the game you are watching already ended in real time — finish it
+at your own pace, then jump to the one being played now"></button>
+  </div>
 </header>
 <div id="bar">
   <canvas id="timeline" width="1152" height="34"></canvas>
   <div id="controls">
     <button id="play">▶ Play</button>
     <select id="speed">
+      <option value="0.01">0.01×</option><option value="0.02">0.02×</option>
+      <option value="0.03">0.03×</option><option value="0.04">0.04×</option>
+      <option value="0.05">0.05×</option><option value="0.1">0.1×</option>
+      <option value="0.15">0.15×</option><option value="0.2">0.2×</option>
+      <option value="0.25">0.25×</option><option value="0.5">0.5×</option>
       <option value="1">1×</option><option value="2" selected>2×</option>
       <option value="4">4×</option><option value="8">8×</option>
-      <option value="real" title="play at the actual average pace the admirals set — near-continuous slow sailing">⏱ live pace</option>
+      <option value="real" id="realopt" title="self-tuning: follows the game's
+        actual cadence, easing off every time it catches the live edge">⏱ live pace</option>
     </select>
     <select id="pov" title="watch through one admiral's fog of war">
       <option value="-1">👁 all-seeing</option>
     </select>
+    <button id="spoil" title="spoiler shield: hides the winner, future timeline marks and future chart lines until playback reaches them — click to toggle">🙈 spoilers hidden</button>
+    <button id="fs" title="fullscreen — panel + bar become overlays (P and B toggle them, Esc exits)">⛶</button>
     <input id="scrub" type="range" min="0" max="0" value="0">
     <span id="clock">00:00</span>
     <button id="dl" title="download a self-contained page of this replay">⬇ replay</button>
-    <button id="prevg" style="display:none">⏮ previous game</button>
-    <button id="nextg" style="display:none">⏭ next game</button>
+    <button id="barpin" class="fsonly" title="this bar: pinned (faded until
+      hovered) ⇄ auto-hide (returns when your mouse touches the top edge) — B">📌 pinned</button>
   </div>
 </div>
 
+<button id="fsexit" class="fsonly" title="exit fullscreen (Esc)">✕</button>
 <div id="layout">
   <div id="seawrap" style="position:relative">
+    <div id="hovercoord" style="display:none;position:absolute;left:10px;
+      top:0;z-index:4;background:#0b1220cc;border:1px solid #1e2a44;
+      border-radius:6px;padding:2px 9px;font-size:12px;color:#b9c6dd;
+      pointer-events:none;opacity:1;transition:opacity .5s"></div>
     <div id="intro">
       <div id="introbox">
         <h2>FLO<span>TILLA</span></h2>
@@ -143,16 +289,7 @@
          transform:translateX(-50%);background:#0a1b33ee;border:1px solid var(--line);
          border-radius:8px;padding:6px 16px;font-size:13px;color:var(--dim)">
       🌬 becalmed — awaiting the admirals…</div>
-    <div id="legend">
-      <span>◖ round + fat = trader (swells with cargo)</span>
-      <span>➤ dart = raider</span>
-      <span>⬟ bright-ringed + gun studs = frigate</span>
-      <span>› sliver = scout</span>
-      <span>● teal = fish shoal · ◆ amber = wreck</span>
-      <span>custom classes: shape follows stats (length=speed, beam=hold, gun mounts at 2+ guns — odd count = bow chaser, mast=lookout)</span>
-      <span>✦ = combat (tinted toward the likely survivor)</span>
-      <span>click a ship to inspect · click the timeline to jump</span>
-    </div>
+    <div id="legend"></div>
   </div>
   <div id="side">
     <div id="pmodewrap">
@@ -162,16 +299,34 @@
       <button class="pbtn" data-mode="memos" id="memobtn" style="display:none">📜 Memos</button>
       <button class="pbtn" data-mode="stats">📊 Stats</button>
       <button class="pbtn" data-mode="settings">⚙</button>
+      <button class="pbtn" data-mode="help">❓</button>
+      <button id="sidepin" class="fsonly" title="this panel: pinned (faded
+        until hovered) ⇄ auto-hide (returns at the right edge) — P">📌 pinned</button>
     </div>
     <div id="inspector"></div>
     <div id="fleetcards"></div>
     <div id="parleyfeed" style="display:none"></div>
     <div id="memofeed" style="display:none"></div>
     <div id="settingspanel" style="display:none"></div>
+    <div id="helppanel" style="display:none"></div>
     <div id="statspanel" style="display:none">
       <div id="chartcard">
         <h3>score over time</h3>
         <canvas id="chart" width="284" height="110"></canvas>
+        <h3 style="margin-top:8px">ships over time</h3>
+        <canvas id="chart2" width="284" height="90"></canvas>
+        <h3 style="margin-top:8px">income — hauled per 1,000 ticks</h3>
+        <canvas id="chart3" width="284" height="90"></canvas>
+        <h3 style="margin-top:8px">treasury</h3>
+        <canvas id="chart4" width="284" height="70"></canvas>
+        <h3 style="margin-top:8px">parley messages sent</h3>
+        <canvas id="chart5" width="284" height="70"></canvas>
+        <h3 style="margin-top:8px">total tokens</h3>
+        <canvas id="chart6" width="284" height="70"></canvas>
+        <h3 style="margin-top:8px">average latency (s / answered window)</h3>
+        <canvas id="chart7" width="284" height="70"></canvas>
+        <h3 style="margin-top:8px">LLM cost ($)</h3>
+        <canvas id="chart8" width="284" height="70"></canvas>
       </div>
       <div id="logcard">
         <h3>game log</h3>
@@ -185,17 +340,203 @@
 <script>
 "use strict";
 const EMBEDDED = /*EMBED_REPLAY*/null;
-const COLORS = ["#4da3ff", "#ff6b6b", "#ffc94d", "#4dd6b8"];
+const LW = 1152, LH = 648;   // the LOGICAL canvas space every draw targets;
+                             // the backing store scales by DPR for sharpness
+// 8 fleet colors, chosen by farthest-point search to stay distinct from each
+// OTHER and from every reserved color — fish teal #2dd4bf, wreck amber #fbbf24,
+// laden gold #ffd76a, the dark sea, and islands (min perceptual distance 135).
+// GLM's old #4dd6b8 read as fish teal; Kimi's old gold read as wreck/laden.
+const COLORS = ["#4da3ff", "#ff5d5d", "#a3e635", "#c084fc",
+                "#f472b6", "#3fe06a", "#6140e6", "#ca40e6"];
 const TAIL = 14;
 const S = { rp: null, fi: 0, playing: false, last: 0, acc: 0, sel: null,
-            bundle: null, gameIdx: 0, spoiler: false, nodePos: {},
+            bundle: null, gameIdx: 0, spoiler: true, nodePos: {},
             cat: {}, sinkAt: {}, byShip: {}, frameMaps: [], screenPos: {},
             heading: {}, smooth: {}, tl: [], pmode: "fleet",
             pov: -1, povCache: null };
+// spoiler shield + map names: sticky viewer preferences (spoilers default ON)
+try {
+  S.spoiler = localStorage.getItem("flotilla-spoiler") !== "off";
+  S.showNames = localStorage.getItem("flotilla-names") === "on";
+} catch (e) {}
 const $ = id => document.getElementById(id);
-const canvas = $("sea"), ctx = canvas.getContext && canvas.getContext("2d");
+const canvas = $("sea");
+let ctx = canvas.getContext && canvas.getContext("2d");
 const tlc = $("timeline"), tctx = tlc.getContext && tlc.getContext("2d");
 const cc = $("chart"), cctx = cc.getContext && cc.getContext("2d");
+const cc2 = $("chart2"), cctx2 = cc2 && cc2.getContext && cc2.getContext("2d");
+const cc3 = $("chart3"), cctx3 = cc3 && cc3.getContext && cc3.getContext("2d");
+const XCHARTS = [4, 5, 6, 7, 8].map(n => {
+  const el = $("chart" + n);
+  return [el, el && el.getContext && el.getContext("2d")];
+});
+
+// ---- replay v3 frame canonicalization (sim/replay_codec.py's JS twin) ----
+// The in-memory frames are ALWAYS the v3 shape — ship rows [id,x,y,hull,cargo]
+// (fleet derived from spawn events), fleet rows full 8-col only in frame 0 /
+// on static change (flag_hull, alive, hx, hy) else dynamic [id,cargo,bank,
+// score], node rows only the changed [id,remaining] pairs. v1/v2 replays and
+// the live stream (which ships full rows, no replay_version) are converted at
+// the boundary by ingestFrame(), so no reader ever branches on version — and
+// the ⬇ download button can serialize S.rp verbatim as a valid v3 replay.
+const DYN_F = 4;                           // dynamic fleet row length; full rows
+                                           // are longer (8-col current, 6-col in
+                                           // pre-relocation replays — no hx/hy)
+function shipFleet(id) { const c = S.cat[id]; return c ? c.fleet : 0; }
+function fleetDyn(row) {                   // -> [cargo, bank, score]
+  return row.length > DYN_F ? [row[2], row[3], row[4]]
+                            : [row[1], row[2], row[3]];
+}
+function histAt(h, fi) {                   // last change-list entry with [0]<=fi
+  if (!h || !h.length || h[0][0] > fi) return null;
+  let lo = 0, hi = h.length - 1;
+  while (lo < hi) {
+    const m = (lo + hi + 1) >> 1;
+    if (h[m][0] <= fi) lo = m; else hi = m - 1;
+  }
+  return h[lo];
+}
+function fleetStatic(fi, id) {             // -> [fi, flag_hull, alive, hx, hy]
+  return histAt(S.fleetHist[id], fi);
+}
+function nodeVal(fi, id) {                 // remaining stock at frame fi
+  const e = histAt(S.nodeHist[id], fi);
+  return e ? e[1] : 0;
+}
+// One frame through the boundary: convert v1 full rows -> v3 in place when
+// needed, then harvest the change lists + the per-frame ship map. Called in
+// frame order only (load() loop + liveAppend) — the v1 diffing depends on it.
+function ingestFrame(fr, fi) {
+  const cv = S._canon;
+  if (!cv.v3) {
+    fr.s = fr.s.map(r => [r[0], r[2], r[3], r[4], r[5]]);
+    fr.f = fr.f.map(r => {
+      const st = r[1] + "|" + r[5] + "|" + r[6] + "|" + r[7];
+      if (fi === 0 || cv.ps[r[0]] !== st) { cv.ps[r[0]] = st; return r; }
+      return [r[0], r[2], r[3], r[4]];
+    });
+    const n2 = [];
+    for (const [nid, rem] of fr.n) {
+      if (fi === 0 || cv.pn[nid] !== rem) { cv.pn[nid] = rem; n2.push([nid, rem]); }
+    }
+    fr.n = n2;
+  }
+  for (const r of fr.f) {
+    if (r.length > DYN_F) {                // 6-col rows leave hx/hy undefined —
+      (S.fleetHist[r[0]] = S.fleetHist[r[0]] || [])   // consumers fall back to
+        .push([fi, r[1], r[5], r[6], r[7]]);          // the header harbor
+    }
+  }
+  for (const [nid, rem] of fr.n) {
+    (S.nodeHist[nid] = S.nodeHist[nid] || []).push([fi, rem]);
+  }
+  const m = new Map();
+  for (const row of fr.s) m.set(row[0], row);
+  S.frameMaps.push(m);
+}
+
+// knob docs for the settings panel: same bytes the Configure form shows.
+// Fetched relative, so it works on the droplet AND the public showcase mirror;
+// a downloaded bundle just shows no tooltips.
+let SCHEMA_DOCS = {};
+let SCHEMA_SECTIONS = {};                  // knob -> section (reproduce.json split)
+if (location.protocol.startsWith("http")) {
+  fetch("config-schema.json").then(r => r.ok ? r.json() : {}).then(s => {
+    for (const [sec, knobs] of Object.entries(s || {})) {
+      for (const [k, spec] of Object.entries(knobs)) {
+        if (spec && spec.doc) SCHEMA_DOCS[k] = spec.doc;
+        SCHEMA_SECTIONS[k] = sec;
+      }
+    }
+    if (S.rp) renderSettingsPanel();       // re-render with tooltips attached
+  }).catch(() => {});
+}
+function knobInfo(k) {
+  const doc = SCHEMA_DOCS[k];
+  if (!doc) return "";
+  return `<span class="info">i<span class="pop">${doc.replace(/</g, "&lt;")}` +
+         `</span></span>`;
+}
+// EVERY setting of this match — including values that sat on defaults — as a
+// run-config another install can submit verbatim. Someone else's Flotilla may
+// have different defaults; the replay is the source of truth, not the schema.
+function reproduceConfig() {
+  const rp = S.rp;
+  const run = rp.run || rp.meta.run || {};
+  const engineSecs = ["world", "economy", "combat", "pacing", "scenario"];
+  const cfg = { mode: run.mode || "match", seed: run.base_seed ?? rp.meta.seed,
+                scenario: {}, admirals: {}, series: {}, tournament: {} };
+  for (const [k, v] of Object.entries(rp.meta.config || {})) {
+    if (k === "rules" || k === "description") continue;
+    const sec = SCHEMA_SECTIONS[k];
+    const bucket = !sec || engineSecs.includes(sec) ? "scenario" : sec;
+    cfg[bucket][k] = v;
+  }
+  const players = (run.players || rp.fleets.map(f => ({
+    label: f.name, model: f.model || f.name, scripted: !f.model,
+    prompt: f.prompt || undefined })));
+  const bots = players.map(p => p.scripted ? p.model
+    : Object.fromEntries(Object.entries(p).filter(([, v]) => v !== undefined)));
+  cfg[cfg.mode === "tournament" ? "participants" : "bots"] = bots;
+  for (const k of ["series", "tournament"]) {
+    if (!Object.keys(cfg[k]).length) delete cfg[k];
+  }
+  return cfg;
+}
+
+function renderSettingsPanel() {
+  const rp = S.rp;
+  if (!rp) return;
+  const cfgp = $("settingspanel");
+  const conf = rp.meta.config;
+  const scn = rp.meta.scenario || {};
+  cfgp.innerHTML =
+    `<h3>view</h3><label style="display:block;margin-bottom:8px">` +
+    `<input type="checkbox" id="shownames"${S.showNames ? " checked" : ""}> ` +
+    `show names on the map — islands, shoals, admirals, squadrons</label>` +
+    `<label style="display:block;margin-bottom:8px">` +
+    `<input type="checkbox" id="hidpi"${S.quality !== "standard" ? " checked" : ""}> ` +
+    `sharp rendering (match display resolution — uncheck on slow machines)` +
+    `</label>` +
+    `<h3>scenario</h3><div class="desc">${(scn.description || "")
+      .replace(/</g, "&lt;")}</div>`;
+  const prompted = rp.fleets.filter(f => f.prompt);
+  if (prompted.length) {
+    // custom prompts break the identical-framing symmetry — say so loudly
+    cfgp.innerHTML += `<h3>⚠ operator prompts in play</h3>` +
+      `<div class="desc">These admirals carry custom operator directives — this ` +
+      `match is NOT a level-framing model comparison.</div>` +
+      prompted.map(f => `<div class="desc"><b style="color:${COLORS[f.id % COLORS.length]}">` +
+        `${f.name}</b>: ${f.prompt.replace(/</g, "&lt;")}</div>`).join("");
+  }
+  const run = rp.run || rp.meta.run;
+  if (run && run.players) {
+    cfgp.innerHTML += `<h3>players — exact settings</h3>` +
+      run.players.map((p2, i) =>
+        `<div class="desc"><b style="color:${COLORS[i % COLORS.length]}">` +
+        `${p2.label}</b> — ${p2.scripted ? "scripted bot" : p2.model}` +
+        (p2.scripted ? "" :
+         ` · temp ${p2.temperature} · max_tok ${p2.max_tokens} · ` +
+         `timeout ${p2.timeout_s}s · think ${p2.think} · ` +
+         `hist ${p2.history_chars} · memo ${p2.memo_chars}` +
+         (p2.base_prompt ? " · CUSTOM BASE PROMPT" : "")) + `</div>`).join("");
+  }
+  if (conf) {
+    cfgp.innerHTML += `<h3>full configuration</h3>` +
+      Object.entries(conf).filter(([k]) => k !== "description").sort()
+        .map(([k, v]) => `<div class="kv"><span>${k}${knobInfo(k)}</span>` +
+                         `<span>${v}</span></div>`)
+        .join("") +
+      `<div class="desc" style="margin-top:6px">Every value above is the ` +
+      `RESOLVED setting this match ran with — defaults included, so a ` +
+      `different install reproduces it exactly.</div>` +
+      `<a href="#" class="btn btn-dl" id="repro">⬇ reproduce.json — rerun ` +
+      `this exact match</a>`;
+  } else {
+    cfgp.innerHTML += `<div class="desc">(default settings — this replay predates ` +
+      `config stamping)</div>`;
+  }
+}
 
 function updateRealRate() {
   // "live pace": game seconds per wall second, from the decision telemetry —
@@ -214,6 +555,39 @@ function updateRealRate() {
   S.realRate = wall > 1 && gameSec > 0
     ? Math.min(3, Math.max(0.02, gameSec / wall)) : 1;
 }
+// live-pace self-tuner: the INITIAL rate comes from the match's own numbers —
+// window game-seconds ÷ the wall-clock a window can take (window_wait_s when
+// pipelined, else timeout_s). A 10s window on a 480s timeout starts ~0.02×.
+// Then −0.01× on every catch-up (floor 0.01×), +0.01× back per deep-buffer
+// crossing. The dropdown label shows the current rate as it adjusts.
+function initialLivePace() {
+  const c = (S.rp && S.rp.meta && S.rp.meta.config) || {};
+  const winSec = (c.window || 100) / (S.rp && S.rp.meta.tick_hz || 10);
+  const wallSec = (c.pipeline_depth > 0 ? c.window_wait_s : c.timeout_s) || 300;
+  return Math.min(0.2, Math.max(0.01, winSec / wallSec));
+}
+function tuneLivePace(becalmed, ahead, LAG) {
+  if (S.liveRate == null) S.liveRate = initialLivePace();
+  if (becalmed && !S._trimmed) {
+    S.liveRate = Math.max(0.01, S.liveRate - 0.01);
+    S._trimmed = true;
+  } else if (!becalmed) {
+    if (S._trimmed === true) S._trimmed = false;
+    if (ahead > LAG * 3 && !S._recovered) {
+      S.liveRate = Math.min(1, S.liveRate + 0.01);
+      S._recovered = true;
+    } else if (ahead <= LAG * 3) {
+      S._recovered = false;
+    }
+  }
+  const opt = $("realopt");
+  if (opt) {
+    const label = `⏱ live pace (${S.liveRate.toFixed(2)}×)`;
+    if (opt.textContent !== label) opt.textContent = label;
+  }
+  return S.liveRate;
+}
+
 function curSpeed() {
   const v = $("speed").value;
   if (v === "real") return S.realRate || 1;
@@ -225,6 +599,104 @@ function fmtTime(t) {
   return String(Math.floor(s / 60)).padStart(2, "0") + ":" + String(s % 60).padStart(2, "0");
 }
 
+// top-bar navigation, one state machine (2026-08-09 spec): watching a replay
+// in a series shows Previous/Next with (x/y) game numbers, Next carries
+// (Live) + red when that game is being played right now; watching live shows
+// only Previous (the pollers manage it). Re-rendered whenever the series
+// state changes under the viewer (refreshNav polls every 30s).
+function renderNav() {
+  const pg = $("prevg"), ng = $("nextg"), fg = $("firstg"), lg = $("lastg");
+  if (!S.bundle || S.liveMode) {
+    for (const b of [pg, ng, fg, lg]) b.style.display = "none";
+    ng.dataset.live = ""; lg.dataset.live = "";
+    return;
+  }
+  const x = S.gameIdx + 1;
+  const fin = S.bundle.games.length;
+  const y = Math.max(S.bundle.expected || 0, fin + (S.bundle.liveJobId ? 1 : 0));
+  if (S.gameIdx > 0) {
+    pg.style.display = "";
+    pg.textContent = `⏮ Previous game (${x - 1}/${y})`;
+  } else pg.style.display = "none";
+  if (S.gameIdx < fin - 1) {
+    ng.style.display = ""; ng.textContent = `⏭ Next game (${x + 1}/${y})`;
+    ng.style.background = ""; ng.dataset.live = "";
+  } else if (S.bundle.liveJobId) {
+    ng.style.display = "";
+    ng.textContent = `⏭ Next game (${x + 1}/${y}) (Live)`;
+    ng.style.background = "#c22432"; ng.dataset.live = S.bundle.liveJobId;
+  } else {
+    ng.style.display = "none"; ng.dataset.live = "";
+  }
+  // ⏮ Game 1 — a one-click jump back to the start, on every game after game 2
+  if (S.gameIdx >= 2) { fg.style.display = ""; } else fg.style.display = "none";
+  // Game Y — jump to the last game; or straight to the LIVE game if the
+  // series is playing right now
+  if (S.bundle.liveJobId) {
+    lg.style.display = ""; lg.textContent = "⏭ Live game";
+    lg.style.background = "#c22432"; lg.dataset.live = S.bundle.liveJobId;
+  } else if (fin >= 3 && S.gameIdx < fin - 1) {
+    lg.style.display = ""; lg.textContent = `⏭ Game ${fin}`;
+    lg.style.background = ""; lg.dataset.live = "";
+  } else { lg.style.display = "none"; lg.dataset.live = ""; }
+}
+async function refreshNav() {
+  if (!S.bundle || S.liveMode || !location.protocol.startsWith("http")) return;
+  try {
+    const sname = S.bundle.seriesName || S.bundle.name;
+    const idx = await (await fetch("index.json")).json();
+    const sr = (idx.series || []).find(x2 => x2.name === sname);
+    if (!sr) return;
+    const before = S.bundle.games.length + "|" + (S.bundle.liveJobId || "");
+    for (const g of sr.games.slice(S.bundle.games.length)) {
+      S.bundle.games.push({ game: g.game, file: g.file });
+    }
+    let lj = null;
+    if (sr.partial) {
+      const d = await (await fetch("api/runs")).json();
+      lj = (d.jobs || []).find(j => j.name === sname &&
+        ["queued", "running"].includes(j.state));
+    }
+    S.bundle.liveJobId = lj ? lj.id : null;
+    if (lj && lj.games_expected) S.bundle.expected = lj.games_expected;
+    if (before !== S.bundle.games.length + "|" + (S.bundle.liveJobId || "")) {
+      renderNav();
+      updateMetaLine();    // keep "game x of y" in step with the nav buttons
+    }
+  } catch (e) { /* transient — next poll */ }
+}
+setInterval(refreshNav, 30000);
+// each contestant name in its own fleet color, "vs" dimmed — HTML (metaBase
+// is now rendered via innerHTML, so every interpolated name is escaped)
+function metaNames(fleets) {
+  return fleets.map(f =>
+    `<b style="color:${COLORS[f.id % COLORS.length]}">${escHtml(f.name)}</b>`)
+    .join(`<span class="mvs"> vs </span>`);
+}
+function updateMetaLine() {
+  const rp = S.rp;
+  if (!rp) return;
+  const names = metaNames(rp.fleets);
+  const y = S.bundle
+    ? Math.max(S.bundle.expected || 0, S.bundle.games.length)
+    : 0;
+  S.metaBase = S.bundle
+    ? `<span class="mdim">${escHtml(S.bundle.name)} · game ` +
+      `${S.bundle.games[S.gameIdx].game} of ${y} · </span>${names}`
+    : `<span class="mdim">seed ${escHtml(rp.meta.seed)} · </span>${names}` +
+      (!S.spoiler && rp.result && rp.result.winner != null
+        ? `<span class="mdim"> · winner: ` +
+          `${escHtml(rp.result.names[rp.result.winner])}</span>` : "");
+  setMetaStatus("");
+}
+// the game info stays put; status notes APPEND after it, never replace it.
+// metaBase is HTML (colored names); status text is escaped.
+function setMetaStatus(txt) {
+  S.metaStatus = txt || "";
+  $("meta").innerHTML = (S.metaBase || "") +
+    (S.metaStatus ? `<span class="mdim"> · ${escHtml(S.metaStatus)}</span>` : "");
+}
+
 async function ensureGame(b, idx) {
   const g = b.games[idx];
   if (!g.replay && g.file) g.replay = await (await fetch(g.file)).json();
@@ -232,7 +704,7 @@ async function ensureGame(b, idx) {
 }
 
 async function loadBundle(b, idx) {
-  S.bundle = b; S.gameIdx = idx; S.spoiler = true;
+  S.bundle = b; S.gameIdx = idx;
   load(await ensureGame(b, idx));
 }
 
@@ -244,14 +716,45 @@ function load(rp) {
   }
   S.rp = rp; S.fi = 0; S.playing = false; S.acc = 0; S.sel = null;
   S.cat = {}; S.sinkAt = {}; S.byShip = {}; S.heading = {}; S.smooth = {};
-  S.pov = -1; S.povCache = null;
+  S.pov = -1; S.povCache = null; S.expandedCard = null;
+  S.fleetHist = {}; S.nodeHist = {}; S.frameMaps = [];
+  S._canon = { v3: ((rp.meta && rp.meta.replay_version) || 1) >= 3,
+               ps: {}, pn: {} };
+  // custom-class stats: seed from the fleet snapshot (end-of-game in replays,
+  // EMPTY at live start), then let design events overwrite — the events are the
+  // only source that works mid-stream in live view
+  S.designMap = {};
+  for (const f of rp.fleets) S.designMap[f.id] = Object.assign({}, f.designs || {});
+  S.progEvents = [];
+  S.yardBuilt = [];
+  S.yardJobs = [];
+  S.liveRate = null;                     // live-pace tuner resets per game
   $("pov").innerHTML = `<option value="-1">👁 all-seeing</option>` +
     rp.fleets.map(f => `<option value="${f.id}">⚓ ${f.name}'s fog</option>`).join("");
   $("pov").value = "-1";
+  // v2: intent strings are interned in meta.intern — de-reference once at load
+  // (guarded by presence, so v1 replays and the un-interned live stream both
+  // pass through untouched)
+  const intern = rp.meta && rp.meta.intern;
+  if (intern) {
+    for (const e of rp.events) {
+      if (e.k === "intent" && typeof e.s === "number") e.s = intern[e.s];
+    }
+  }
   for (const e of rp.events) {
     if (e.k === "spawn") S.cat[e.ship] = { preset: e.preset, squad: e.squad, fleet: e.fleet };
     if (e.k === "refit" && S.cat[e.ship]) {
       (S.cat[e.ship].refits = S.cat[e.ship].refits || []).push([e.t, e.to]);
+    }
+    if (e.k === "design") {
+      (S.designMap[e.fleet] = S.designMap[e.fleet] || {})[e.name] = e.stats;
+    }
+    if (e.k === "program") S.progEvents.push(e);
+    if (e.k === "yard_built") S.yardBuilt.push(e);
+    if (e.k === "build_start" || e.k === "refit_start" ||
+        e.k === "repair_start" || e.k === "yard_start") S.yardJobs.push(e);
+    if (e.k === "reassign" && S.cat[e.ship]) {
+      (S.cat[e.ship].moves = S.cat[e.ship].moves || []).push([e.t, e.squad]);
     }
     if (e.k === "sink") S.sinkAt[e.ship] = e.t;
     if (e.k === "intent" || e.k === "orders") {
@@ -260,28 +763,26 @@ function load(rp) {
   }
   S.tl = rp.events.filter(e => ["sink", "flag_sunk", "signal", "region"].includes(e.k));
   S.cellRegion = null;
+  S.borderPath = null;
   S.parley = rp.events.filter(e => e.k === "parley");
-  S.frameMaps = rp.frames.map(fr => {
-    const m = new Map();
-    for (const row of fr.s) m.set(row[0], row);
-    return m;
-  });
-  $("meta").textContent = S.bundle
-    ? `${S.bundle.name} · game ${S.bundle.games[S.gameIdx].game} of ` +
-      `${S.bundle.games.length} · ${rp.fleets.map(f => f.name).join(" vs ")}`
-    : `seed ${rp.meta.seed} · ${rp.fleets.map(f => f.name).join(" vs ")} · ` +
-      `winner: ${rp.result.names[rp.result.winner]}`;
-  $("nextg").style.display =
-    (S.bundle && S.gameIdx < S.bundle.games.length - 1) ? "" : "none";
+  // sink ripples index: draw() used to scan ALL events (~75k, 98% intents)
+  // every animation frame to find ~77 sinks — measured 2.7ms/frame of the
+  // 16ms budget on desktop, the whole budget on a phone
+  S.sinks = rp.events.filter(e => e.k === "sink");
+  rp.frames.forEach((fr, fi) => ingestFrame(fr, fi));
+  // the in-memory replay is now canonical v3 — stamp it so ⬇ download and the
+  // showcase EMBED path serialize a coherent v3 file
+  if (rp.meta) rp.meta.replay_version = Math.max(3, rp.meta.replay_version || 0);
+  updateMetaLine();
+  renderNav();
   updateRealRate();
-  $("prevg").style.display = (S.bundle && S.gameIdx > 0) ? "" : "none";
   $("scrub").max = rp.frames.length - 1;
   const intro = $("introfleets");
   intro.innerHTML = "";
   for (const f of rp.fleets) {
     intro.insertAdjacentHTML("beforeend",
-      `<div><span style="color:${COLORS[f.id % 4]}">⬤</span> ${f.name}` +
-      (f.model && f.model !== f.name ? `<span class="mdl">${f.model}</span>` :
+      `<div><span style="color:${COLORS[f.id % COLORS.length]}">⬤</span> ${escHtml(f.name)}` +
+      (f.model && f.model !== f.name ? `<span class="mdl">${escHtml(f.model)}</span>` :
        (f.model ? `<span class="mdl">LLM admiral</span>` : `<span class="mdl">scripted</span>`)) +
       `</div>`);
   }
@@ -293,36 +794,10 @@ function load(rp) {
     ? `${S.bundle.name} — game ${S.bundle.games[S.gameIdx].game} of ${S.bundle.games.length}`
     : "";
   $("intro").style.display = "flex";
-  const cfgp = $("settingspanel");
-  const conf = rp.meta.config;
-  const scn = rp.meta.scenario || {};
-  cfgp.innerHTML =
-    `<h3>view</h3><label style="display:block;margin-bottom:8px">` +
-    `<input type="checkbox" id="shownames"${S.showNames ? " checked" : ""}> ` +
-    `show island names on the map</label>` +
-    `<h3>scenario</h3><div class="desc">${(scn.description || "")
-      .replace(/</g, "&lt;")}</div>`;
-  const prompted = rp.fleets.filter(f => f.prompt);
-  if (prompted.length) {
-    // custom prompts break the identical-framing symmetry — say so loudly
-    cfgp.innerHTML += `<h3>⚠ operator prompts in play</h3>` +
-      `<div class="desc">These admirals carry custom operator directives — this ` +
-      `match is NOT a level-framing model comparison.</div>` +
-      prompted.map(f => `<div class="desc"><b style="color:${COLORS[f.id % 4]}">` +
-        `${f.name}</b>: ${f.prompt.replace(/</g, "&lt;")}</div>`).join("");
-  }
-  if (conf) {
-    cfgp.innerHTML += `<h3>full configuration</h3>` +
-      Object.entries(conf).filter(([k]) => k !== "description").sort()
-        .map(([k, v]) => `<div class="kv"><span>${k}</span><span>${v}</span></div>`)
-        .join("") +
-      `<div class="desc" style="margin-top:6px">Knob documentation: CONFIG.md / ` +
-      `config-schema.json on the dashboard. Reproduce this match: put these values ` +
-      `in a run-config's "scenario" block with seed ${rp.meta.seed}.</div>`;
-  } else {
-    cfgp.innerHTML += `<div class="desc">(default settings — this replay predates ` +
-      `config stamping)</div>`;
-  }
+  renderSettingsPanel();
+  renderLegend();
+  renderHelp();
+  setTimeout(fitCanvas, 0);
   const nameToFleet = {};
   for (const f of rp.fleets) nameToFleet[f.name] = f.id;
   if (rp.memos && Object.keys(rp.memos).length) {
@@ -331,26 +806,42 @@ function load(rp) {
       `<div class="note">What each admiral wrote to its future self AFTER this game
        (carried into the next game of the series).</div>` +
       Object.entries(rp.memos).map(([player, m]) => {
-        const c = COLORS[(nameToFleet[player] ?? 0) % 4];
+        const c = COLORS[(nameToFleet[player] ?? 0) % COLORS.length];
         const body = m.err ? `(debrief failed: ${m.err} — no memo carried forward)`
                            : (m.memo || "(empty memo)");
-        return `<div class="memo" style="--mc:${c}"><h4>${player}</h4>` +
-               `${String(body).replace(/</g, "&lt;")}</div>`;
+        const full = String(body);
+        const short = full.length > 160 ? full.slice(0, 160) + " \u2026" : full;
+        return `<div class="memo${S.spoiler ? " shield" : ""}" ` +
+               `style="--mc:${c}" title="click to expand">` +
+               `<h4>${escHtml(player)}</h4>` +
+               `<div class="shieldnote">🙈 click to reveal spoilers</div>` +
+               `<div class="mshort">${short.replace(/</g, "&lt;")}</div>` +
+               `<div class="mfull" style="display:none">` +
+               `${full.replace(/</g, "&lt;")}</div></div>`;
       }).join("");
   } else {
-    $("memobtn").style.display = "none";
-    if (S.pmode === "memos") setMode("fleet");
+    $("memofeed").innerHTML = "";     // stale (possibly un-shielded) memos
+    $("memobtn").style.display = "none";   // must not survive into a
+    if (S.pmode === "memos") setMode("fleet");   // memo-less replay
   }
   const cards = $("fleetcards");
   cards.innerHTML = "";
+  // the fresh cards start EMPTY — stale content caches would skip the first
+  // rebuild and leave blank panels on a same-content reload
+  S.stCache = {}; S.padCache = {}; S.xpCache = {};
   for (const f of rp.fleets) {
     const d = document.createElement("div");
     d.className = "fleet"; d.id = "fl" + f.id;
-    d.style.setProperty("--fc", COLORS[f.id % 4]);
-    d.innerHTML = `<div class="row"><span class="nm">${f.name}</span>` +
+    d.dataset.fleet = f.id;
+    d.title = "click to expand";
+    d.style.setProperty("--fc", COLORS[f.id % COLORS.length]);
+    d.innerHTML = `<div class="row"><span class="nm">` +
+      `${modelBadge(f.model || f.name)}${f.name}</span>` +
+      `<a class="btn myvis" data-fleet="${f.id}" style="display:none" ` +
+      `title="watch through this admiral's fog of war">👁 My Vision</a>` +
       `<span class="sc">0</span></div>` +
       `<div class="st"></div><div class="hull"><i style="width:100%"></i></div>` +
-      `<div class="th"></div>`;
+      `<div class="th"></div><div class="padbox"></div><div class="xpd"></div>`;
     cards.appendChild(d);
   }
   seek(0);
@@ -369,12 +860,227 @@ function latestThought(fleetId, t) {
   let out = "";
   for (const d of S.rp.decisions) {
     if (d.t > t) break;
-    if (d.fleet === fleetId && d.thoughts) out = d.thoughts;
+    // pipelined games: ⏱ marks orders that applied AFTER the state they saw
+    if (d.fleet === fleetId && d.thoughts) {
+      out = (d.ot != null ? "⏱ " : "") + d.thoughts;
+    }
+  }
+  return out;
+}
+
+function ktok(n) {   // 245,891 -> "246k" ; keep small counts exact
+  return n >= 1000 ? Math.round(n / 1000) + "k" : String(n);
+}
+
+function latestPad(fleetId, t) {
+  // the admiral's own scratchpad as of tick t — its curated working memory,
+  // recorded in the replay so humans can read it post-match (Admirals panel)
+  let out = "";
+  for (const d of S.rp.decisions) {
+    if (d.t > t) break;
+    if (d.fleet === fleetId && d.pad != null) out = d.pad;
   }
   return out;
 }
 
 function nodeName(nd) { return nd.name || ("Isle " + nd.id); }
+
+// The help tab: everything a spectator might ask about this player, with THIS
+// match's actual numbers filled in from meta.config (same source of truth the
+// engine ran on — a different install's defaults can't mislead anyone here).
+function renderHelp() {
+  const el = $("helppanel");
+  if (!el) return;
+  const c = (S.rp && S.rp.meta.config) || {};
+  const v = (k, d) => (c[k] !== undefined ? c[k] : d);
+  const secs = t => `${t / 10}s`;
+  el.innerHTML = `
+<h3>What am I looking at?</h3>
+<p>LLM "admirals" command fleets of deterministic ships. The models never steer
+directly — every <b>${secs(v("window", 100))}</b> of game time they read a
+fog-limited snapshot and reply with JSON orders (and, when enabled, <b>conn
+programs</b> — real code their squadrons execute). Everything you see replays
+their actual decisions. Same seed + same orders = the identical game.</p>
+<h3>Playback</h3>
+<ul>
+<li><b>▶ / speed / scrub</b> — the timeline strip above shows the whole match:
+● a ship sinks · ⚑ a signal hoist · ◇ a flagship destroyed · small dots =
+parley messages${S.rp && S.rp.meta.regions
+  ? " · hollow square = a region changes hands" : ""}. Click anywhere on it
+to jump.</li>
+<li><b>🔍 zoom</b> — mouse wheel zooms at the cursor (up to 8×), drag pans,
+double-click resets.</li>
+<li><b>reading the shapes</b> — custom hulls are drawn FROM their stats:
+length = speed, beam = hold, side gun mounts at 2+ guns (an odd count adds a
+bow chaser), a doubled bright outline = armor 3+, a mast dot = lookout 2+.
+Gold speck on a hull = cargo aboard (trawlers swell instead); wakes widen when
+a convoy sails together; combat bursts tint toward the likely survivor.</li>
+<li><b>🙈 spoiler shield</b> (on by default) hides the winner, future chart
+lines and future timeline marks so you can watch without knowing the ending —
+one click on the <b>🙈/👁</b> button toggles it, and the choice sticks.</li>
+<li><b>🏷 names on the map</b> — the “show names” toggle in ⚙ settings labels
+islands, shoals, admirals (at their flagships) and squadrons (at each squad's
+center). In fog view only what that admiral can see gets labeled.</li>
+</ul>
+<h3>Inspecting things</h3>
+<ul>
+<li><b>Click any ship</b>: class + stats, hull, cargo, current intent (what
+she thinks she is doing), and the orders she is running. The <b>squadron</b>
+link opens the roster; <b>⌨ program</b> opens every conn program this ship
+ever received, with the version aboard at the current moment marked. (New to
+<b>conn</b>, the ship-programming language? See
+<a href="https://github.com/DO-Solutions/flotilla/blob/main/docs/CONN.md"
+target="_blank" rel="noopener">docs/CONN.md</a>.)</li>
+<li><b>Click an island</b>: stock now vs capacity, regen.</li>
+<li><b>⌨ Code history</b> — from any squadron tile (or a ship's program
+inspector): every program version the admiral wrote for that squadron, shown
+as <span style="color:#7ee787">added</span>/<span style="color:#ff7b72">removed</span>-line
+diffs. While it's open the versions appear as small ticks on the timeline, and
+clicking a version jumps playback to the window that wrote it.</li>
+<li><b>Hover the map</b> for grid coordinates (lower-left corner; they fade
+after 5 idle seconds).</li>
+<li>The <b>legend under the map</b> decodes every glyph on screen — it adapts
+to what this match actually uses.</li>
+</ul>
+<h3>The side panels</h3>
+<ul>
+<li><b>⚓ Fleets</b> — score, treasury, hauled, ships, flags hoisted, mail
+sent, and the admiral's latest visible thought.</li>
+<li><b>✉ Parley</b> — the full diplomacy transcript, as it lands.</li>
+<li><b>📜 Memos</b> (series games) — what each admiral wrote to its future
+self after this game.</li>
+<li><b>📊 Stats</b> — score-over-time chart + the complete scrollable game
+log.</li>
+<li><b>⚙ Settings</b> — this match's scenario, per-player settings, EVERY
+config value (hover ⓘ for meaning), and <b>⬇ reproduce.json</b>: a config
+that reruns this exact match on any Flotilla install.</li>
+</ul>
+<h3>👁 Fog view (the POV picker, top bar)</h3>
+<p>Renders exactly what one admiral's fleet can see — the engine's own
+visibility rules. Darkness = out of sight. Dashed "?" = a <b>ghost
+contact</b>: the last known position of an enemy (fades over
+${secs(v("contact_ttl", 1200))}, cleared if the sinking was witnessed — or
+the moment its whole fleet is eliminated, which is announced to everyone).
+Island stocks show the admiral's <b>believed</b> values from its charts, not
+the truth. Allies share vision in team games.</p>
+<h3>⚔ Combat, exactly</h3>
+<ul>
+<li><b>Range</b>: ships fight at adjacent cells (1 cell, any direction).
+Every ship fires once per <b>${v("volley", 5)} ticks</b> — the cooldown is
+per-ship and starts when she first shoots, so ships don't fire in lockstep.</li>
+<li><b>Damage</b>: guns×2 − target's armor (minimum 1) per shot — even a
+1-gun trawler chips away, so every ship is a combatant.</li>
+<li><b>Targeting</b>: a ship shoots the nearest enemy <b>ship</b> within a
+cell in preference to a flagship — only the <b>assault</b> role attacks a
+flagship first. A hit on a flagship deals guns×2 − 3.</li>
+<li><b>Flagships</b>: the flagship's own battery fires proactively (not only
+in reply) every ${v("volley", 5)} ticks — in lockstep on the volley clock —
+on the nearest ${v("flag_targets", 4)} hostile ships anywhere inside its
+command circle (radius ${v("harbor_r", 3)}), for 10 − armor each (minimum 1).
+The whole circle is a kill zone, not just the cell alongside.
+Flagship hull this match: <b>${v("flag_hull", 200)}</b>.</li>
+<li><b>Repair</b>: ${v("shipyard_slots", 2) > 0
+? `the harbor shipyard opens with <b>${v("shipyard_slots", 1)} slot(s)</b>
+shared by builds, refits and repairs — extra work waits. Admirals expand
+capacity ("build_yard") for ${v("shipyard_cost", 45)} treasury and
+${secs(v("shipyard_ticks", 300))} per extra slot, up to
+${v("shipyard_max", 4)}. A damaged docked ship is
+repaired automatically when a slot is free: cost
+${v("repair_cost_pct", 40)}% of her build cost and
+${v("repair_ticks_pct", 40)}% of build time, both scaled by missing hull —
+always cheaper and quicker than a new build, so limping home pays. She is
+held in the yard until done`
+: `docked ships heal 2 hull per ${v("repair_period", 5)} ticks, free
+(legacy mode)`}; hull capacity = 20 + hull-stat×10.</li>
+<li><b>Sinking</b>: at 0 hull. A laden ship's cargo sinks with her and
+becomes a salvageable wreck on the spot (scuttles too).</li>
+<li><b>Scoring</b>: ${v("kill_score", 8)} points per ship sunk,
+${v("flag_kill_score", 150)} for a flagship. A ship kill credits the first
+of her attackers still afloat; a flagship kill credits the nearest hostile
+ship. <b>A destroyed flagship eliminates its whole fleet.</b></li>
+<li><b>Behavior</b>: role-autopilot ships obey their aggression setting
+(0 flee · 1 return fire · 2 engage if stronger · 3 engage anything) and
+retreat home below their retreat_hull_pct; conn-programmed ships do whatever
+their code says. Teammates never damage each other.</li>
+<li><b>✦ on the map</b> = two hostile ships in contact, tinted toward the
+side with more remaining strength. Admirals hear about every engagement in
+their next window's combat report — even fights they never saw.</li>
+</ul>
+<h3>Watching live</h3>
+<p>The stream advances as games are played. <b>🌬 becalmed</b> = the world is
+waiting on the admirals to think (model latency IS the wind). <b>⏱ live
+pace</b> plays at the real decision speed. A ⏸ paused run resumes in place —
+leave the tab open.</p>`;
+}
+
+// The legend explains what is ACTUALLY on this screen: base entries always,
+// mode entries only when the replay/view uses them (islands, territory, fog,
+// live, pipelining). Rebuilt on load, POV change, and live start.
+function renderLegend() {
+  const rp = S.rp;
+  const el = $("legend");
+  if (!rp || !el) return;
+  const rows = [
+    "▮ trawler (net booms astern, swells when laden) · ➤ raider · " +
+      "⬟ ring = frigate · › scout · custom hulls follow their stats",
+    "■ flagship + dashed command circle · ● teal shoal (regrows) · " +
+      "◆ amber wreck (finite) · ✦ combat",
+  ];
+  if (rp.meta.islands) {
+    rows.push("▦ sand = impassable island (charted — ships steer around)");
+  }
+  if (rp.meta.regions) {
+    rows.push("region tint = holder · dashed slate line = region border · " +
+              "filling pie = capture in progress (claimant's color)");
+  }
+  if (S.pov >= 0) {
+    rows.push("🌫 fog view: dashed ? = ghost contact (last known, fades) · " +
+              "dimmed shoal = stale belief");
+  }
+  if ((rp.decisions || []).some(d => d.ot != null)) {
+    rows.push("⏱ before a thought = pipelined orders (issued on an earlier " +
+              "window's state)");
+  }
+  if (S.liveMode) {
+    rows.push("LIVE: 🌬 becalmed = the fleet sails only as fast as its " +
+              "admirals think · ⏱ live pace = play at real decision speed");
+  }
+  rows.push("timeline: ● ship sunk · ⚑ signal hoist · ◇ flagship destroyed · " +
+            "· parley");
+  rows.push("click a ship or island to inspect (squadron + ⌨ program links " +
+            "inside) · wheel = zoom, drag = pan, double-click = reset · " +
+            "click the timeline to jump");
+  el.innerHTML = rows.map(r => `<span>${r}</span>`).join("");
+}
+
+// ---- model badges: family logo (logos.json, optional) or colored monogram ----
+const MODEL_FAMS = [
+  ["gpt", "#10a37f", "G"], ["openai", "#10a37f", "G"],
+  ["claude", "#d97757", "A"], ["anthropic", "#d97757", "A"],
+  ["opus", "#d97757", "A"], ["sonnet", "#d97757", "A"], ["haiku", "#d97757", "A"],
+  ["qwen", "#615ced", "Q"],
+  ["kimi", "#16d5d1", "K"], ["moonshot", "#16d5d1", "K"],
+  ["glm", "#4268fa", "Z"], ["zhipu", "#4268fa", "Z"],
+  ["deepseek", "#4d6bfe", "D"], ["llama", "#0866ff", "L"],
+  ["mistral", "#fa500f", "M"], ["gemini", "#3d81f6", "G"],
+];
+let MODEL_LOGOS = {};
+function modelBadge(idOrLabel) {
+  const id = String(idOrLabel || "").toLowerCase();
+  const hit = MODEL_FAMS.find(([k]) => id.includes(k));
+  if (hit && MODEL_LOGOS[hit[0]]) {
+    return `<img class="mlogo" src="${MODEL_LOGOS[hit[0]]}" alt="">`;
+  }
+  const color = hit ? hit[1] : "#3a4a6b";
+  const letter = hit ? hit[2]
+    : (String(idOrLabel || "?").trim()[0] || "?").toUpperCase();
+  return `<span class="mlogo mono" style="background:${color}">${letter}</span>`;
+}
+if (location.protocol.startsWith("http")) {
+  fetch("logos.json").then(r => r.ok ? r.json() : {})
+    .then(d => { MODEL_LOGOS = d || {}; }).catch(() => {});
+}
+
 
 // class resolution: refits change a ship's class MID-GAME, so always resolve
 // against the frame time; stats come from built-ins/operator classes (meta.presets)
@@ -387,9 +1093,17 @@ function classAt(sid, t) {
   }
   return p;
 }
+function squadAt(sid, t) {              // reassignments transfer ships mid-game
+  const c = S.cat[sid] || {};
+  let q = c.squad;
+  for (const [rt, to] of c.moves || []) {
+    if (rt <= t) q = to; else break;
+  }
+  return q;
+}
 function statsOf(preset, fleetId) {
   return (S.rp.meta.presets || {})[preset] ||
-    (((S.rp.fleets.find(f => f.id === fleetId) || {}).designs || {})[preset]) || null;
+    ((S.designMap || {})[fleetId] || {})[preset] || null;
 }
 
 // ---- POV fog of war: EXACT replica of the engine's visibility rules ----
@@ -408,22 +1122,67 @@ function computePov(fid) {
   const regen = (rp.meta.config || {}).fish_regen_period || 50;
   const mem = {};                              // node id -> [last seen value, t seen]
   const vis = [], believed = [], nodeSeen = [];
-  for (const fr of rp.frames) {
-    const own = fr.s.filter(s => s[1] === fid);
+  // team play: allied fleets share vision (engine _fleet_sees replica);
+  // flag relocation: harbors come from the frame rows when stamped
+  const teams = rp.meta.teams || {};
+  const myTeam = teams[fid] ?? fid;
+  const allies = rp.fleets.filter(f => (teams[f.id] ?? f.id) === myTeam)
+                          .map(f => f.id);
+  const ttl = (rp.meta.config || {}).contact_ttl || 0;
+  const cmap = {};                             // sid -> last-sighting record
+  const ghosts = [];
+  // canonical v3 frames: static fleet fields + node stocks arrive as changes —
+  // step() runs in frame order, so plain running maps ARE the forward-fill
+  const stat = {};                             // fleet id -> [flag, alive, hx, hy]
+  const nlive = {};                            // node id -> remaining
+  const step = (fr) => {
+    for (const r of fr.f) if (r.length > DYN_F) stat[r[0]] = [r[1], r[5], r[6], r[7]];
+    for (const [nid, rem] of fr.n) nlive[nid] = rem;
+    const own = fr.s.filter(s => allies.includes(shipFleet(s[0])));
     const sees = (x, y) => {
-      if (Math.max(Math.abs(x - fl.harbor[0]), Math.abs(y - fl.harbor[1])) <= hr4) return true;
+      for (const aid of allies) {
+        const st = stat[aid];
+        if (st && !st[1]) continue;                          // dead fleet: no circle
+        const hb = st && st[2] != null ? [st[2], st[3]]
+          : (rp.fleets.find(f => f.id === aid) || fl).harbor;
+        if (Math.max(Math.abs(x - hb[0]), Math.abs(y - hb[1])) <= hr4) return true;
+      }
       for (const o of own) {
-        if (Math.max(Math.abs(x - o[2]), Math.abs(y - o[3])) <= shipVision(o[0], fr.t)) return true;
+        if (Math.max(Math.abs(x - o[1]), Math.abs(y - o[2])) <= shipVision(o[0], fr.t)) return true;
       }
       return false;
     };
     const v = new Set();
-    for (const s of fr.s) if (s[1] !== fid && sees(s[2], s[3])) v.add(s[0]);
+    for (const s of fr.s) if (!allies.includes(shipFleet(s[0])) && sees(s[1], s[2])) v.add(s[0]);
     vis.push(v);
-    const nrem = Object.fromEntries(fr.n);
+    // the contact plot (engine _update_contacts replica): live sightings refresh
+    // a last-known record; records outlive sight for contact_ttl ticks. A ghost
+    // is a record whose ship is out of sight — unless its DEATH was the last
+    // thing we saw (a witnessed sink clears the plot).
+    if (ttl > 0) {
+      for (const s of fr.s) {
+        if (v.has(s[0])) cmap[s[0]] = { x: s[1], y: s[2], t: fr.t, fleet: shipFleet(s[0]) };
+      }
+      const gl = [];
+      for (const [sid, rec] of Object.entries(cmap)) {
+        const age = fr.t - rec.t;
+        if (age > ttl) { delete cmap[sid]; continue; }
+        const rf = stat[rec.fleet];
+        if (rf && !rf[1]) {                      // fleet ELIMINATED (announced
+          delete cmap[sid]; continue;            // to all): ghosts are
+        }                                        // impossible data
+        if (S.sinkAt[sid] !== undefined && S.sinkAt[sid] <= rec.t) {
+          delete cmap[sid]; continue;            // watched it go down
+        }
+        if (age > 0 && !v.has(+sid)) {
+          gl.push({ sid: +sid, x: rec.x, y: rec.y, age, fleet: rec.fleet });
+        }
+      }
+      ghosts.push(gl);
+    } else ghosts.push([]);
     const bel = {}, ns = new Set();
     for (const nd of rp.nodes) {
-      if (sees(nd.x, nd.y)) { mem[nd.id] = [nrem[nd.id] ?? 0, fr.t]; ns.add(nd.id); }
+      if (sees(nd.x, nd.y)) { mem[nd.id] = [nlive[nd.id] ?? 0, fr.t]; ns.add(nd.id); }
       const m = mem[nd.id] || [0, 0];
       let val = m[0];
       if (nd.kind === "fish") {
@@ -432,11 +1191,28 @@ function computePov(fid) {
       bel[nd.id] = val;
     }
     believed.push(bel); nodeSeen.push(ns);
+  };
+  for (const fr of rp.frames) step(fr);
+  return { fleet: fid, vis, believed, nodeSeen, allies, ghosts, ttl,
+           _step: step, _upto: rp.frames.length };
+}
+// live mode: extend the POV cache over frames that arrived after it was built
+// (the stale cache was a per-rAF crash storm that blanked live fog views)
+function povExtend() {
+  const pc = S.povCache;
+  if (!pc || !pc._step || !S.rp) return;
+  while (pc._upto < S.rp.frames.length) {
+    pc._step(S.rp.frames[pc._upto]);
+    pc._upto += 1;
   }
-  return { fleet: fid, vis, believed, nodeSeen };
+}
+function povAlly(fleetId) {
+  return S.povCache && (S.povCache.allies || [S.pov]).includes(fleetId);
 }
 function povHidden(sid, fleetId, fi) {
-  return S.povCache && fleetId !== S.pov && !S.povCache.vis[fi].has(sid);
+  if (!S.povCache || povAlly(fleetId)) return false;   // own + allied: always seen
+  const v = S.povCache.vis[Math.min(fi, S.povCache.vis.length - 1)];
+  return v ? !v.has(sid) : false;
 }
 
 function updateInspector(fr) {
@@ -445,7 +1221,7 @@ function updateInspector(fr) {
   if (S.sel.k === "n") {
     const nd = S.rp.nodes.find(n => n.id === S.sel.id);
     if (!nd) { box.className = ""; return; }
-    const rem = Object.fromEntries(fr.n)[nd.id] ?? 0;
+    const rem = nodeVal(S.fi, nd.id);
     box.className = "on";
     box.style.borderColor = nd.kind === "fish" ? "#2dd4bf" : "#fbbf24";
     box.innerHTML =
@@ -455,6 +1231,116 @@ function updateInspector(fr) {
       `<div>center (${nd.x}, ${nd.y})</div>` +
       `<div>yield now: ${rem} / ${nd.cap} cargo` +
       (nd.kind === "fish" ? " · +1 per 5s" : "") + `</div>`;
+    return;
+  }
+  if (S.sel.k === "prog") {              // ship-program inspector
+    const sid = S.sel.id;
+    const cat = S.cat[sid] || {};
+    if (S.pov >= 0 && !povAlly(cat.fleet)) { box.className = ""; return; }
+    const picks = programPickups(sid);
+    box.className = "on";
+    box.style.borderColor = COLORS[(cat.fleet || 0) % COLORS.length];
+    if (!picks.length) {
+      box.innerHTML = `<h3>⌨ ${classAt(sid, fr.t) || "?"} #${sid}</h3>` +
+        `<div class="dim">no conn program was ever delivered to this ship</div>` +
+        `<div class="sqrow" onclick="selShip(${sid})">← back to the ship</div>`;
+      return;
+    }
+    // which version rides her at the CURRENT frame; -1 = follow playback
+    let cur = -1;
+    for (let i = 0; i < picks.length; i++) if (picks[i].t <= fr.t) cur = i;
+    const show = S.sel.ver >= 0 ? Math.min(S.sel.ver, picks.length - 1)
+                                : Math.max(0, cur);
+    const pv = picks[show];
+    box.innerHTML =
+      `<h3>⌨ ${classAt(sid, fr.t) || "?"} #${sid} — program history</h3>` +
+      `<div class="dim">${picks.length} delivery(s) this game · ` +
+      `${cur < 0 ? "none aboard yet at this point" :
+        `v${cur + 1} is aboard at this point`}</div>` +
+      picks.map((p2, i) =>
+        `<div class="sqrow${i === show ? "" : " dead"}" ` +
+        `onclick="selProgVer(${sid},${i})"><b>v${i + 1}</b> · ${fmtTime(p2.t)} · ` +
+        `${p2.via === "signal-program" ? "⚑ by signal" : "⚓ at dock"} · ` +
+        `squadron ${p2.squad}${i === cur ? " · ⬅ current" : ""}</div>`).join("") +
+      (show > 0 ? `<div class="dim" style="margin-top:6px">changes vs v${show}:</div>` : "") +
+      progHtml(show > 0 ? picks[show - 1].text : null, pv.text) +
+      `<div class="sqrow" onclick="selCode(${cat.fleet},${JSON.stringify(pv.squad)
+        .replace(/"/g, "&quot;")})">⌨ full code history of squadron ${pv.squad} →</div>` +
+      `<div class="sqrow" onclick="selShip(${sid})">← back to the ship</div>`;
+    return;
+  }
+  if (S.sel.k === "code") {              // squadron code history: every write the
+    const { fleet, squad } = S.sel;      // admiral made, as diffs over time
+    if (S.pov >= 0 && !povAlly(fleet)) { box.className = ""; return; }
+    const writes = codeWrites(fleet, squad);
+    box.className = "on";
+    box.style.borderColor = COLORS[fleet % COLORS.length];
+    if (!writes.length) {
+      box.innerHTML = `<h3>⌨ Squadron ${squad} code</h3>` +
+        `<div class="dim">the admiral never wrote a program for this squadron</div>` +
+        `<div class="sqrow" onclick="selSquad(${fleet},${JSON.stringify(squad)
+          .replace(/"/g, "&quot;")})">← back to the squadron</div>`;
+      return;
+    }
+    let cur = -1;
+    for (let i = 0; i < writes.length; i++) if (writes[i].t <= fr.t) cur = i;
+    const show = S.sel.ver >= 0 ? Math.min(S.sel.ver, writes.length - 1)
+                                : Math.max(0, cur);
+    const wv = writes[show];
+    const prevTxt = show > 0 ? (writes[show - 1].cleared ? "" : writes[show - 1].text)
+                             : null;
+    // some admirals rewrite EVERY window (80 versions in one game) — rebuild
+    // only when the selection moves, so the list keeps its scroll position
+    const sig = `code|${fleet}|${squad}|${show}|${cur}|${writes.length}`;
+    if (box.dataset.sig === sig) return;
+    box.dataset.sig = sig;
+    box.innerHTML =
+      `<h3 style="color:${COLORS[fleet % COLORS.length]}">⌨ Squadron ${squad} ` +
+      `code — ${S.rp.result.names[fleet]}</h3>` +
+      `<div class="dim">${writes.length} version(s) this game · marks on the ` +
+      `timeline above · click a version to jump there · ` +
+      `${cur < 0 ? "no code in force at this point" : `v${cur + 1} in force at this point`}</div>` +
+      `<div class="verlist">` +
+      writes.map((e, i) =>
+        `<div class="sqrow${i === show ? "" : " dead"}" ` +
+        `${i === show ? 'data-cursel="1" ' : ""}` +
+        `onclick="selCodeVer(${fleet},${JSON.stringify(squad)
+          .replace(/"/g, "&quot;")},${i})"><b>v${i + 1}</b> · ${fmtTime(e.t)}` +
+        `${e.cleared ? " · 🗑 cleared" : ""}${i === cur ? " · ⬅ in force" : ""}</div>`)
+        .join("") + `</div>` +
+      (wv.cleared ? `<div class="dim">program cleared — squadron back on standing orders</div>`
+                  : (show > 0 ? `<div class="dim" style="margin-top:6px">v${show + 1} vs v${show}:</div>` : "") +
+                    progHtml(prevTxt, wv.text)) +
+      `<div class="sqrow" onclick="selSquad(${fleet},${JSON.stringify(squad)
+        .replace(/"/g, "&quot;")})">← back to the squadron</div>`;
+    const selRow = box.querySelector('[data-cursel="1"]');
+    if (selRow && selRow.scrollIntoView) selRow.scrollIntoView({ block: "nearest" });
+    return;
+  }
+  if (S.sel.k === "q") {                 // squadron overview: the tile becomes a roster
+    const { fleet, squad } = S.sel;
+    if (S.pov >= 0 && !povAlly(fleet)) { box.className = ""; return; }
+    const members = Object.entries(S.cat)
+      .filter(([id, c]) => c.fleet === fleet && squadAt(+id, fr.t) === squad)
+      .map(([id]) => +id).sort((a, b) => a - b);
+    const afloat = members.filter(id => S.frameMaps[S.fi].get(id)).length;
+    box.className = "on";
+    box.style.borderColor = COLORS[fleet % COLORS.length];
+    box.innerHTML =
+      `<h3 style="color:${COLORS[fleet % COLORS.length]}">⚑ Squadron ${squad} · ` +
+      `${S.rp.result.names[fleet]}</h3>` +
+      `<div>${afloat} afloat / ${members.length} ships — click one to inspect</div>` +
+      `<div class="sqrow" onclick="selCode(${fleet},${JSON.stringify(squad)
+        .replace(/"/g, "&quot;")})">⌨ code history — how this squadron's program ` +
+      `evolved (diffs on the timeline)</div>` +
+      members.map(id => {
+        const r = S.frameMaps[S.fi].get(id);
+        const cls = classAt(id, fr.t) || (S.cat[id] || {}).preset || "?";
+        return `<div class="sqrow${r ? "" : " dead"}" onclick="selShip(${id})">` +
+          `<b>${cls}</b> #${id} — ` +
+          (r ? `hull ${r[3]}% · cargo ${r[4]}`
+             : `☠ sunk ${fmtTime(S.sinkAt[id] ?? 0)}`) + `</div>`;
+      }).join("");
     return;
   }
   const sid = S.sel.id;
@@ -468,69 +1354,192 @@ function updateInspector(fr) {
       `<div class="intent">☠ sunk at ${fmtTime(S.sinkAt[sid] ?? 0)}</div>`;
     return;
   }
-  if (S.pov >= 0 && S.povCache && row[1] !== S.pov) {
+  const rowFleet = shipFleet(sid);
+  if (S.pov >= 0 && S.povCache && !povAlly(rowFleet)) {
     // enemy ship under POV: only what the engine's summary exposes —
     // preset, position, laden-or-not. No hull, no intent, no orders.
     const vis = S.povCache.vis[S.fi].has(sid);
     box.className = "on";
-    box.style.borderColor = COLORS[row[1] % 4];
+    box.style.borderColor = COLORS[rowFleet % COLORS.length];
     box.innerHTML =
-      `<h3 style="color:${COLORS[row[1] % 4]}">${cat.preset || "?"} #${sid}` +
-      ` · ${S.rp.result.names[row[1]]}</h3>` +
-      (vis ? `<div>position (${row[2]}, ${row[3]}) · ` +
-             `${row[5] > 0 ? "riding low — laden" : "riding high — empty"}</div>` +
+      `<h3 style="color:${COLORS[rowFleet % COLORS.length]}">${escHtml(cat.preset || "?")} #${sid}` +
+      ` · ${escHtml(S.rp.result.names[rowFleet] || "")}</h3>` +
+      (vis ? `<div>position (${row[1]}, ${row[2]}) · ` +
+             `${row[4] > 0 ? "riding low — laden" : "riding high — empty"}</div>` +
              `<div class="intent">⛯ intent unknown (enemy vessel)</div>`
-           : `<div class="intent">🌫 lost from sight</div>`);
+           : (() => {
+               const gh = ((S.povCache.ghosts || [])[S.fi] || [])
+                 .find(g => g.sid === sid);
+               return gh
+                 ? `<div>last seen (${gh.x}, ${gh.y}) — ` +
+                   `${Math.round(gh.age / 10)}s ago</div>` +
+                   `<div class="intent">👁 contact only — may have moved ` +
+                   `or sunk</div>`
+                 : `<div class="intent">🌫 lost from sight</div>`;
+             })());
     return;
   }
   const it = lastEvt(sid, "intent", fr.t);
   const od = lastEvt(sid, "orders", fr.t);
-  const fname = S.rp.result.names[row[1]];
+  const fname = S.rp.result.names[rowFleet];
   box.className = "on";
-  box.style.borderColor = COLORS[row[1] % 4];
+  box.style.borderColor = COLORS[rowFleet % COLORS.length];
+  const sq = squadAt(sid, fr.t) || cat.squad;
+  const hasProg = (S.byShip[sid] || []).some(
+    e => e.via === "port-program" || e.via === "signal-program");
   box.innerHTML =
-    `<h3 style="color:${COLORS[row[1] % 4]}">${cat.preset || "?"} #${sid}` +
-    ` · squadron ${cat.squad || "?"} · ${fname}</h3>` +
+    `<h3 style="color:${COLORS[rowFleet % COLORS.length]}">${escHtml(cat.preset || "?")} #${sid}` +
+    ` · <span class="sqlink" onclick="selSquad(${rowFleet},` +
+    `${escHtml(JSON.stringify(String(sq || "")))})">` +
+    `squadron ${escHtml(String(sq || "?"))}</span> · ${escHtml(fname)}` +
+    (hasProg ? ` · <span class="sqlink" onclick="selProg(${sid})">⌨ program` +
+               `</span>` : "") + `</h3>` +
     `<div class="stats">` +
-    Object.entries(stats).map(([k, v]) => `<span>${k} ${"▪".repeat(v)}</span>`).join("") +
+    Object.entries(stats).map(([k, v]) =>
+      `<span>${escHtml(k)} ${"▪".repeat(Math.max(0, Math.min(200, v | 0)))}</span>`).join("") +
     `</div>` +
-    `<div>hull ${row[4]}% · cargo ${row[5]}</div>` +
-    `<div class="intent">⛯ ${it ? it.s : "(no intent recorded yet)"}</div>` +
-    `<div class="ord">orders${od && od.via ? " (" + od.via + ")" : ""}: ` +
-    `${od ? JSON.stringify(od.od) : "(initial standing orders)"}</div>`;
+    `<div>hull ${row[3]}% · cargo ${row[4]}</div>` +
+    `<div class="intent">⛯ ${it ? escHtml(it.s) : "(no intent recorded yet)"}</div>` +
+    `<div class="ord">orders${od && od.via ? " (" + escHtml(od.via) + ")" : ""}: ` +
+    `${od ? escHtml(JSON.stringify(od.od)) : "(initial standing orders)"}</div>`;
 }
 
+// per-fleet chart series (score, ship count, hauled) — built incrementally so
+// live mode extends instead of rescanning; keyed on the replay object identity
+let CHART_CACHE = null;
+function chartSeries() {
+  const frames = S.rp.frames;
+  if (!CHART_CACHE || CHART_CACHE.rp !== S.rp || CHART_CACHE.n > frames.length) {
+    CHART_CACHE = { rp: S.rp, n: 0, dp: 0, pp: 0, score: {}, ships: {},
+                    bank: {}, tre: {}, msgs: {}, tok: {}, lat: {}, cost: {},
+                    rate: {}, acc: {}, pmax: {}, deadFi: {} };
+    for (const k of ["score", "ships", "bank", "tre", "msgs", "tok",
+                     "lat", "cost", "rate"]) CHART_CACHE.pmax[k] = {};
+    for (const f of S.rp.fleets) {
+      for (const k of ["score", "ships", "bank", "tre", "msgs", "tok",
+                       "lat", "cost", "rate"]) {
+        CHART_CACHE[k][f.id] = [];
+        CHART_CACHE.pmax[k][f.id] = [];
+      }
+      CHART_CACHE.acc[f.id] = { msgs: 0, tok: 0, cost: 0, ms: 0, n: 0 };
+    }
+  }
+  const C = CHART_CACHE;
+  // prefix maxima ride along with every series so plotChart never rescans
+  // (the maxS rescan was 8 charts × fleets × frames PER rAF FRAME — measured
+  // 3 ms/frame on a 40k-tick match before this)
+  const cpush = (k, fid, v) => {
+    C[k][fid].push(v);
+    const pm = C.pmax[k][fid];
+    pm.push(pm.length ? Math.max(pm[pm.length - 1], v) : Math.max(1, v));
+  };
+  const K = Math.max(1, Math.round(1000 / (S.rp.meta.frame_every || 2)));
+  const decs = S.rp.decisions || [];
+  for (let i = C.n; i < frames.length; i++) {
+    const fr2 = frames[i];
+    const t2 = fr2.t;
+    // advance the decision/parley pointers to this frame's time, folding
+    // usage into per-fleet running totals
+    while (C.dp < decs.length && decs[C.dp].t <= t2) {
+      const dd = decs[C.dp++];
+      const a2 = C.acc[dd.fleet];
+      const u2 = dd.u;
+      if (a2 && u2) {
+        a2.tok += (u2.tin || 0) + (u2.tout || 0);
+        a2.cost += u2.cost || 0;
+        if (!u2.err) { a2.ms += u2.ms || 0; a2.n += 1; }
+      }
+    }
+    const par = S.parley || [];
+    while (C.pp < par.length && par[C.pp].t <= t2) {
+      const a2 = C.acc[par[C.pp++].fleet];
+      if (a2) a2.msgs += 1;
+    }
+    const cnt = {};
+    for (const s of fr2.s) {
+      const fl = shipFleet(s[0]);
+      cnt[fl] = (cnt[fl] || 0) + 1;
+    }
+    for (const f of S.rp.fleets) {
+      const row = fr2.f.find(r => r[0] === f.id);
+      const dyn = row ? fleetDyn(row) : [0, 0, 0];
+      const a2 = C.acc[f.id];
+      cpush("score", f.id, dyn[2]);
+      cpush("bank", f.id, dyn[1]);
+      cpush("tre", f.id, dyn[0]);
+      cpush("ships", f.id, cnt[f.id] || 0);
+      cpush("msgs", f.id, a2.msgs);
+      cpush("tok", f.id, a2.tok);
+      cpush("cost", f.id, Math.round(a2.cost * 100) / 100);
+      cpush("lat", f.id, a2.n ? Math.round(a2.ms / a2.n / 100) / 10 : 0);
+      // income RATE (hauled per 1,000 ticks), zero from elimination — built
+      // incrementally here; the old per-rAF b.map() allocated a whole fresh
+      // array per fleet per frame (measured 7-29 ms/frame on long matches)
+      let dfi = C.deadFi[f.id];
+      if (dfi == null) {
+        const en = (S.fleetHist[f.id] || []).find(h => !h[2]);
+        dfi = en ? (C.deadFi[f.id] = en[0]) : null;
+      }
+      const b = C.bank[f.id];
+      cpush("rate", f.id, dfi != null && i >= dfi ? 0
+        : b[b.length - 1] - b[Math.max(0, b.length - 1 - K)]);
+    }
+  }
+  C.n = frames.length;
+  return C;
+}
+function plotChart(cnv, cx2, series, pmax, lim, total) {
+  if (!cx2) return;
+  const W2 = cnv.width, H2 = cnv.height;
+  cx2.clearRect(0, 0, W2, H2);
+  // prefix maxima from the cache: O(fleets), not O(fleets × frames) per rAF
+  let maxS = 1;
+  for (const pm of Object.values(pmax || {})) {
+    const n = Math.min(lim, pm.length);
+    if (n > 0 && pm[n - 1] > maxS) maxS = pm[n - 1];
+  }
+  const step = Math.max(1, Math.floor(total / 140));
+  for (const fl of S.rp.fleets) {
+    const arr = series[fl.id] || [];
+    cx2.strokeStyle = COLORS[fl.id % COLORS.length];
+    cx2.lineWidth = 1.5;
+    cx2.beginPath();
+    let started = false;
+    for (let i = 0; i < Math.min(lim, arr.length); i += step) {
+      const x = i / (total - 1) * W2;
+      const y = H2 - 4 - (arr[i] / maxS) * (H2 - 10);
+      if (!started) { cx2.moveTo(x, y); started = true; } else cx2.lineTo(x, y);
+    }
+    cx2.stroke();
+  }
+  cx2.strokeStyle = "#e6edf7aa";
+  const px = S.fi / (total - 1) * W2;
+  cx2.beginPath(); cx2.moveTo(px, 0); cx2.lineTo(px, H2); cx2.stroke();
+  cx2.lineWidth = 1;
+}
 function drawChart(fr) {
   if (!cctx || !S.rp) return;
-  const W2 = cc.width, H2 = cc.height, frames = S.rp.frames;
-  cctx.clearRect(0, 0, W2, H2);
+  const frames = S.rp.frames;
   const lim = S.spoiler ? S.fi + 1 : frames.length;   // spoiler-free: no future lines
-  let maxS = 10;
-  for (let i = 0; i < lim; i++) for (const row of frames[i].f) maxS = Math.max(maxS, row[4]);
-  const step = Math.max(1, Math.floor(frames.length / 140));
-  for (const fl of S.rp.fleets) {
-    cctx.strokeStyle = COLORS[fl.id % 4];
-    cctx.lineWidth = 1.5;
-    cctx.beginPath();
-    let started = false;
-    for (let i = 0; i < lim; i += step) {
-      const row = frames[i].f.find(r => r[0] === fl.id);
-      if (!row) continue;
-      const x = i / (frames.length - 1) * W2;
-      const y = H2 - 4 - (row[4] / maxS) * (H2 - 10);
-      if (!started) { cctx.moveTo(x, y); started = true; } else cctx.lineTo(x, y);
-    }
-    cctx.stroke();
+  const C = chartSeries();
+  plotChart(cc, cctx, C.score, C.pmax.score, lim, frames.length);
+  plotChart(cc2, cctx2, C.ships, C.pmax.ships, lim, frames.length);
+  // income rate (hauled per 1,000 ticks, zero from elimination) is built
+  // incrementally in chartSeries — see C.rate
+  if (cctx3) plotChart(cc3, cctx3, C.rate, C.pmax.rate, lim, frames.length);
+  const XSERIES = [["tre"], ["msgs"], ["tok"], ["lat"], ["cost"]];
+  for (let x = 0; x < XCHARTS.length; x++) {
+    const k = XSERIES[x][0];
+    plotChart(XCHARTS[x][0], XCHARTS[x][1], C[k], C.pmax[k],
+              lim, frames.length);
   }
-  cctx.strokeStyle = "#e6edf7aa";
-  const px = S.fi / (frames.length - 1) * W2;
-  cctx.beginPath(); cctx.moveTo(px, 0); cctx.lineTo(px, H2); cctx.stroke();
-  cctx.lineWidth = 1;
 }
 
 function drawTimeline(fr) {
   if (!tctx || !S.rp) return;
-  const Wt = tlc.width, Ht = tlc.height;
+  const q2 = S.tlq || 1;
+  tctx.setTransform(q2, 0, 0, q2, 0, 0);
+  const Wt = tlc.width / q2, Ht = tlc.height / q2;
   const T = Math.max(1, S.rp.frames.at(-1).t);
   tctx.clearRect(0, 0, Wt, Ht);
   tctx.fillStyle = "#0a1b33"; tctx.fillRect(0, 0, Wt, Ht);
@@ -541,10 +1550,27 @@ function drawTimeline(fr) {
     tctx.strokeStyle = "#24304d";
     tctx.beginPath(); tctx.moveTo(x, Ht - 14); tctx.lineTo(x, Ht - 6); tctx.stroke();
   }
+  // code-history marks: while a program/code tile is open, its squadron's
+  // writes appear as small ticks — the diffs live ON the timeline
+  if (S.sel && (S.sel.k === "code" || S.sel.k === "prog")) {
+    const cf = S.sel.k === "code" ? S.sel.fleet : (S.cat[S.sel.id] || {}).fleet;
+    const cq = S.sel.k === "code" ? S.sel.squad
+                                  : squadAt(S.sel.id, fr.t);
+    if (cf != null && cq != null) {
+      tctx.fillStyle = COLORS[cf % COLORS.length];
+      for (const e of S.progEvents) {
+        if (e.fleet !== cf || e.squad !== cq) continue;
+        if (S.spoiler && e.t > fr.t) continue;
+        const x = e.t / T * Wt;
+        tctx.fillRect(x - 1, Ht - 27, 2, 7);
+        tctx.fillRect(x - 2.5, Ht - 27, 5, 2);       // ⌐ cap: reads as "code tick"
+      }
+    }
+  }
   for (const e of S.tl) {
     if (S.spoiler && e.t > fr.t) continue;
     const x = e.t / T * Wt;
-    const c = COLORS[e.fleet % 4];
+    const c = COLORS[e.fleet % COLORS.length];
     if (e.k === "sink") {                            // dot on the baseline: a ship lost
       tctx.fillStyle = c;
       tctx.beginPath(); tctx.arc(x, Ht - 10, 2.5, 0, 7); tctx.fill();
@@ -553,6 +1579,9 @@ function drawTimeline(fr) {
       tctx.beginPath(); tctx.moveTo(x, Ht - 14); tctx.lineTo(x, 6); tctx.stroke();
       tctx.beginPath(); tctx.moveTo(x, 6); tctx.lineTo(x + 7, 9.5); tctx.lineTo(x, 13);
       tctx.closePath(); tctx.fill();
+    } else if (e.k === "region") {                   // territory flip: hollow square
+      tctx.strokeStyle = c;
+      tctx.strokeRect(x - 2.5, Ht - 20, 5, 5);
     } else {                                         // flag_sunk: the big one
       tctx.fillStyle = c; tctx.strokeStyle = "#fff";
       tctx.beginPath();
@@ -564,7 +1593,7 @@ function drawTimeline(fr) {
   for (const e of (S.parley || [])) {                // parley: small mid-height dots
     if (S.spoiler && e.t > fr.t) continue;
     const x = e.t / T * Wt;
-    tctx.fillStyle = COLORS[e.fleet % 4];
+    tctx.fillStyle = COLORS[e.fleet % COLORS.length];
     tctx.fillRect(x - 1.5, Ht - 21, 3, 3);
   }
   const cx = fr.t / T * Wt;                          // playhead
@@ -587,7 +1616,10 @@ function admiralStats(fleetId, t) {
 
 function updatePanels(fr) {
   for (const row of fr.f) {
-    const [id, flag, cargo, bank, score, alive] = row;
+    const id = row[0];
+    const [cargo, bank, score] = fleetDyn(row);
+    const st = fleetStatic(S.fi, id) || [0, 100, 1, 0, 0];
+    const flag = st[1], alive = st[2];
     const el = $("fl" + id);
     if (!el) continue;
     el.classList.toggle("dead", !alive);
@@ -596,43 +1628,185 @@ function updatePanels(fr) {
       const fmeta = S.rp.fleets.find(f => f.id === id) || {};
       const a = admiralStats(id, fr.t);
       const lat = a.windows - a.missed > 0 ?
-            Math.round(a.ms / (a.windows - a.missed)) : 0;
-      el.querySelector(".st").innerHTML =
+            a.ms / (a.windows - a.missed) / 1000 : 0;
+      const pad = latestPad(id, fr.t);
+      const sth =
         `<b>${fmeta.model || "scripted bot"}</b> · windows ${a.windows}` +
         ` (${a.missed} missed)<br>` +
-        `tokens ${a.tin.toLocaleString()} in / ${a.tout.toLocaleString()} out · ` +
-        `$${a.cost.toFixed(3)} · ~${lat} ms/turn`;
+        `tokens ${ktok(a.tin)} in / ${ktok(a.tout)} out · ` +
+        `$${a.cost.toFixed(2)} · ~${Math.round(lat)}s/turn`;
+      if ((S.stCache = S.stCache || {})[id] !== sth) {
+        S.stCache[id] = sth;
+        el.querySelector(".st").innerHTML = sth;
+      }
+      // the thought is the headline (rendered in .th below); the scratchpad
+      // is the deeper cut and sits UNDER it. Rebuild only when the content
+      // actually changed — this runs every animation frame, and an
+      // unconditional innerHTML write reset the pad's scrollTop ~60×/s,
+      // making the expanded scratchpad unscrollable during playback
+      const pb = el.querySelector(".padbox");
+      const ph = pad && S.expandedCard === id
+        ? `<div class="pad">📝 ${pad.replace(/</g, "&lt;")}</div>` : "";
+      if ((S.padCache = S.padCache || {})[id] !== ph) {
+        S.padCache[id] = ph;
+        pb.innerHTML = ph;
+      }
     } else {
+      // the FLEET tile is about the fleet itself — numbers, not narration
+      // (the admiral's thoughts live on the Admirals tab)
+      const pb2 = el.querySelector(".padbox");
+      if (pb2 && pb2.innerHTML) {        // the Admirals-tab scratchpad must
+        pb2.innerHTML = "";              // not leak onto the Fleets tile
+        if (S.padCache) S.padCache[id] = "";
+      }
       const sigs = S.tl.filter(e => e.k === "signal" && e.fleet === id && e.t <= fr.t).length;
       const msgs = (S.parley || []).filter(e => e.fleet === id && e.t <= fr.t).length;
       const terr = fr.r ? ` · 🏴 ${fr.r.filter(x => x[1] === id).length} regions` : "";
-      el.querySelector(".st").textContent =
-        `treasury ${cargo} · hauled ${bank} · ships ${fr.s.filter(s => s[1] === id).length}` +
-        terr + ` · ⚑ ${sigs} · ✉ ${msgs}` + (alive ? "" : " · ELIMINATED");
+      const mine = fr.s.filter(s => shipFleet(s[0]) === id);
+      const byCls = {};
+      const sqs = new Set();
+      for (const sh of mine) {
+        const c2 = classAt(sh[0], fr.t) || (S.cat[sh[0]] || {}).preset || "?";
+        byCls[c2] = (byCls[c2] || 0) + 1;
+        const sq = squadAt(sh[0], fr.t) ?? (S.cat[sh[0]] || {}).squad;
+        if (sq != null) sqs.add(sq);
+      }
+      const clsTxt = Object.entries(byCls).sort((a, b) => b[1] - a[1])
+        .map(([c2, n2]) => `${n2} ${escHtml(c2)}`).join(" · ");
+      const yslots = (S.rp.meta.config || {}).shipyard_slots || 0;
+      const yards = yslots > 0
+        ? yslots + (S.yardBuilt || []).filter(e => e.fleet === id &&
+                                                   e.t <= fr.t).length
+        : 0;
+      // what each yard slot is doing RIGHT NOW (start events carry `ready`)
+      const jobs = alive ? (S.yardJobs || []).filter(e => e.fleet === id &&
+        e.t <= fr.t && fr.t < e.ready) : [];
+      const busy = jobs.filter(j => j.k !== "yard_start").length;
+      const inforce = new Set();       // conn programs currently aboard
+      for (const e2 of (S.progEvents || [])) {
+        if (e2.fleet !== id || e2.t > fr.t) continue;
+        if (e2.cleared) inforce.delete(e2.squad); else inforce.add(e2.squad);
+      }
+      const sth =
+        `treasury ${cargo} · hauled ${bank}${terr} · ⚑ ${sigs} · ✉ ${msgs}` +
+        (alive ? "" : " · ELIMINATED") + `<br>` +
+        `${mine.length} ship${mine.length === 1 ? "" : "s"}` +
+        (clsTxt ? ` — ${clsTxt}` : "") + `<br>` +
+        `${sqs.size} squadron${sqs.size === 1 ? "" : "s"}` +
+        (yards ? ` · shipyards ${busy}/${yards} busy` : "") +
+        ` · ${inforce.size} conn program${inforce.size === 1 ? "" : "s"}`;
+      if ((S.stCache = S.stCache || {})[id] !== sth) {
+        S.stCache[id] = sth;
+        el.querySelector(".st").innerHTML = sth;
+      }
+      const xp = el.querySelector(".xpd");
+      if (xp && S.expandedCard === id) {
+        // expanded fleet card: a live ship legend (the real silhouettes) +
+        // what every yard slot is working on
+        const jl = jobs.map(j =>
+          j.k === "build_start"
+            ? `<div>🔨 building ${escHtml(j.preset)} — ready ${fmtTime(j.ready)}</div>`
+          : j.k === "repair_start"
+            ? `<div>🔧 repairing ${escHtml(classAt(j.ship, fr.t) || "ship")} ` +
+              `#${j.ship} — done ${fmtTime(j.ready)}</div>`
+          : j.k === "refit_start"
+            ? `<div>⚙ refitting #${j.ship} → ${escHtml(j.to)} — done ` +
+              `${fmtTime(j.ready)}</div>`
+            : `<div>🏗 expanding the harbor (+1 slot, no dock occupied) — ` +
+              `done ${fmtTime(j.ready)}</div>`).join("");
+        const selSq = S.sel && S.sel.k === "q" && S.sel.fleet === id
+          ? S.sel.squad : null;
+        const xph =
+          `<div class="sqchips">` +
+          [...sqs].sort().map(q3 =>
+            `<span class="sqchip${q3 === selSq ? " on" : ""}" ` +
+            `data-fleet="${id}" data-sq="${escHtml(String(q3))}" ` +
+            `title="squadron overview in the inspector">⚑ ${escHtml(String(q3))}` +
+            `</span>`).join("") + `</div>` +
+          `<div class="legend">` +
+          Object.entries(byCls).sort((a, b) => b[1] - a[1]).map(([c2, n2]) =>
+            `<span class="li"><canvas width="44" height="28" ` +
+            `data-cls="${escHtml(c2)}"></canvas>${n2}× ${escHtml(c2)}</span>`)
+            .join("") + `</div>` +
+          (yards ? `<div class="yardjobs"><b>shipyards — ${busy}/${yards} ` +
+                   `dock${yards === 1 ? "" : "s"} working:</b>` +
+                   (jl || "<div>all docks idle</div>") + `</div>` : jl);
+        // per-frame guard (same reason as .padbox): rebuild + re-render the
+        // legend canvases only when the content changed, so the expanded
+        // card stays scrollable and selectable during playback
+        if ((S.xpCache = S.xpCache || {})[id] !== xph) {
+          S.xpCache[id] = xph;
+          xp.innerHTML = xph;
+          const mainCtx = ctx;
+          for (const cv of xp.querySelectorAll("canvas[data-cls]")) {
+            const c3 = cv.getContext && cv.getContext("2d");
+            if (!c3) continue;
+            ctx = c3;
+            c3.setTransform(1, 0, 0, 1, 0, 0);
+            c3.clearRect(0, 0, cv.width, cv.height);
+            c3.translate(cv.width / 2, cv.height / 2);
+            c3.scale(1.4, 1.4);
+            drawShipShape(cv.dataset.cls, COLORS[id % COLORS.length], 0, false,
+                          statsOf(cv.dataset.cls, id));
+            ctx = mainCtx;
+          }
+        }
+      } else if (xp && xp.innerHTML) {
+        xp.innerHTML = "";
+        if (S.xpCache) S.xpCache[id] = "";
+      }
+    }
+    el.classList.toggle("xp", S.expandedCard === id);
+    const mv = el.querySelector(".myvis");
+    if (mv) {
+      mv.style.display = S.pmode === "admiral" ? "" : "none";
+      mv.textContent = S.pov === id ? "👁 viewing" : "👁 My Vision";
+      mv.style.background = S.pov === id ? "#1e3a5f" : "";
+    }
+    if (S.pmode !== "fleet") {
+      const xp2 = el.querySelector(".xpd");
+      if (xp2 && xp2.innerHTML) {
+        xp2.innerHTML = "";
+        if (S.xpCache) S.xpCache[id] = "";
+      }
     }
     el.querySelector(".hull i").style.width = Math.max(0, flag) / 2 + "%";
-    el.querySelector(".th").textContent = latestThought(id, fr.t);
+    el.querySelector(".th").textContent =
+      S.pmode === "admiral" ? latestThought(id, fr.t) : "";
   }
-  $("clock").textContent = fmtTime(fr.t) + " / " + fmtTime(S.rp.frames.at(-1).t);
+  // spoiler shield hides the TOTAL: a fixed end-time (or a live clock that
+  // stopped advancing) would give away that — and roughly when — the game ended
+  $("clock").textContent = S.spoiler
+    ? fmtTime(fr.t)
+    : fmtTime(fr.t) + " / " + fmtTime(S.rp.frames.at(-1).t);
   const tick = $("gamelog");
-  const evs = S.tl.filter(e => e.t <= fr.t).slice(-12).reverse();
-  tick.innerHTML = evs.map(e => {
-    const nm = i => `<b style="color:${COLORS[i % 4]}">${S.rp.result.names[i] || i}</b>`;
-    if (e.k === "sink") return `<div>${fmtTime(e.t)} — ${nm(e.fleet)} ${e.preset} sunk` +
-      (e.by != null ? ` by ${nm(e.by)}` : "") + `</div>`;
-    if (e.k === "flag_sunk") return `<div>${fmtTime(e.t)} — 💥 ${nm(e.fleet)} FLAGSHIP DESTROYED</div>`;
-    if (e.k === "region") return `<div>${fmtTime(e.t)} — 🏴 ${nm(e.fleet)} seizes ${e.name}</div>`;
-    return `<div>${fmtTime(e.t)} — ${nm(e.fleet)} hoists signal flags</div>`;
-  }).join("");
+  // the WHOLE log to this point, newest first, scrollable — review without
+  // rewinding. Rebuilt only when an event lands (scroll position survives).
+  const evs = S.tl.filter(e => e.t <= fr.t);
+  if (tick.dataset.n !== String(evs.length)) {
+    tick.dataset.n = String(evs.length);
+    const keep = tick.scrollTop;
+    tick.innerHTML = evs.slice().reverse().map(e => {
+      const nm = i => `<b style="color:${COLORS[i % COLORS.length]}">${escHtml(S.rp.result.names[i] || i)}</b>`;
+      if (e.k === "sink") return `<div>${fmtTime(e.t)} — ${nm(e.fleet)} ${escHtml(e.preset)} ` +
+        (e.cause === "scuttle" ? "scuttled" : "sunk" +
+         (e.by != null ? ` by ${nm(e.by)}` : "")) + `</div>`;
+      if (e.k === "flag_sunk") return `<div>${fmtTime(e.t)} — 💥 ${nm(e.fleet)} ` +
+        `FLAGSHIP DESTROYED${e.by != null ? ` by ${nm(e.by)}` : ""}</div>`;
+      if (e.k === "region") return `<div>${fmtTime(e.t)} — 🏴 ${nm(e.fleet)} seizes ${escHtml(e.name)}</div>`;
+      return `<div>${fmtTime(e.t)} — ${nm(e.fleet)} hoists signal flags</div>`;
+    }).join("");
+    tick.scrollTop = keep;
+  }
   if (S.pmode === "parley") {
     const feed = $("parleyfeed");
     const seen = (S.parley || []).filter(e => e.t <= fr.t);
     if (feed.dataset.n !== String(seen.length)) {
       feed.dataset.n = String(seen.length);
-      const nm = i => `<b style="color:${COLORS[i % 4]}">${S.rp.result.names[i] || i}</b>`;
+      const nm = i => `<b style="color:${COLORS[i % COLORS.length]}">${escHtml(S.rp.result.names[i] || i)}</b>`;
       feed.innerHTML = seen.length ? seen.map(e => {
         const to = e.to === "all" ? "<b>all</b>" : nm(e.to);
-        return `<div class="msg" style="--mc:${COLORS[e.fleet % 4]}">` +
+        return `<div class="msg" style="--mc:${COLORS[e.fleet % COLORS.length]}">` +
                `<div class="hd"><span>${fmtTime(e.t)}</span> ${nm(e.fleet)} → ${to}</div>` +
                `${e.text.replace(/</g, "&lt;")}</div>`;
       }).join("") : `<div class="empty">(no parley messages in this match)</div>`;
@@ -640,7 +1814,10 @@ function updatePanels(fr) {
     }
   }
   drawTimeline(fr);
-  drawChart(fr);
+  // only when the Stats panel is the visible mode — setMode() re-seeks on
+  // switch so it paints current the instant it opens. (Gate on pmode, NOT
+  // CSS visibility: the fullscreen auto-panel returns on hover w/o a seek.)
+  if (S.pmode === "stats") drawChart(fr);
   updateInspector(fr);
 }
 
@@ -650,27 +1827,47 @@ function drawShipShape(preset, color, cargo, sel, stats) {
   // tangent in port) — a shape that violates this will visibly sail sideways.
   // Silhouettes (P0.2): traders round + swelling with cargo (prow wedge marks the
   // front), frigates angular with bright ring + gun studs, raiders darts, scouts slivers.
-  if (preset === "trader") {
-    const r = 4 + Math.min(3.5, cargo / 4);
+  if (preset === "trawler" || preset === "trader") {
+    // trawler = a BLOCKY workboat seen from above: parallel sides, short
+    // raked bow, flat transom — same hull language as the derived custom
+    // classes. Cargo swells the beam; the two net booms stay its signature.
+    // ("trader" kept so pre-rename replays still draw the right silhouette)
+    const B = 3.4 + Math.min(3, cargo / 5);          // half-beam
+    const L = 8;                                     // half-length
+    if (preset === "trawler") {
+      ctx.strokeStyle = color + "cc"; ctx.lineWidth = 1;      // net booms astern
+      for (const dy of [-1, 1]) {
+        ctx.beginPath();
+        ctx.moveTo(-L * 0.55, dy * B * 0.7);
+        ctx.lineTo(-L * 1.6, dy * (B + 3));
+        ctx.stroke();
+      }
+      ctx.lineWidth = 1;
+    }
     ctx.fillStyle = color;
-    ctx.beginPath(); ctx.ellipse(0, 0, r * 1.25, r, 0, 0, 7); ctx.fill();
-    ctx.beginPath(); ctx.moveTo(r * 1.25 + 3, 0);            // prow wedge = the front
-    ctx.lineTo(r * 1.25 - 1.5, 2.2); ctx.lineTo(r * 1.25 - 1.5, -2.2);
+    ctx.beginPath();
+    ctx.moveTo(L + 1, 0);                            // stem = the front
+    ctx.lineTo(L - 3.5, B); ctx.lineTo(-L + 1, B);   // straight working deck
+    ctx.lineTo(-L + 1, -B); ctx.lineTo(L - 3.5, -B);
     ctx.closePath(); ctx.fill();
-    ctx.fillStyle = "#0b122088";                             // cabin sits aft
-    ctx.beginPath(); ctx.ellipse(-r * .35, 0, r * .45, r * .5, 0, 0, 7); ctx.fill();
+    ctx.fillStyle = "#0b122088";                     // wheelhouse sits aft
+    ctx.fillRect(-L + 2, -B * .55, 3.6, B * 1.1);
     return;
   }
   if (preset === "frigate") {
+    // classic warship silhouette: long pointed bow, parallel midship,
+    // tapered flat transom — the bright ring + gun studs stay its signature
     ctx.fillStyle = color;
     ctx.beginPath();
-    ctx.moveTo(7, 0); ctx.lineTo(2.5, 5.2); ctx.lineTo(-6, 4.6);
-    ctx.lineTo(-6, -4.6); ctx.lineTo(2.5, -5.2); ctx.closePath(); ctx.fill();
+    ctx.moveTo(9.5, 0);                              // sharp stem
+    ctx.lineTo(3, 4.2); ctx.lineTo(-5, 4.2);
+    ctx.lineTo(-6.5, 2.6); ctx.lineTo(-6.5, -2.6); ctx.lineTo(-5, -4.2);
+    ctx.lineTo(3, -4.2); ctx.closePath(); ctx.fill();
     ctx.strokeStyle = "#ffffffdd"; ctx.lineWidth = 1.6; ctx.stroke(); ctx.lineWidth = 1;
     ctx.fillStyle = "#ffffffcc";                    // gun studs port + starboard
     for (const sy of [-1, 1]) {
-      ctx.fillRect(-3, sy * 5.4 - .9, 2, 1.8);
-      ctx.fillRect(0.5, sy * 5.4 - .9, 2, 1.8);
+      ctx.fillRect(-3, sy * 4.4 - .9, 2, 1.8);
+      ctx.fillRect(0.5, sy * 4.4 - .9, 2, 1.8);
     }
     return;
   }
@@ -749,12 +1946,19 @@ function lerpAngle(a, b, k) {
 
 function draw(fr, prev, alpha) {
   if (!ctx) return;
-  const rp = S.rp, cw = canvas.width / rp.meta.w, ch = canvas.height / rp.meta.h;
+  const rp = S.rp, cw = LW / rp.meta.w, ch = LH / rp.meta.h;
   const hr = (rp.meta.harbor_r || 3);
+  const RS = canvas.width / LW;        // DPR sharpness: device px per logical px
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
   ctx.clearRect(0, 0, canvas.width, canvas.height);
-  const g = ctx.createLinearGradient(0, 0, 0, canvas.height);
+  // zoom + pan: the whole world renders through one transform; hit-testing
+  // inverts it (toWorld). Wheel zooms at the cursor, drag pans, dbl-click resets.
+  ctx.setTransform(RS, 0, 0, RS, 0, 0);
+  ctx.translate(S.panX || 0, S.panY || 0);
+  ctx.scale(S.zoom || 1, S.zoom || 1);
+  const g = ctx.createLinearGradient(0, 0, 0, LH);
   g.addColorStop(0, "#0a1b33"); g.addColorStop(1, "#081426");
-  ctx.fillStyle = g; ctx.fillRect(0, 0, canvas.width, canvas.height);
+  ctx.fillStyle = g; ctx.fillRect(0, 0, LW, LH);
 
   if (rp.meta.regions && fr.r) {                     // territory: tint by holder
     const owners = Object.fromEntries(fr.r);
@@ -775,7 +1979,7 @@ function draw(fr, prev, alpha) {
     for (let x = 0; x < rp.meta.w; x++) for (let y = 0; y < rp.meta.h; y++) {
       const o = owners[S.cellRegion[x][y]];
       if (o >= 0) {
-        ctx.fillStyle = COLORS[o % 4] + "1c";
+        ctx.fillStyle = COLORS[o % COLORS.length] + "1c";
         ctx.fillRect(x * cw, y * ch, cw + .5, ch + .5);
       }
     }
@@ -783,16 +1987,73 @@ function draw(fr, prev, alpha) {
     for (const r of rp.meta.regions) {
       ctx.fillText(r.name, (r.x + .5) * cw - 24, (r.y + .5) * ch - 6);
     }
+    // dashed borders on every region boundary (static geometry — cached per
+    // canvas scale). Slate, deliberately off every fleet + terrain color.
+    if (typeof Path2D !== "undefined") {
+      const bkey = cw + "x" + ch;
+      if (!S.borderPath || S.borderKey !== bkey) {
+        const path = new Path2D();
+        for (let x = 0; x < rp.meta.w; x++) {
+          for (let y = 0; y < rp.meta.h; y++) {
+            const c0 = S.cellRegion[x][y];
+            if (x + 1 < rp.meta.w && S.cellRegion[x + 1][y] !== c0) {
+              path.moveTo((x + 1) * cw, y * ch);
+              path.lineTo((x + 1) * cw, (y + 1) * ch);
+            }
+            if (y + 1 < rp.meta.h && S.cellRegion[x][y + 1] !== c0) {
+              path.moveTo(x * cw, (y + 1) * ch);
+              path.lineTo((x + 1) * cw, (y + 1) * ch);
+            }
+          }
+        }
+        S.borderPath = path;
+        S.borderKey = bkey;
+      }
+      ctx.strokeStyle = "#9fb0c866";
+      ctx.setLineDash([3, 4]);
+      ctx.stroke(S.borderPath);
+      ctx.setLineDash([]);
+    }
+    // capture in progress: a filling pie in the claimant's color at the
+    // region seat (frame r rows grow [claimant, pct] while contested)
+    if (fr.r) {
+      for (const rr of fr.r) {
+        if (rr.length < 4) continue;
+        const reg = rp.meta.regions.find(g2 => g2.id === rr[0]);
+        if (!reg) continue;
+        const cx3 = (reg.x + .5) * cw, cy3 = (reg.y + .5) * ch;
+        const rad = Math.min(cw, ch) * 1.7;
+        ctx.beginPath(); ctx.fillStyle = "#0b1220cc";
+        ctx.arc(cx3, cy3, rad + 2, 0, 7); ctx.fill();
+        ctx.beginPath(); ctx.fillStyle = COLORS[rr[2] % COLORS.length];
+        ctx.moveTo(cx3, cy3);
+        ctx.arc(cx3, cy3, rad, -Math.PI / 2,
+                -Math.PI / 2 + (rr[3] / 100) * 2 * Math.PI);
+        ctx.closePath(); ctx.fill();
+        ctx.beginPath(); ctx.strokeStyle = "#e6edf7aa";
+        ctx.arc(cx3, cy3, rad + 2, 0, 7); ctx.stroke();
+      }
+    }
+  }
+  // impassable islands: charted geography — always visible, under everything.
+  // Sand core + a pale reef fringe so land reads instantly against open sea.
+  if (rp.meta.islands) {
+    for (const [ix, iy] of rp.meta.islands) {
+      ctx.fillStyle = "#c9b47f22";
+      ctx.fillRect(ix * cw - 1, iy * ch - 1, cw + 2, ch + 2);
+      ctx.fillStyle = "#8a774e";
+      ctx.fillRect(ix * cw + .5, iy * ch + .5, cw - 1, ch - 1);
+    }
   }
   const PV = S.pov >= 0 ? S.povCache : null;
-  const nrem = Object.fromEntries(fr.n);
   S.nodePos = {};
   for (const nd of rp.nodes) {
     // under POV: the admiral's BELIEVED stock (last seen + projected fish regen),
     // dimmed when the island is currently out of sight (stale intel)
-    const rem = PV ? (PV.believed[S.fi][nd.id] ?? 0) : (nrem[nd.id] ?? 0);
+    const pvi = PV ? Math.min(S.fi, PV.believed.length - 1) : 0;
+    const rem = PV ? ((PV.believed[pvi] || {})[nd.id] ?? 0) : nodeVal(S.fi, nd.id);
     if (rem <= 0) continue;
-    const stale = PV && !PV.nodeSeen[S.fi].has(nd.id);
+    const stale = PV && !(PV.nodeSeen[pvi] || new Set()).has(nd.id);
     const x = (nd.x + .5) * cw, y = (nd.y + .5) * ch;
     const r = 3 + Math.min(9, rem / 6);
     S.nodePos[nd.id] = [x, y, r];
@@ -814,20 +2075,55 @@ function draw(fr, prev, alpha) {
     ctx.globalAlpha = 1;
   }
 
-  const flagRow = Object.fromEntries(fr.f.map(r => [r[0], r]));
   const harbors = {};
   for (const f of rp.fleets) {
-    const [x, y] = [(f.harbor[0] + .5) * cw, (f.harbor[1] + .5) * ch];
-    harbors[f.id] = [x, y, f.harbor[0], f.harbor[1]];
-    const alive = flagRow[f.id] && flagRow[f.id][5];
-    ctx.strokeStyle = COLORS[f.id % 4] + (alive ? "66" : "22");
+    // flagship relocation + elimination live in the static change list —
+    // fleetStatic() forward-fills to this frame; old headers fall back
+    const st = fleetStatic(S.fi, f.id);
+    const [hx2, hy2] = st && st[3] != null ? [st[3], st[4]] : f.harbor;
+    const [x, y] = [(hx2 + .5) * cw, (hy2 + .5) * ch];
+    harbors[f.id] = [x, y, hx2, hy2];
+    const alive = st ? st[2] : 1;
+    ctx.strokeStyle = COLORS[f.id % COLORS.length] + (alive ? "66" : "22");
     ctx.setLineDash([4, 4]);
     ctx.beginPath(); ctx.arc(x, y, (hr + .5) * Math.min(cw, ch), 0, 7); ctx.stroke();
     ctx.setLineDash([]);
     if (alive) {
-      ctx.fillStyle = COLORS[f.id % 4];
+      ctx.fillStyle = COLORS[f.id % COLORS.length];
       ctx.fillRect(x - 7, y - 7, 14, 14);
       ctx.strokeStyle = "#fff3"; ctx.strokeRect(x - 7, y - 7, 14, 14);
+      if (S.showNames) {
+        ctx.font = "bold 10px sans-serif";
+        ctx.lineWidth = 3; ctx.strokeStyle = "#0b1220cc";
+        ctx.strokeText(`⚓ ${f.name}`, x + 11, y - 10);
+        ctx.fillStyle = COLORS[f.id % COLORS.length];
+        ctx.fillText(`⚓ ${f.name}`, x + 11, y - 10);
+        ctx.lineWidth = 1;
+      }
+    }
+  }
+
+  // ghost contacts (fog view only): the admiral's stale plot — last-known
+  // enemy positions drawn as dashed outlines that fade with age. This is what
+  // the ADMIRAL believes is out there, not what is.
+  const pvgi = PV ? Math.min(S.fi, (PV.ghosts || []).length - 1) : -1;
+  if (PV && pvgi >= 0 && PV.ghosts[pvgi] && PV.ghosts[pvgi].length) {
+    for (const g of PV.ghosts[pvgi]) {
+      const gx = (g.x + .5) * cw, gy = (g.y + .5) * ch;
+      const fade = Math.max(.2, .6 - .45 * (g.age / (PV.ttl || 1)));
+      ctx.globalAlpha = fade;
+      ctx.strokeStyle = COLORS[g.fleet % COLORS.length];
+      ctx.setLineDash([3, 3]);
+      ctx.beginPath(); ctx.ellipse(gx, gy, 7, 4.5, 0, 0, 7); ctx.stroke();
+      ctx.setLineDash([]);
+      ctx.fillStyle = COLORS[g.fleet % COLORS.length];
+      ctx.font = "8px sans-serif";
+      ctx.fillText("?", gx - 2, gy + 2.5);
+      if (S.showNames) {
+        ctx.fillStyle = "#e6edf7";
+        ctx.fillText(`${Math.round(g.age / 10)}s ago`, gx + 9, gy + 3);
+      }
+      ctx.globalAlpha = 1;
     }
   }
 
@@ -836,42 +2132,62 @@ function draw(fr, prev, alpha) {
   for (const a of fr.s) {
     let n = 0;
     for (const b of fr.s) {
-      if (a[0] !== b[0] && a[1] === b[1] &&
-          Math.max(Math.abs(a[2] - b[2]), Math.abs(a[3] - b[3])) <= 2) n++;
+      if (a[0] !== b[0] && shipFleet(a[0]) === shipFleet(b[0]) &&
+          Math.max(Math.abs(a[1] - b[1]), Math.abs(a[2] - b[2])) <= 2) n++;
     }
     packWidth[a[0]] = 2 + Math.min(4.5, n * 1.1);
   }
   for (const s of fr.s) {                            // fading wakes — same midpoint-
-    if (PV && povHidden(s[0], s[1], S.fi)) continue;
+    if (PV && povHidden(s[0], shipFleet(s[0]), S.fi)) continue;
     const pts = [];                                  // quadratic smoothing as the hulls
+    // ships move in bursts, so consecutive frames often repeat a position —
+    // pushing the duplicates stacked zero-length round-cap segments into
+    // bold dots at random intervals along the wake. Skip repeats.
     for (let k = TAIL; k >= 0; k--) {
       const m = S.frameMaps[S.fi - k];
       const p = m && m.get(s[0]);
-      if (p) pts.push([(p[2] + .5) * cw, (p[3] + .5) * ch]);
+      if (!p) continue;
+      const px2 = (p[1] + .5) * cw, py2 = (p[2] + .5) * ch;
+      const lp = pts[pts.length - 1];
+      if (!lp || lp[0] !== px2 || lp[1] !== py2) pts.push([px2, py2]);
     }
     const sm = S.smooth[s[0]];
-    if (sm) pts.push([sm.x, sm.y]);                  // wake meets the rendered hull
-    if (pts.length < 2) continue;
-    ctx.beginPath();
-    ctx.moveTo(pts[0][0], pts[0][1]);
-    for (let i = 1; i < pts.length - 1; i++) {
-      ctx.quadraticCurveTo(pts[i][0], pts[i][1],
-                           (pts[i][0] + pts[i + 1][0]) / 2,
-                           (pts[i][1] + pts[i + 1][1]) / 2);
+    if (sm) {                                        // wake meets the rendered hull
+      const lp = pts[pts.length - 1];
+      if (!lp || (lp[0] - sm.x) ** 2 + (lp[1] - sm.y) ** 2 > .25) {
+        pts.push([sm.x, sm.y]);
+      }
     }
-    ctx.lineTo(pts.at(-1)[0], pts.at(-1)[1]);
-    const g2 = ctx.createLinearGradient(pts[0][0], pts[0][1],
-                                        pts.at(-1)[0], pts.at(-1)[1]);
-    g2.addColorStop(0, COLORS[s[1] % 4] + "00");     // dissolves at the tail
-    g2.addColorStop(1, COLORS[s[1] % 4] + "55");
-    ctx.strokeStyle = g2;
-    ctx.lineWidth = packWidth[s[0]] || 2;
+    if (pts.length < 2) continue;
+    // Fade ALONG THE PATH, not along a single straight gradient: a ship
+    // circling back near its start made the old endpoint-to-endpoint gradient
+    // axis degenerate, so the whole wake flashed in/out. Stroke segment by
+    // segment with alpha + width ramping from tail (old, faint, thin) to bow.
+    const col = COLORS[shipFleet(s[0]) % COLORS.length];
+    const w = packWidth[s[0]] || 2;
+    const n = pts.length;
     ctx.lineCap = "round";
-    ctx.stroke(); ctx.lineWidth = 1;
+    ctx.lineJoin = "round";
+    for (let i = 1; i < n; i++) {
+      const f = i / (n - 1);                         // 0 oldest .. 1 newest
+      const a = Math.round(f * 0x55);                // up to ~33% alpha at the bow
+      if (a < 2) continue;                           // skip the fully-faded tail
+      // quadratic through the segment midpoints keeps the curve smooth
+      const p0 = i === 1 ? pts[0]
+        : [(pts[i - 1][0] + pts[i][0]) / 2, (pts[i - 1][1] + pts[i][1]) / 2];
+      const p1 = i === n - 1 ? pts[i]
+        : [(pts[i][0] + pts[i + 1][0]) / 2, (pts[i][1] + pts[i + 1][1]) / 2];
+      ctx.beginPath();
+      ctx.moveTo(p0[0], p0[1]);
+      ctx.quadraticCurveTo(pts[i][0], pts[i][1], p1[0], p1[1]);
+      ctx.strokeStyle = col + a.toString(16).padStart(2, "0");
+      ctx.lineWidth = w * (0.35 + 0.65 * f);
+      ctx.stroke();
+    }
+    ctx.lineWidth = 1;
   }
 
-  for (const e of rp.events) {                       // sink ripples
-    if (e.k !== "sink") continue;
+  for (const e of (S.sinks || [])) {                 // sink ripples
     const age = fr.t - e.t;
     if (age < 0 || age > 30) continue;
     if (PV && e.fleet !== S.pov) {                   // only ripples the admiral saw
@@ -886,17 +2202,17 @@ function draw(fr, prev, alpha) {
     ctx.beginPath(); ctx.arc(x, y, 3 + age * .8, 0, 7); ctx.stroke();
   }
 
-  const drawn = PV ? fr.s.filter(s => !povHidden(s[0], s[1], S.fi)) : fr.s;
+  const drawn = PV ? fr.s.filter(s => !povHidden(s[0], shipFleet(s[0]), S.fi)) : fr.s;
   const cellGroups = new Map();
   for (const s of drawn) {
-    const key = s[2] + "," + s[3];
+    const key = s[1] + "," + s[2];
     (cellGroups.get(key) || cellGroups.set(key, []).get(key)).push(s);
   }
   const clashes = [];
   const inClash = new Set();
   for (const a of drawn) for (const b of drawn) {
-    if (a[0] >= b[0] || a[1] === b[1]) continue;
-    if (Math.max(Math.abs(a[2] - b[2]), Math.abs(a[3] - b[3])) <= 1) {
+    if (a[0] >= b[0] || shipFleet(a[0]) === shipFleet(b[0])) continue;
+    if (Math.max(Math.abs(a[1] - b[1]), Math.abs(a[2] - b[2])) <= 1) {
       clashes.push([a, b]); inClash.add(a[0]); inClash.add(b[0]);
     }
   }
@@ -913,21 +2229,21 @@ function draw(fr, prev, alpha) {
       // at the ends or when the ship is missing from a neighbor frame.
       const p = prevPos[s[0]] || s;
       const nrow = (S.frameMaps[S.fi + 1] && S.frameMaps[S.fi + 1].get(s[0])) || s;
-      const ax0 = (p[2] + s[2]) / 2, ay0 = (p[3] + s[3]) / 2;
-      const ax1 = (s[2] + nrow[2]) / 2, ay1 = (s[3] + nrow[3]) / 2;
+      const ax0 = (p[1] + s[1]) / 2, ay0 = (p[2] + s[2]) / 2;
+      const ax1 = (s[1] + nrow[1]) / 2, ay1 = (s[2] + nrow[2]) / 2;
       const ia = 1 - alpha;
-      let tx = ((ia * ia * ax0 + 2 * alpha * ia * s[2] + alpha * alpha * ax1) + .5) * cw;
-      let ty = ((ia * ia * ay0 + 2 * alpha * ia * s[3] + alpha * alpha * ay1) + .5) * ch;
+      let tx = ((ia * ia * ax0 + 2 * alpha * ia * s[1] + alpha * alpha * ax1) + .5) * cw;
+      let ty = ((ia * ia * ay0 + 2 * alpha * ia * s[2] + alpha * alpha * ay1) + .5) * ch;
       let orbitAngle = null;
-      const hb = harbors[s[1]];
+      const hb = harbors[shipFleet(s[0])];
       // idle-in-port needs SUSTAINED stillness (4-frame baseline): ships cruise in
       // movement bursts, so single-frame "stationary" is just the gap between steps —
       // keying orbit off it yanked transiting ships between course and ring (P0.2)
       const back4 = S.frameMaps[Math.max(0, S.fi - 4)].get(s[0]);
-      const idle = p[2] === s[2] && p[3] === s[3] &&
-                   back4 && back4[2] === s[2] && back4[3] === s[3];
+      const idle = p[1] === s[1] && p[2] === s[2] &&
+                   back4 && back4[1] === s[1] && back4[2] === s[2];
       if (hb && idle && !inClash.has(s[0]) &&
-          Math.max(Math.abs(s[2] - hb[2]), Math.abs(s[3] - hb[3])) <= hr) {
+          Math.max(Math.abs(s[1] - hb[2]), Math.abs(s[2] - hb[3])) <= hr) {
         // in port + idle: patrol the flagship in a slow circle instead of sitting still
         const base = s[0] * 2.399;                   // golden-angle spacing by ship id
         orbitAngle = base + smoothT * 0.012;
@@ -935,8 +2251,11 @@ function draw(fr, prev, alpha) {
         tx = hb[0] + Math.cos(orbitAngle) * rad;
         ty = hb[1] + Math.sin(orbitAngle) * rad;
       } else if (group.length > 1) {
-        const ang = (gi / group.length) * Math.PI * 2;
-        tx += Math.cos(ang) * 6; ty += Math.sin(ang) * 6;
+        // per-SHIP golden angle: stable as ships join/leave the pile (the old
+        // index-in-group angle reshuffled EVERYONE on any membership change)
+        const ang = s[0] * 2.399;
+        const rad = 4 + Math.min(4, group.length);
+        tx += Math.cos(ang) * rad; ty += Math.sin(ang) * rad;
       }
       // exponential smoothing: fluid motion through the sim's burst-steps (P0.2)
       let sm = S.smooth[s[0]];
@@ -964,12 +2283,13 @@ function draw(fr, prev, alpha) {
       if (inClash.has(s[0])) return;
       const cat = S.cat[s[0]] || {};
       const cls = classAt(s[0], fr.t);
+      const sfl = shipFleet(s[0]);
       ctx.save(); ctx.translate(sm.x, sm.y); ctx.rotate(sm.a);
-      ctx.globalAlpha = .4 + .6 * (s[4] / 100);
-      drawShipShape(cls, COLORS[s[1] % 4], s[5], false, statsOf(cls, s[1]));
+      ctx.globalAlpha = .4 + .6 * (s[3] / 100);
+      drawShipShape(cls, COLORS[sfl % COLORS.length], s[4], false, statsOf(cls, sfl));
       ctx.restore();
       ctx.globalAlpha = 1;
-      if (s[5] > 0 && cls !== "trader") {
+      if (s[4] > 0 && cls !== "trawler" && cls !== "trader") {
         ctx.fillStyle = "#ffd76a"; ctx.fillRect(sm.x - 1.5, sm.y - 9, 3, 3);
       }
       if (S.sel && S.sel.k === "s" && s[0] === S.sel.id) {
@@ -984,8 +2304,8 @@ function draw(fr, prev, alpha) {
     const x = (pa[0] + pb[0]) / 2, y = (pa[1] + pb[1]) / 2;
     const sa = S.sinkAt[a[0]] ?? Infinity, sb = S.sinkAt[b[0]] ?? Infinity;
     let tint = "#e6edf7";
-    if (sa < sb && sa <= fr.t + 200) tint = COLORS[b[1] % 4];
-    else if (sb < sa && sb <= fr.t + 200) tint = COLORS[a[1] % 4];
+    if (sa < sb && sa <= fr.t + 200) tint = COLORS[shipFleet(b[0]) % COLORS.length];
+    else if (sb < sa && sb <= fr.t + 200) tint = COLORS[shipFleet(a[0]) % COLORS.length];
     const ph = (fr.t % 10) / 10;
     ctx.save(); ctx.translate(x, y); ctx.rotate(ph * Math.PI / 4);
     ctx.strokeStyle = tint; ctx.lineWidth = 2;
@@ -1003,11 +2323,47 @@ function draw(fr, prev, alpha) {
     }
   }
 
+  if (S.showNames) {
+    // squadron labels at each squad's centroid — computed from the SAME
+    // POV-filtered `drawn` set, so fog view never labels what it can't see
+    const sqGroups = new Map();
+    for (const s of drawn) {
+      const sp = S.screenPos[s[0]];
+      if (!sp) continue;
+      const sq = squadAt(s[0], fr.t) ?? (S.cat[s[0]] || {}).squad;
+      if (sq == null) continue;
+      const sfl = shipFleet(s[0]);
+      const key = sfl + "|" + sq;
+      const g = sqGroups.get(key) ||
+        sqGroups.set(key, { x: 0, y: 0, n: 0, fleet: sfl, sq }).get(key);
+      g.x += sp[0]; g.y += sp[1]; g.n++;
+    }
+    ctx.font = "9px sans-serif";
+    for (const g of sqGroups.values()) {
+      const x = g.x / g.n + 9, y = g.y / g.n - 9;
+      ctx.lineWidth = 3; ctx.strokeStyle = "#0b1220bb";
+      ctx.strokeText(`⚑${g.sq}`, x, y);
+      ctx.fillStyle = COLORS[g.fleet % COLORS.length] + "dd";
+      ctx.fillText(`⚑${g.sq}`, x, y);
+      ctx.lineWidth = 1;
+    }
+  }
+
   if (PV) {                                          // fog veil with punched vision
     const fog = S.fogCanvas || (S.fogCanvas = document.createElement("canvas"));
-    fog.width = canvas.width; fog.height = canvas.height;
-    const fx = fog.getContext && fog.getContext("2d");
+    // resize ONLY when the size changed: `fog.width = LW` unconditionally
+    // reallocates + zeroes the backing store — ~3MB of GC churn per frame
+    if (fog.width !== LW || fog.height !== LH) {
+      fog.width = LW; fog.height = LH;
+      S.fogCtx = null;
+    }
+    const fx = S.fogCtx ||
+      (S.fogCtx = fog.getContext && fog.getContext("2d"));
     if (fx) {
+      // the implicit state reset the resize used to provide, done explicitly
+      // (destination-out is set below and MUST NOT leak into the next frame)
+      fx.globalCompositeOperation = "source-over";
+      fx.clearRect(0, 0, fog.width, fog.height);
       fx.fillStyle = "rgba(3,8,18,.62)";
       fx.fillRect(0, 0, fog.width, fog.height);
       fx.globalCompositeOperation = "destination-out";
@@ -1020,11 +2376,17 @@ function draw(fr, prev, alpha) {
         fx.fillStyle = "rgba(0,0,0,1)";
         fx.fillRect((cx2 - r) * cw, (cy2 - r) * ch, (2 * r + 1) * cw, (2 * r + 1) * ch);
       };
-      for (const s of fr.s) if (s[1] === S.pov) punch(s[2], s[3], shipVision(s[0], fr.t));
-      const fl = rp.fleets.find(f => f.id === S.pov);
-      punch(fl.harbor[0], fl.harbor[1], hr + 4);
+      for (const s of fr.s) if (shipFleet(s[0]) === S.pov) punch(s[1], s[2], shipVision(s[0], fr.t));
+      // punch the LIVE anchorage (relocation-aware), computed above
+      const hbp = harbors[S.pov];
+      if (hbp) punch(hbp[2], hbp[3], hr + 4);
       ctx.drawImage(fog, 0, 0);
     }
+  }
+  ctx.setTransform(RS, 0, 0, RS, 0, 0);
+  if ((S.zoom || 1) > 1) {                       // zoom badge: you are navigating
+    ctx.fillStyle = "#e6edf7aa"; ctx.font = "11px sans-serif";
+    ctx.fillText(`🔍 ${S.zoom.toFixed(1)}× — double-click to reset`, 10, 16);
   }
 }
 
@@ -1053,12 +2415,14 @@ function loop(ts) {
   if (S.liveMode) {
     // elastic pacing: chase the stream's edge, slow as we catch up. When the
     // engine is waiting on the admirals there's nothing ahead — the winds die.
-    // "live pace" opts OUT of elasticity: constant slow sailing, and hitting
-    // the edge just pauses (becalmed) until the next window lands.
+    // "live pace" SELF-TUNES: every time we catch the edge the rate trims 8%
+    // (converging on the game's true cadence instead of stuttering), and a
+    // deep buffer slowly earns the speed back.
     const ahead = S.rp.frames.length - 1 - S.fi;
     const LAG = Math.round((S.rp.meta.window || 100) / S.rp.meta.frame_every);
-    const becalmed = ahead <= 2 && !S.liveDone;
+    const becalmed = ahead <= 2 && !S.liveDone && S.gameLive !== false;
     $("becalmed").style.display = becalmed ? "" : "none";
+    if (realPace) speed = tuneLivePace(becalmed, ahead, LAG);
     if (becalmed) speed = 0;
     else if (!realPace) speed = speed * Math.min(2, Math.max(0.3, ahead / LAG));
   }
@@ -1072,8 +2436,18 @@ function loop(ts) {
   $("scrub").value = S.fi;
   const fr = S.rp.frames[S.fi];
   if (!fr) return;
-  updatePanels(fr);
-  draw(fr, S.rp.frames[S.fi - 1], Math.min(1, S.acc));
+  try {
+    updatePanels(fr);
+    draw(fr, S.rp.frames[S.fi - 1], Math.min(1, S.acc));
+  } catch (err) {
+    // a draw fault must NEVER blank the stream in an error storm — report
+    // once, keep sailing; live data usually self-heals on the next append
+    if (!S._drawFaulted) {
+      S._drawFaulted = true;
+      console.error("draw fault (reported once):", err);
+      $("meta").innerHTML += `<span class="mdim"> · ⚠ draw fault — see console</span>`;
+    }
+  }
 }
 
 function setPlay(p) {
@@ -1082,9 +2456,179 @@ function setPlay(p) {
   $("play").textContent = p ? "⏸ Pause" : "▶ Play";
 }
 
+// ---- crisp rendering: back the canvases at devicePixelRatio × CSS size.
+// The fixed 1152×648 store looked soft on 4K; every draw uses canvas.width,
+// so resizing the store rescales everything (text included) automatically.
+function fitCanvas() {
+  if (!ctx) return;
+  const q = S.quality === "standard" ? 1
+    : Math.min(window.devicePixelRatio || 1, 3);
+  const r = canvas.getBoundingClientRect();
+  if (!r.width) return;
+  // the store matches the DISPLAYED size × DPR; drawing stays in the LW×LH
+  // logical space via the render-scale transform — identical composition at
+  // any resolution, but pixel-sharp on hiDPI
+  const w = Math.round(r.width * q);
+  const h = Math.round(w * LH / LW);
+  if (canvas.width !== w || canvas.height !== h) {
+    canvas.width = w; canvas.height = h;
+  }
+  // the timeline gets the same DPR treatment (same toggle): backing store =
+  // displayed size × q, drawTimeline paints in logical CSS pixels
+  if (tlc) {
+    const tr = tlc.getBoundingClientRect();
+    if (tr.width) {
+      const tw = Math.round(tr.width * q), th2 = Math.round(34 * q);
+      if (tlc.width !== tw || tlc.height !== th2) {
+        tlc.width = tw; tlc.height = th2;
+      }
+      S.tlq = q;
+    }
+  }
+  if (S.rp) seek(S.fi);
+}
+let _fitT = null;
+window.addEventListener("resize", () => {
+  clearTimeout(_fitT); _fitT = setTimeout(fitCanvas, 150);
+});
+
+// ---- fullscreen theater ----
+function setFs(on) {
+  document.body.classList.toggle("fsmode", on);
+  if (on && !document.fullscreenElement) {
+    (document.documentElement.requestFullscreen || (() => {}))
+      .call(document.documentElement);
+  } else if (!on && document.fullscreenElement) {
+    document.exitFullscreen();
+  }
+  setTimeout(fitCanvas, 100);
+}
+document.addEventListener("fullscreenchange", () => {
+  if (!document.fullscreenElement) document.body.classList.remove("fsmode");
+  setTimeout(fitCanvas, 100);
+});
+$("fs").addEventListener("click", () => setFs(true));
+$("fsexit").addEventListener("click", () => setFs(false));
+function toggleOverlay(which) {           // pinned (dim until hover) ⇄ auto (edge)
+  const cls = "auto" + which;
+  const on = document.body.classList.toggle(cls);
+  $(which === "panel" ? "sidepin" : "barpin").textContent =
+    on ? "👆 auto" : "📌 pinned";
+}
+$("sidepin").addEventListener("click", () => toggleOverlay("panel"));
+$("barpin").addEventListener("click", () => toggleOverlay("bar"));
+// fullscreen defaults to a CLEAN view: both overlays auto-hide (they return at
+// the top/right edges, or via B/P, or the 📌 pins) — pinned bars smothered the
+// map on phones
+document.body.classList.add("autopanel", "autobar");
+$("sidepin").textContent = "👆 auto";
+$("barpin").textContent = "👆 auto";
+document.addEventListener("keydown", e => {
+  if (!document.body.classList.contains("fsmode")) return;
+  if (e.key === "p" || e.key === "P") toggleOverlay("panel");
+  if (e.key === "b" || e.key === "B") toggleOverlay("bar");
+});
+// edge summons for auto mode: the right/top 36px of the screen wake the
+// overlays; they stay while the pointer is on them
+document.addEventListener("mousemove", e => {
+  const b = document.body;
+  if (!b.classList.contains("fsmode")) return;
+  if (b.classList.contains("autopanel")) {
+    const inPanel = e.target.closest && e.target.closest("#side");
+    b.classList.toggle("peekpanel",
+      e.clientX > window.innerWidth - 36 || !!inPanel);
+  }
+  if (b.classList.contains("autobar")) {
+    const inBar = e.target.closest && e.target.closest("#bar");
+    const panelVisible = !b.classList.contains("autopanel")
+      || b.classList.contains("peekpanel");
+    const overPanelCol = panelVisible
+      && e.clientX > window.innerWidth - 330;
+    b.classList.toggle("peekbar",
+      (e.clientY < 36 && !overPanelCol) || !!inBar);
+  }
+});
+
 function select(sel) {
   S.sel = typeof sel === "number" ? { k: "s", id: sel } : sel;
-  seek(S.fi);
+  delete $("inspector").dataset.sig;   // any selection change voids the
+  seek(S.fi);                          // code-tile rebuild guard
+}
+// inline-onclick entry points for the inspector tile (squadron drill-down)
+function selSquad(fleet, squad) { select({ k: "q", fleet, squad }); }
+function selShip(id) { select(id); }
+function selProg(id) { select({ k: "prog", id, ver: -1 }); }
+function selProgVer(id, ver) { select({ k: "prog", id, ver }); }
+function selCode(fleet, squad) { select({ k: "code", fleet, squad, ver: -1 }); }
+function selCodeVer(fleet, squad, ver) {
+  select({ k: "code", fleet, squad, ver });
+  // a version IS a moment: jump the timeline to the window that wrote it
+  const e = codeWrites(fleet, squad)[ver];
+  if (e) seek(Math.floor(e.t / (S.rp.meta.frame_every || 2)));
+}
+function codeWrites(fleet, squad) {
+  return S.progEvents.filter(e => e.fleet === fleet && e.squad === squad);
+}
+// minimal LCS line diff — conn programs are tiny (<=64 statements), DP is instant
+function diffLines(a, b) {
+  const A = (a || "").split("\n"), B = (b || "").split("\n");
+  const n = A.length, m = B.length;
+  const L = Array.from({ length: n + 1 }, () => new Array(m + 1).fill(0));
+  for (let i = n - 1; i >= 0; i--) {
+    for (let j = m - 1; j >= 0; j--) {
+      L[i][j] = A[i] === B[j] ? L[i + 1][j + 1] + 1
+                              : Math.max(L[i + 1][j], L[i][j + 1]);
+    }
+  }
+  const out = [];
+  let i = 0, j = 0;
+  while (i < n && j < m) {
+    if (A[i] === B[j]) { out.push(["=", A[i]]); i++; j++; }
+    else if (L[i + 1][j] >= L[i][j + 1]) out.push(["-", A[i++]]);
+    else out.push(["+", B[j++]]);
+  }
+  while (i < n) out.push(["-", A[i++]]);
+  while (j < m) out.push(["+", B[j++]]);
+  return out;
+}
+// full 5-char escape — safe in BOTH text and attribute contexts (the old
+// &-and-< only version was used in data-* attributes, where a " in a
+// crafted/imported replay's ship-class or squadron id broke out into an
+// event handler)
+function escHtml(s) {
+  return String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#39;");
+}
+// the whole program annotated: unchanged dim, added green, removed struck red.
+// prev == null -> plain first version
+function progHtml(prev, cur) {
+  if (prev == null) return `<pre class="prog">${escHtml(cur)}</pre>`;
+  // spans are display:block — they ARE the lines, no \n needed (a newline
+  // inside <pre> would double-space); blank lines need a space to keep height
+  return `<pre class="prog">` + diffLines(prev, cur).map(([k2, ln]) =>
+    `<span class="${k2 === "+" ? "dadd" : k2 === "-" ? "ddel" : "dctx"}">` +
+    `${escHtml(ln) || " "}</span>`).join("") + `</pre>`;
+}
+// every program DELIVERY this ship took (docking or a signal push), with the
+// text it picked up: the raw material of the program inspector
+function programPickups(sid) {
+  const cat = S.cat[sid] || {};
+  const out = [];
+  for (const e of S.byShip[sid] || []) {
+    if (e.k !== "orders" || (e.via !== "port-program" && e.via !== "signal-program")) {
+      continue;
+    }
+    const sq = squadAt(sid, e.t);
+    let txt = null;
+    for (const pe of S.progEvents) {
+      if (pe.t > e.t) break;
+      if (pe.fleet === cat.fleet && pe.squad === sq) {
+        txt = pe.cleared ? null : pe.text;
+      }
+    }
+    if (txt) out.push({ t: e.t, via: e.via, squad: sq, text: txt });
+  }
+  return out;
 }
 
 function setMode(mode) {
@@ -1093,52 +2637,222 @@ function setMode(mode) {
     b.classList.toggle("on", b.dataset.mode === mode);
   }
   $("fleetcards").style.display = (mode === "fleet" || mode === "admiral") ? "" : "none";
+  $("fleetcards").classList.toggle("adm", mode === "admiral");   // gates .padbox
   $("parleyfeed").style.display = mode === "parley" ? "" : "none";
   $("memofeed").style.display = mode === "memos" ? "" : "none";
   $("statspanel").style.display = mode === "stats" ? "" : "none";
   $("settingspanel").style.display = mode === "settings" ? "" : "none";
+  $("helppanel").style.display = mode === "help" ? "" : "none";
   seek(S.fi);
 }
 for (const b of document.querySelectorAll(".pbtn")) {
   b.addEventListener("click", () => setMode(b.dataset.mode));
 }
+// accordion tiles: ONE expanded fleet/admiral card at a time; same for memos
+document.addEventListener("click", e => {
+  const chip = e.target.closest(".sqchip");
+  if (chip) {
+    selSquad(+chip.dataset.fleet, chip.dataset.sq);
+    seek(S.fi);
+    return;                                // not an expand/collapse click
+  }
+  const mv = e.target.closest(".myvis");
+  if (mv) {
+    const id = +mv.dataset.fleet;
+    $("pov").value = S.pov === id ? "-1" : String(id);
+    $("pov").dispatchEvent(new Event("change"));
+    seek(S.fi);
+    return;                                // not an expand click
+  }
+  const tile = e.target.closest("#fleetcards .fleet");
+  if (tile && (S.pmode === "fleet" || S.pmode === "admiral")) {
+    const id = +tile.dataset.fleet;
+    S.expandedCard = S.expandedCard === id ? null : id;
+    // the expanded tile rises to the top; collapse restores fleet order
+    const cards = $("fleetcards");
+    [...cards.children]
+      .sort((a, b) => (+a.dataset.fleet) - (+b.dataset.fleet))
+      .forEach(c2 => cards.appendChild(c2));
+    if (S.expandedCard != null) cards.prepend($("fl" + S.expandedCard));
+    seek(S.fi);
+    return;
+  }
+  const memo = e.target.closest("#memofeed .memo");
+  if (memo) {
+    if (memo.classList.contains("shield")) {
+      memo.classList.remove("shield");
+      return;
+    }
+    const wasOpen = memo.classList.contains("open");
+    for (const m2 of document.querySelectorAll("#memofeed .memo")) {
+      m2.classList.remove("open");
+      m2.querySelector(".mshort").style.display = "";
+      m2.querySelector(".mfull").style.display = "none";
+    }
+    if (!wasOpen) {
+      memo.classList.add("open");
+      memo.querySelector(".mshort").style.display = "none";
+      memo.querySelector(".mfull").style.display = "";
+    }
+  }
+});
 $("intro").addEventListener("click", () => { $("intro").style.display = "none"; });
+document.addEventListener("click", e => {
+  if (e.target && e.target.id === "repro") {
+    e.preventDefault();
+    blobDl(JSON.stringify(reproduceConfig(), null, 1),
+           "reproduce-" + (S.rp.meta.seed || "match") + ".json",
+           "application/json");
+  }
+});
 $("play").addEventListener("click", () => {
   if (S.rp && S.fi >= S.rp.frames.length - 1) S.fi = 0;
   setPlay(!S.playing);
 });
 $("scrub").addEventListener("input", e => { setPlay(false); seek(+e.target.value); });
+function syncSpoilBtn() {
+  $("spoil").textContent = S.spoiler ? "🙈 spoilers hidden" : "👁 spoilers shown";
+}
+syncSpoilBtn();
+$("spoil").addEventListener("click", () => {
+  S.spoiler = !S.spoiler;
+  try { localStorage.setItem("flotilla-spoiler", S.spoiler ? "on" : "off"); } catch (e) {}
+  syncSpoilBtn();
+  updateMetaLine();
+  for (const m2 of document.querySelectorAll("#memofeed .memo")) {
+    m2.classList.toggle("shield", S.spoiler);
+  }
+  if (S.rp) seek(S.fi);              // redraw timeline marks + chart lines now
+});
 document.addEventListener("change", e => {
   if (e.target && e.target.id === "shownames") {
     S.showNames = e.target.checked;
+    try { localStorage.setItem("flotilla-names", S.showNames ? "on" : "off"); } catch (e2) {}
     if (S.rp) seek(S.fi);              // instant, in any replay or live view
+  }
+  if (e.target && e.target.id === "hidpi") {
+    S.quality = e.target.checked ? "auto" : "standard";
+    try { localStorage.setItem("flotilla-quality", S.quality); } catch (e2) {}
+    fitCanvas();
   }
 });
 $("pov").addEventListener("change", () => {
   S.pov = parseInt($("pov").value);
   S.povCache = S.pov >= 0 ? computePov(S.pov) : null;
   S.sel = null;                        // drop any selection made with other eyes
+  renderLegend();
   if (S.rp) seek(S.fi);
 });
 $("nextg").addEventListener("click", () => {
-  if (S.bundle && S.gameIdx < S.bundle.games.length - 1) {
+  const live = $("nextg").dataset.live;
+  if (live) {                              // the live game — same view as the
+    location.href = "player.html?live=" + encodeURIComponent(live);   // Live btn
+  } else if (S.bundle && S.gameIdx < S.bundle.games.length - 1) {
     loadBundle(S.bundle, S.gameIdx + 1);
   }
 });
 $("prevg").addEventListener("click", () => {
   if (S.bundle && S.gameIdx > 0) loadBundle(S.bundle, S.gameIdx - 1);
 });
+$("firstg").addEventListener("click", () => {
+  if (S.bundle) loadBundle(S.bundle, 0);
+});
+$("lastg").addEventListener("click", () => {
+  const live = $("lastg").dataset.live;
+  if (live) location.href = "player.html?live=" + encodeURIComponent(live);
+  else if (S.bundle) loadBundle(S.bundle, S.bundle.games.length - 1);
+});
 tlc.addEventListener("click", e => {
   const r = tlc.getBoundingClientRect();
   if (!r.width) return;
   seekFrac((e.clientX - r.left) / r.width);
 });
+function toWorld(e) {
+  const r = canvas.getBoundingClientRect();
+  if (!r.width) return null;
+  const cx = (e.clientX - r.left) * LW / r.width;
+  const cy = (e.clientY - r.top) * LH / r.height;
+  return [(cx - (S.panX || 0)) / (S.zoom || 1),
+          (cy - (S.panY || 0)) / (S.zoom || 1)];
+}
+function clampPan() {
+  const z = S.zoom || 1;
+  S.panX = Math.min(0, Math.max(LW * (1 - z), S.panX || 0));
+  S.panY = Math.min(0, Math.max(LH * (1 - z), S.panY || 0));
+}
+canvas.addEventListener("wheel", e => {
+  if (!S.rp) return;
+  e.preventDefault();
+  const w = toWorld(e);
+  if (!w) return;
+  const oldZ = S.zoom || 1;
+  const z = Math.max(1, Math.min(8, oldZ * (e.deltaY < 0 ? 1.2 : 1 / 1.2)));
+  if (z === oldZ) return;
+  // keep the world point under the cursor fixed while the scale changes
+  S.zoom = z;
+  S.panX = (S.panX || 0) + w[0] * (oldZ - z);
+  S.panY = (S.panY || 0) + w[1] * (oldZ - z);
+  clampPan();
+  if (!S.playing) seek(S.fi);
+}, { passive: false });
+let dragState = null;
+canvas.addEventListener("mousedown", e => {
+  dragState = { x: e.clientX, y: e.clientY, moved: false };
+});
+window.addEventListener("mousemove", e => {
+  if (!dragState || (S.zoom || 1) <= 1) return;
+  const dx = e.clientX - dragState.x, dy = e.clientY - dragState.y;
+  if (Math.abs(dx) + Math.abs(dy) > 4) dragState.moved = true;
+  if (!dragState.moved) return;
+  const r = canvas.getBoundingClientRect();
+  S.panX = (S.panX || 0) + dx * LW / r.width;
+  S.panY = (S.panY || 0) + dy * LH / r.height;
+  dragState.x = e.clientX; dragState.y = e.clientY;
+  clampPan();
+  if (!S.playing) seek(S.fi);
+});
+window.addEventListener("mouseup", () => {
+  if (dragState && dragState.moved) {
+    setTimeout(() => { dragState = null; }, 0);   // let the click see 'moved'
+  } else dragState = null;
+});
+let hcFade = null, hcHide = null;
+canvas.addEventListener("mousemove", e => {
+  if (!S.rp) return;
+  const w = toWorld(e);
+  const hc = $("hovercoord");
+  if (!w) { hc.style.display = "none"; return; }
+  const cx = Math.floor(w[0] / (LW / S.rp.meta.w));
+  const cy = Math.floor(w[1] / (LH / S.rp.meta.h));
+  if (cx < 0 || cy < 0 || cx >= S.rp.meta.w || cy >= S.rp.meta.h) {
+    hc.style.display = "none";
+    return;
+  }
+  // lower-left corner of the MAP itself (works in fullscreen too), and it
+  // fades away after 5 idle seconds so it never squats on the view
+  hc.style.display = "";
+  hc.style.opacity = "1";
+  hc.style.top = (canvas.offsetTop + canvas.clientHeight - 32) + "px";
+  hc.style.left = (canvas.offsetLeft + 10) + "px";
+  hc.textContent = `${cx}, ${cy}`;
+  clearTimeout(hcFade); clearTimeout(hcHide);
+  hcFade = setTimeout(() => { hc.style.opacity = "0"; }, 5000);
+  hcHide = setTimeout(() => { hc.style.display = "none"; }, 5600);
+});
+canvas.addEventListener("mouseleave", () => {
+  $("hovercoord").style.display = "none";
+});
+canvas.addEventListener("dblclick", e => {
+  e.preventDefault();
+  S.zoom = 1; S.panX = 0; S.panY = 0;
+  if (S.rp) seek(S.fi);
+});
 canvas.addEventListener("click", e => {
   if (!S.rp) return;
-  const r = canvas.getBoundingClientRect();
-  if (!r.width) return;
-  const x = (e.clientX - r.left) * canvas.width / r.width;
-  const y = (e.clientY - r.top) * canvas.height / r.height;
+  if (dragState && dragState.moved) return;      // that was a pan, not a pick
+  const w = toWorld(e);
+  if (!w) return;
+  const [x, y] = w;
   let best = null, bd = 14 * 14;
   for (const [id, [sx, sy]] of Object.entries(S.screenPos)) {
     const d = (sx - x) ** 2 + (sy - y) ** 2;
@@ -1164,11 +2878,28 @@ $("dl").addEventListener("click", async () => {
   const base = `flotilla-${S.rp.fleets.map(f => f.name).join("-")}-s${S.rp.meta.seed}`;
   try {
     if (EMBEDDED) throw new Error("already self-contained: offer the JSON");
+    if (S.bundle) {
+      // a series download must CONTAIN the series — fetch every game not yet
+      // visited before embedding (entered via a direct game link, only that
+      // game was loaded; the saved page then opened on a game it didn't hold)
+      for (let i = 0; i < S.bundle.games.length; i++) {
+        if (!S.bundle.games[i].replay) {
+          try { await ensureGame(S.bundle, i); } catch (e) { /* keep going */ }
+        }
+      }
+    }
     const tpl = await (await fetch("player.html")).text();
-    const payload = S.bundle ? JSON.stringify({ series: S.bundle })
-                             : JSON.stringify(S.rp);
+    // script-tag-safe: escape angle brackets + JS line terminators (valid
+    // JSON, parses identical) so a downloaded page can't be a stored-XSS
+    // carrier via model text closing the embedding script element
+    const payload = (S.bundle ? JSON.stringify({ series: S.bundle })
+                              : JSON.stringify(S.rp))
+      .replace(/</g, "\\u003c").replace(/>/g, "\\u003e")
+      .replace(/\u2028/g, "\\u2028").replace(/\u2029/g, "\\u2029");
     const TOKEN = "/*" + "EMBED_REPLAY" + "*/null";   // built by parts: the literal
-    blobDl(tpl.replace(TOKEN, payload), base + ".html", "text/html");   // must appear ONCE in the template
+    // replacement is a function so $&/$' in model text aren't treated as
+    // replacement patterns by String.replace
+    blobDl(tpl.replace(TOKEN, () => payload), base + ".html", "text/html");
   } catch {
     blobDl(JSON.stringify(S.rp), base + ".json", "application/json");
   }
@@ -1178,7 +2909,16 @@ document.body.addEventListener("drop", e => {
   e.preventDefault();
   const f = e.dataTransfer.files[0];
   if (!f) return;
-  f.text().then(t => load(JSON.parse(t)));
+  f.text().then(t => {
+    // a dropped file replaces whatever context was open — stale series or
+    // live state otherwise mislabels it and keeps live pacing/nav alive
+    S.bundle = null; S.gameIdx = 0;
+    S.liveMode = false; S.liveDone = false;
+    S.liveQueue = []; S.gameLive = undefined;
+    load(JSON.parse(t));
+    renderNav();
+    updateMetaLine();
+  });
 });
 
 window.__flotilla = { seek, seekFrac, state: () => S, load, loadBundle, setPlay,
@@ -1187,17 +2927,78 @@ if (!location.protocol.startsWith("http")) {   // downloaded bundle: no home to 
   $("homelink").removeAttribute("href");
 }
 const qs = new URLSearchParams(location.search);
+try { S.quality = localStorage.getItem("flotilla-quality") || "auto"; }
+catch (e) { S.quality = "auto"; }
 // ---- LIVE MODE: chase a running match's frame stream ----
-function liveInit(hdr, game) {
+// A new-game header arriving while the WATCHED game still has frames on
+// screen means that game just ended in REAL time. The stream file resets per
+// game, but every frame of the old game is already aboard — so instead of
+// yanking the viewer into the new game's warmup (the old behavior: the screen
+// just "stopped"), buffer the new game's lines and light a jump button. The
+// viewer finishes the old game at their own pace, then hops.
+function liveTakeLine(line, gameNo, total) {
+  if (line.header) {
+    if (S.liveMode && !S.liveDone && S.rp && S.rp.frames.length) {
+      // buffer EVERY later game in order — a viewer two games behind steps
+      // g3 -> g4 -> g5, never straight to the newest
+      (S.liveQueue = S.liveQueue || []).push(
+        { header: line, game: gameNo, total, lines: [] });
+      S.gameLive = false;      // the on-screen game is fully aboard — no
+      updateNextLive();        // more frames will arrive for it, so the
+      // becalmed pause must not engage (it reads S.gameLive)
+      setMetaStatus("⚓ this game ENDED in real time — finish at your own " +
+        "pace");
+      return;
+    }
+    liveInit(line, gameNo, total);
+    return;
+  }
+  const q = S.liveQueue;
+  if (q && q.length) q[q.length - 1].lines.push(line);
+  else if (S.liveMode) liveAppend(line);
+}
+function updateNextLive() {
+  const b = $("nextlive"), q = S.liveQueue || [];
+  if (!q.length) { b.style.display = "none"; return; }
+  b.textContent = q.length === 1 && !S.liveDone
+    ? `⏭ game ${q[0].game} is LIVE now — jump when ready`
+    : `⏭ next: game ${q[0].game}` +
+      (q.length > 1 ? ` (+${q.length - 1} more waiting)` : "");
+  b.style.display = "";
+}
+$("nextlive").addEventListener("click", () => {
+  const q = S.liveQueue || [];
+  const nxt = q.shift();
+  if (!nxt) return;
+  liveInit(nxt.header, nxt.game, nxt.total, true);
+  for (const ln of nxt.lines) liveAppend(ln);
+  // only the LAST queued game of a still-running stream is actually live —
+  // everything before it is fully buffered and plays like a replay
+  S.gameLive = !q.length && !S.liveDone;
+  if (q.length || S.liveDone) {
+    setMetaStatus("⚓ this game has already finished too");
+  }
+  updateNextLive();
+});
+function liveInit(hdr, game, total, fromQueue) {
   const rp = { meta: hdr.meta, fleets: hdr.fleets, nodes: hdr.nodes,
                frames: [], events: [], decisions: [],
                result: { names: Object.fromEntries(hdr.fleets.map(f => [f.id, f.name])),
                          winner: null } };
   load(rp);
   S.liveMode = true;
-  S.liveDone = false;
-  $("meta").textContent = `⛵ LIVE — game ${game} · ` +
-    hdr.fleets.map(f => f.name).join(" vs ");
+  S.gameLive = true;
+  // stepping into a QUEUED game must not resurrect a finished run: the
+  // pollers stop for good once the run ends, so a cleared liveDone could
+  // never be set again and the viewer sat "becalmed" forever
+  if (!fromQueue) S.liveDone = false;
+  $("speed").value = "real";             // live feeds open at ⏱ live pace
+  renderLegend();
+  S.metaBase = `<span class="mdim">⛵ LIVE — ` +
+    (S.liveTitle ? `${escHtml(S.liveTitle)} · ` : "") +
+    `game ${game}${total ? ` of ${total}` : ""} · </span>` +
+    metaNames(hdr.fleets);
+  setMetaStatus("");
   $("dl").style.display = "none";
   setPlay(true);
 }
@@ -1205,9 +3006,9 @@ function liveAppend(p) {
   const rp = S.rp;
   for (const fr of p.frames || []) {
     rp.frames.push(fr);
-    const mmap = new Map();
-    for (const row of fr.s) mmap.set(row[0], row);
-    S.frameMaps.push(mmap);
+    // the live stream ships full v1-shaped rows — canonicalize each frame as
+    // it lands (ingestFrame also maintains the change lists + ship maps)
+    ingestFrame(fr, rp.frames.length - 1);
   }
   for (const e of p.events || []) {
     rp.events.push(e);
@@ -1215,7 +3016,20 @@ function liveAppend(p) {
     if (e.k === "refit" && S.cat[e.ship]) {
       (S.cat[e.ship].refits = S.cat[e.ship].refits || []).push([e.t, e.to]);
     }
-    if (e.k === "sink") S.sinkAt[e.ship] = e.t;
+    if (e.k === "design") {
+      (S.designMap[e.fleet] = S.designMap[e.fleet] || {})[e.name] = e.stats;
+    }
+    if (e.k === "program") S.progEvents.push(e);
+    if (e.k === "yard_built") S.yardBuilt.push(e);
+    if (e.k === "build_start" || e.k === "refit_start" ||
+        e.k === "repair_start" || e.k === "yard_start") S.yardJobs.push(e);
+    if (e.k === "reassign" && S.cat[e.ship]) {
+      (S.cat[e.ship].moves = S.cat[e.ship].moves || []).push([e.t, e.squad]);
+    }
+    if (e.k === "sink") {
+      S.sinkAt[e.ship] = e.t;
+      (S.sinks = S.sinks || []).push(e);
+    }
     if (e.k === "intent" || e.k === "orders") {
       (S.byShip[e.ship] = S.byShip[e.ship] || []).push(e);
     }
@@ -1223,6 +3037,7 @@ function liveAppend(p) {
     if (e.k === "parley") S.parley.push(e);
   }
   for (const d of p.decisions || []) rp.decisions.push(d);
+  povExtend();                           // fog view stays valid as frames land
   $("scrub").max = Math.max(0, rp.frames.length - 1);
   updateRealRate();
 }
@@ -1235,20 +3050,67 @@ async function livePoll(jid) {
     } catch (e) { /* transient */ }
     if (d) {
       if (d.ofs < ofs) { ofs = 0; continue; }        // truncated: fresh game
+      // stream_game = the header on the file's first line. A truncation
+      // whose replacement already outgrew our offset passes the size check
+      // above — the game change is the only reliable signal, so refetch
+      // from 0 and let the cold-join splice land us on the fresh header.
+      if (d.stream_game !== undefined && d.stream_game !== null) {
+        if (S.streamGame !== undefined && d.stream_game !== S.streamGame &&
+            ofs > 0) {
+          S.streamGame = d.stream_game;
+          ofs = 0;
+          continue;
+        }
+        S.streamGame = d.stream_game;
+      }
+      S.liveTitle = d.display_name || d.name || S.liveTitle;
       ofs = d.ofs;
-      for (const line of d.lines || []) {
+      const lines = (d.lines || []).slice();
+      // cold join of a multi-game backlog (aux streams used to accumulate
+      // every game): jump straight to the LIVE game — the catch-up queue is
+      // only for games that end while you are actually watching
+      if (!S.liveMode || !S.rp || !S.rp.frames.length) {
+        let last = -1;
+        for (let i2 = 0; i2 < lines.length; i2++) {
+          if (lines[i2].header) last = i2;
+        }
+        if (last > 0) lines.splice(0, last);
+      }
+      for (const line of lines) {
         if (line.header) {
-          game = d.game || game + 1;
-          liveInit(line, game);
-        } else if (S.liveMode) {
-          liveAppend(line);
+          game = line.game || d.game || game + 1;
+          liveTakeLine(line, game, line.total || d.games_expected);
+          // mid-series live: offer the finished games behind this one
+          const lp = $("liveprev");
+          if (d.mode === "series" && d.name && game > 1 &&
+              !(S.liveQueue || []).length) {
+            lp.style.display = "";
+            lp.onclick = () => { location.href = "player.html?replay="
+              + encodeURIComponent(`replays/${d.name}/g${game - 1}.json`); };
+          } else lp.style.display = "none";
+        } else {
+          liveTakeLine(line, game);
         }
       }
-      if (d.state !== "running" && d.state !== "queued") {
+      if (d.more) continue;   // server chunks the backlog at 2 MB — drain it
+      // without sleeping, and never judge a terminal state mid-backlog
+      if (d.state === "paused") {
+        setMetaStatus("⏸ PAUSED — the stream resumes when the operator " +
+          "thaws it; leave this tab open");
+      } else if (d.state !== "running" && d.state !== "queued") {
         S.liveDone = true;
         $("becalmed").style.display = "none";
+        if ((S.liveQueue || []).length) {
+          // still catching up — every remaining game is fully buffered
+          // (each final flush landed before its successor's header), so the
+          // viewer steps through them in order at their own pace
+          updateNextLive();
+          setMetaStatus("⚓ the run has ended — finish this game, then step " +
+            "forward with ⏭; the rest are aboard");
+          return;
+        }
         if (d.state === "done") {
-          $("meta").textContent += " · match complete — reloading full replay…";
+          $("meta").innerHTML += `<span class="mdim"> · match complete — reloading full replay…</span>`;
           location.href = "player.html?replay=" + encodeURIComponent(
             d.mode === "series" ? `replays/${d.name}/g${d.game}.json`
                                 : `replays/${d.name}.json`);
@@ -1265,21 +3127,160 @@ async function livePoll(jid) {
   }
 }
 
-if (qs.get("live")) {
+// ---- BUCKET LIVE: tail a public prefix of numbered jsonl chunks (no login,
+// no API — the flagship mirrors each live flush to <prefix>/NNNNN.jsonl and a
+// tiny cursor at <prefix>/state.json; we fetch only what we haven't seen) ----
+async function livePollJsonl(prefix) {
+  let seen = 0, game = 0;
+  while (true) {
+    let st = null;
+    try {
+      st = await (await fetch(`${prefix}/state.json`, { cache: "no-store" })).json();
+    } catch (e) { /* transient */ }
+    if (st) {
+      if (st.chunks < seen) seen = 0;              // fresh cursor: new run
+      // chunks are immutable and accumulate the WHOLE run — a spectator
+      // joining at game 4 must not be replayed games 1-3 as if live. Batch
+      // this poll's chunks; on a cold join splice to the LAST header (same
+      // rule as the API-stream cold join).
+      const cold = seen === 0 && (!S.rp || !S.rp.frames.length);
+      const batch = [];
+      for (let n = seen + 1; n <= st.chunks; n++) {
+        let lines = [];
+        try {
+          const txt = await (await fetch(
+            `${prefix}/${String(n).padStart(5, "0")}.jsonl`,
+            { cache: "no-store" })).text();
+          lines = txt.split("\n").filter(Boolean).map(x => JSON.parse(x));
+        } catch (e) { break; }                     // retry this chunk next poll
+        seen = n;
+        batch.push(...lines);
+      }
+      if (cold) {
+        let last = -1;
+        for (let i2 = 0; i2 < batch.length; i2++) {
+          if (batch[i2].header) last = i2;
+        }
+        if (last > 0) batch.splice(0, last);
+      }
+      for (const line of batch) {
+        if (line.header) {
+          // the header carries its own game/total (run_config stamps them
+          // precisely so viewers stop guessing); st.game is the RUN's
+          // current game and mislabels every backlog header
+          game = line.game || game + 1;
+          liveTakeLine(line, game, line.total || st.games_expected);
+        } else liveTakeLine(line, game);
+      }
+      if (st.state && st.state !== "running" && st.state !== "queued") {
+        S.liveDone = true;
+        $("becalmed").style.display = "none";
+        if ((S.liveQueue || []).length) {
+          updateNextLive();
+          setMetaStatus("⚓ the match has ended — finish this game, then " +
+            "step forward with ⏭.");
+          return;
+        }
+        $("meta").textContent = (st.state === "done"
+          ? "⚓ match complete — all games are on the hub page."
+          : `⚓ this run is ${st.state} — nothing more will arrive.`) +
+          " ";
+        const a = document.createElement("a");
+        a.href = "index.html"; a.textContent = "→ back to the hub";
+        a.style.color = "#4da3ff";
+        $("meta").appendChild(a);
+        return;
+      }
+    }
+    await new Promise(r => setTimeout(r, 4000));
+  }
+}
+
+// URL params drive fetch() — a viewer page (public showcase player included)
+// must only ever fetch SAME-ORIGIN relative paths. An absolute/scheme/
+// protocol-relative value would let a crafted link point the player at an
+// attacker's replay/stream and run its (now fully-escaped, but defense in
+// depth) contents on this origin, inheriting any operator auth.
+function sameOriginPath(v) {
+  if (!v || /^[a-z][a-z0-9+.-]*:/i.test(v) || v.startsWith("//")
+      || v.startsWith("\\")) return null;
+  return v;
+}
+if (qs.get("livejsonl")) {
+  const pfx = sameOriginPath(qs.get("livejsonl").replace(/\/+$/, ""));
+  if (!pfx) { $("meta").textContent = "refusing an off-site live source"; }
+  else {
+    $("meta").textContent = "⛵ LIVE — waiting for the match to raise sail…";
+    livePollJsonl(pfx);
+  }
+} else if (qs.get("live")) {
   $("meta").textContent = "⛵ LIVE — waiting for the match to raise sail…";
-  livePoll(qs.get("live"));
+  livePoll(qs.get("live"));            // a job id, not a URL — regex-gated server-side
+} else if (qs.get("replay") && !sameOriginPath(qs.get("replay"))) {
+  $("meta").textContent = "refusing an off-site replay source";
 } else if (qs.get("replay")) {
-  fetch(qs.get("replay")).then(r => r.json()).then(load)
+  // a direct link to a series game upgrades itself to full series context,
+  // so Previous/Next (x/y) work from every entrance
+  const rfile = qs.get("replay");
+  const m2 = rfile.match(/^replays\/([^/]+)\/g(\d+)\.json$/);
+  const plain = () => fetch(rfile).then(r => r.json()).then(load)
     .catch(e => { $("meta").textContent = "failed to load replay: " + e; });
+  if (m2 && location.protocol.startsWith("http")) {
+    fetch("index.json").then(r => r.json()).then(idx => {
+      const sr = (idx.series || []).find(x => x.name === m2[1]);
+      const gi = sr ? sr.games.findIndex(g => g.file === rfile) : -1;
+      if (!sr || gi < 0) { plain(); return; }
+      const bundle = { name: qs.get("title") || sr.display_name || sr.name,
+                       seriesName: sr.name,
+                       games: sr.games.map(g => ({ game: g.game,
+                                                   file: g.file })) };
+      const fin2 = () => loadBundle(bundle, gi);
+      if (sr.partial) {
+        fetch("api/runs").then(r => r.json()).then(d => {
+          const lj = (d.jobs || []).find(j => j.name === sr.name &&
+            ["queued", "running"].includes(j.state));
+          if (lj) {
+            bundle.liveJobId = lj.id;
+            bundle.expected = lj.games_expected;
+          }
+        }).catch(() => {}).finally(fin2);
+      } else fin2();
+    }).catch(plain);
+  } else plain();
 } else if (qs.get("series")) {
   fetch("index.json").then(r => r.json()).then(idx => {
     const s = (idx.series || []).find(x => x.name === qs.get("series"));
     if (!s) { $("meta").textContent = "series not found: " + qs.get("series"); return; }
-    loadBundle({ name: qs.get("title") || s.display_name || s.name,
-                 games: s.games.map(g => ({ game: g.game, file: g.file })) }, 0);
+    if (!s.games.length) {
+      $("meta").textContent = "⏳ this series is live but no game has finished " +
+        "yet — refresh in a while, or watch the run live from the dashboard's " +
+        "jobs list.";
+      return;
+    }
+    const bundle = { name: qs.get("title") || s.display_name || s.name,
+                     seriesName: s.name,
+                     games: s.games.map(g => ({ game: g.game, file: g.file })) };
+    // if the series is still live, find its running job so the last completed
+    // game can offer a "next game (Live)" jump straight into the live view
+    const finish = () => loadBundle(bundle, bundle.games.length - 1);
+    if (s.partial) {
+      fetch("api/runs").then(r => r.json()).then(d => {
+        const lj = (d.jobs || []).find(j => j.name === s.name &&
+          ["queued", "running"].includes(j.state));
+        if (lj) {
+          bundle.liveJobId = lj.id;
+          bundle.expected = lj.games_expected;
+        }
+      }).catch(() => {}).finally(finish);
+    } else finish();
   }).catch(e => { $("meta").textContent = "failed to load series: " + e; });
 } else if (EMBEDDED && EMBEDDED.series) {
-  loadBundle(EMBEDDED.series, 0);
+  // a shared/downloaded series ALWAYS opens on game 1 — a public link should
+  // start every viewer at the beginning (spoiler-free). build_bundle embeds
+  // every game, so game 1's replay is present; findIndex guards anyway.
+  let gi0 = EMBEDDED.series.games.findIndex(g => g.replay);
+  if (gi0 < 0) gi0 = 0;
+  loadBundle(EMBEDDED.series, gi0);
 } else if (EMBEDDED) load(EMBEDDED);
 requestAnimationFrame(loop);
 </script>

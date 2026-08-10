@@ -133,5 +133,57 @@ dsys = ad.sent[0][0]["content"]
 ok("GENERALIZE" in dsys and "DIFFERENT island names" in dsys,
    "debrief demands generalized, name-free advice")
 
+# --- a failed/empty debrief must return NO memo, never the whole notes log
+# (wringer 2026-08-09: returning self.notes made memo_history re-append the
+# admiral's entire series log to itself under a false game header — 2^k
+# growth per failed debrief, and the bloat rode into every later prompt) ---
+class FailingDebrief(LLMAdmiral):
+    def __init__(self, **kw):
+        super().__init__("stub-model", **kw)
+
+    def _chat(self, messages):
+        raise RuntimeError("transport down")
+
+
+fb = FailingDebrief()
+fb.notes = "old series log"
+r = fb.debrief("digest")
+ok(r["memo"] == "" and r["err"], "failed debrief returns an EMPTY memo + err")
+ok(fb.notes == "old series log", "failed debrief leaves notes untouched")
+se = StubbedAdmiral(["   "])
+se.notes = "old series log"
+r2 = se.debrief("digest")
+ok(r2["memo"] == "" and r2["err"] is None,
+   "an empty debrief reply is an empty memo, not the old log")
+
+# --- err-KIND classification in decide(): "api" (transport) trips the
+# outage breaker, "reply" (the API answered; the reply is the problem) must
+# not — a TruncatedReply once auto-paused whole runs into resume loops ---
+import urllib.error
+from llm import TruncatedReply
+
+
+class RaisingAdmiral(LLMAdmiral):
+    def __init__(self, exc, **kw):
+        super().__init__("stub-model", **kw)
+        self.exc = exc
+
+    def _chat(self, messages):
+        raise self.exc
+
+
+def ek_of(exc):
+    a2 = RaisingAdmiral(exc)
+    return a2.decide(dict(SUM), None)["_usage"].get("ek")
+
+
+ok(ek_of(TruncatedReply("cut", "partial")) == "reply",
+   "TruncatedReply classifies as reply-kind")
+ok(ek_of(urllib.error.URLError("down")) == "api",
+   "URLError classifies as api-kind")
+ok(ek_of(TimeoutError("slow")) == "api", "TimeoutError classifies as api-kind")
+ok(ek_of(ValueError("bad json")) == "reply",
+   "a parse failure classifies as reply-kind")
+
 print("FAILURES:", fails)
 sys.exit(1 if fails else 0)

@@ -89,10 +89,23 @@ WantedBy=timers.target
 TMR
 cat > /etc/caddy/Caddyfile <<'CF'
 ${DOMAIN} {
-    basic_auth {
-        ${AUTH_USER:-admin} ${CADDY_HASH}
+    # Caddy does NOT compress by default: without this a 10.7 MB replay ships
+    # raw (gzips to 0.76 MB) and a cold dashboard load is ~4x the bytes
+    encode zstd gzip
+    # WORKER LANE: aux callbacks authenticate with their per-job bearer, so
+    # they must NOT need the dashboard password — that let a disposable worker
+    # hold the full dashboard credential. Everything else stays password-gated.
+    # (Trailing /* — a bare /api/aux prefix would also expose /api/aux-config.)
+    @aux path /api/aux/*
+    handle @aux {
+        reverse_proxy 127.0.0.1:8080
     }
-    reverse_proxy 127.0.0.1:8080
+    handle {
+        basic_auth {
+            ${AUTH_USER:-admin} ${CADDY_HASH}
+        }
+        reverse_proxy 127.0.0.1:8080
+    }
 }
 CF
 systemctl daemon-reload

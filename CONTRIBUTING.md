@@ -30,11 +30,16 @@ cd ..
 python3 tests/test_server.py           # HTTP endpoints (in-process server)
 ```
 
-All stdlib, no pytest needed. The CI workflow runs exactly these (note: Actions
-may be disabled on the upstream repo by org policy — it runs fine on forks, and
-every upstream release is gated on the same suite before it ships).
+All stdlib, no pytest needed — the five above are a fast smoke set. **CI runs the
+whole `tests/test_*.py` suite** (on Python 3.12), so run the rest before a PR too;
+`test_config.py` also fails if the committed `CONFIG.md` / `config-schema.json` have
+drifted from the schema — regenerate them with `python3 sim/config_schema.py >
+CONFIG.md` and `python3 sim/config_schema.py --json > config-schema.json`
+(markdown is the default output; `--json` switches it). (Note: Actions may be disabled on the
+upstream repo by org policy — it runs fine on forks, and every upstream release is
+gated on the same suite before it ships.)
 
-## The one rule that matters: the schema is the single source of truth
+## The schema is the single source of truth
 
 Every tunable lives in `sim/config_schema.py` (`SCHEMA`). The engine defaults,
 the dashboard's Configure form, the ⓘ hover text, `CONFIG.md`,
@@ -47,15 +52,19 @@ LLM admirals read are **all generated from it**. To add a knob:
 3. Add or extend a test.
 
 Never hardcode a game number anywhere else; `resolve()` rejects unknown keys
-loudly, and that's a feature.
+loudly, by design.
 
 ## Other conventions
 
 - **Determinism is sacred** in the engine: seeded PRNG, integer math,
   insertion-order iteration. Same config + seed = identical replay, byte for
   byte. Anything that breaks that breaks replays, series, and tests.
-- **Replays are the contract** between the sim and the viewer. If you add a
-  frame/event field, keep old replays loading (feature-detect, don't assume).
+- **Replays are the contract** between the sim and the viewer — versioned (v3),
+  encoded by `sim/replay_codec.py`. A frame-shape change touches the codec (both
+  directions **and** the 8-vs-4 fleet-row length discriminator), the viewer's
+  `ingestFrame` + accessors, and a `tests/test_replay_v3.py` round-trip case;
+  the viewer canonicalizes v1/v2/live to v3 at load so readers never branch on
+  version. See `docs/REPLAY_FORMAT.md`.
 - **Agent-first**: anything a human can do in the GUI must be possible for an
   agent via documented JSON (`/api/run`, `config-schema.json`). If you add a UI
   affordance, add its API twin.

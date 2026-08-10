@@ -4,6 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Flotilla — match library</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns=%27http://www.w3.org/2000/svg%27 viewBox=%270 0 100 100%27%3E%3Ctext y=%27.9em%27 font-size=%2790%27%3E%E2%9B%B5%3C/text%3E%3C/svg%3E">
 <style>
   :root { --bg:#0b1220; --card:#111a2e; --line:#1e2a44; --ink:#e6edf7;
           --dim:#8b9bb8; --accent:#0069ff; }
@@ -16,6 +17,13 @@
   .card { background:var(--card); border:1px solid var(--line); border-radius:10px;
           padding:12px 14px; margin-bottom:14px; }
   table { width:100%; border-collapse:collapse; font-size:13px; }
+  .subgames { margin:2px 0 8px; }
+  .subgames th, .subgames td { padding:3px 8px; font-size:12px; }
+  tr.sexp > td { background:var(--bg); border-left:2px solid var(--line); }
+  .titlecell { display:flex; align-items:center; gap:7px; }
+  .chev { color:var(--dim); font-size:15px; line-height:1; flex:0 0 auto;
+          display:inline-block; transition:transform .15s ease; }
+  .chev.open { transform:rotate(90deg); }
   th,td { text-align:left; padding:6px 10px 6px 0; border-bottom:1px solid var(--line); }
   th { color:var(--dim); font-weight:500; font-size:12px; }
   tr:hover td { background:#16223c; }
@@ -31,6 +39,15 @@
   .tab .warn { color:#fbbf24; font-size:11px; }
   .btn { display:inline-block; border-radius:6px; padding:3px 12px; font-size:12px;
          margin-right:6px; }
+  .rowbtns { display:flex; flex-wrap:wrap; gap:4px; justify-content:flex-end; }
+  .rowbtns .btn { margin-right:0; }
+  .rowbtns svg { vertical-align:-2px; }
+  /* names read as plain text; double-click swaps in the edit box */
+  .nmtext { padding:4px 2px; border-radius:6px; }
+  .nmtext:hover { background:#0a1b33; }
+  th.sortable { cursor:pointer; user-select:none; white-space:nowrap; }
+  th.sortable:hover { color:var(--ink); }
+  .sortmark { display:inline-block; width:12px; color:var(--accent); }
   .btn-watch { background:var(--accent); color:#fff; }
   .btn-watch:hover { text-decoration:none; filter:brightness(1.15); }
   .btn-dl { border:1px solid var(--accent); color:var(--accent); background:transparent; }
@@ -39,8 +56,19 @@
                 border-radius:6px; padding:4px 8px; font:inherit; width:100%;
                 min-width:180px; }
   input.sname:focus { border-color:var(--accent); outline:none; }
-  #cform { display:grid; grid-template-columns:repeat(auto-fill,minmax(320px,1fr));
-           gap:12px; }
+  /* masonry: every tile takes exactly the height its knobs need — a long
+     Scenario tile no longer stretches its whole row of neighbors. JS packs
+     each tile into the SHORTEST column (leftmost on ties) so space fills
+     left-first at any width. */
+  #cform { display:flex; gap:12px; align-items:flex-start; }
+  .cfcol { width:340px; max-width:100%; min-width:0; flex:0 1 340px;
+           display:flex; flex-direction:column; gap:12px; }
+  .mlogo { width:16px; height:16px; border-radius:50%; display:inline-block;
+    vertical-align:-3px; margin-right:5px; }
+  .mlogo.mono { color:#fff; font:bold 10px/16px sans-serif; text-align:center; }
+  .mlogo.big { width:30px; height:30px; margin-right:9px; vertical-align:middle;
+    flex:0 0 auto; }
+  .mlogo.big.mono { font:bold 15px/30px sans-serif; }
   .tile { background:#0d1526; border:1px solid var(--line); border-radius:10px;
           padding:10px 12px; }
   .tile h3 { color:var(--accent); font-size:13px; margin-bottom:8px;
@@ -80,6 +108,7 @@
   .job .st-run { color:#fbbf24; } .job .st-done { color:#34d399; }
   .job .st-failed { color:#ff6b6b; } .job .st-queued { color:var(--dim); }
   .job .st-cancelled { color:var(--dim); text-decoration:line-through; }
+  .job .st-paused { color:#8ec7ff; }
   .jcancel { color:#ff6b6b; border-color:#ff6b6b55; margin-left:8px; }
 </style>
 </head>
@@ -89,27 +118,32 @@
   <div id="sub">loading…</div>
 </header>
 <div class="tabs">
-  <button class="tab on" data-tab="series">⛵ Series View <span class="dim">(spoiler-free)</span></button>
-  <button class="tab" data-tab="games">🎬 Individual Games <span class="warn">⚠ contains spoilers</span></button>
+  <button class="tab on" data-tab="series">⛵ Games <span class="dim">(spoiler-free)</span></button>
   <button class="tab" data-tab="tourn">🏆 Tournaments</button>
   <button class="tab" data-tab="config">🧭 Chart a Course</button>
+  <button class="tab" data-tab="server">🖥 Server</button>
   <button class="tab" data-tab="help">❓ Help</button>
 </div>
 <div class="card" id="seriestab">
-  <table id="st"><thead><tr>
-    <th>series name <span class="dim">(click to rename — used for downloads)</span></th>
-    <th>games</th><th>players</th><th>latest game (UTC)</th><th style="width:190px"></th>
-  </tr></thead><tbody></tbody></table>
-</div>
-<div class="card" id="gamestab" style="display:none">
-  <div class="dim" style="margin-bottom:8px">⚠ This view shows final scores and winners.</div>
-  <div style="margin-bottom:8px">
-    <select id="ftype"><option value="">all types</option></select>
-    <select id="fplayer"><option value="">all players</option></select>
+  <div style="display:flex; align-items:center; gap:12px; flex-wrap:wrap; margin-bottom:8px">
+    <span class="dim">Click a series row to list its games — results stay
+      hidden until you ask. Double-click a name to rename it.</span>
+    <span style="display:flex; align-items:center; gap:12px; margin-left:auto">
+      <input id="q" class="sname" style="width:190px; min-width:120px"
+             placeholder="🔍 filter as you type" autocomplete="off">
+      <label id="showarchlbl" style="cursor:pointer; display:none; white-space:nowrap">
+        <input type="checkbox" id="showarch" style="vertical-align:-2px">
+        <span id="showarchtxt">show archived</span></label>
+    </span>
   </div>
-  <table id="mt"><thead><tr>
-    <th>when (UTC)</th><th>type</th><th>seed</th><th>players → scores</th>
-    <th>winner</th><th>length</th><th>LLM cost</th><th style="width:150px"></th>
+  <table id="st"><thead><tr>
+    <th style="width:90px"></th>
+    <th class="sortable" data-sort="name">Name<span class="sortmark"></span></th>
+    <th class="sortable" data-sort="games">Completed Games<span class="sortmark"></span></th>
+    <th class="sortable" data-sort="players">Players<span class="sortmark"></span></th>
+    <th class="sortable" data-sort="started">Started (UTC)<span class="sortmark"></span></th>
+    <th class="sortable" data-sort="latest">Latest game (UTC)<span class="sortmark"></span></th>
+    <th style="width:175px"></th>
   </tr></thead><tbody></tbody></table>
 </div>
 <div class="card" id="tourntab" style="display:none">
@@ -129,7 +163,7 @@
     physics of getting those orders to ships is part of the game.</p>
   <div style="display:flex;flex-wrap:wrap;gap:6px;align-items:center;margin-bottom:6px"
        id="flowdiag">
-    <div class="fstep">⏸ sim pauses<br><span>every decision window<br>(10s game time)</span></div>
+    <div class="fstep">⏸ decision window<br><span>every ~10s game time<br>(lockstep, or catch-up)</span></div>
     <div class="farrow">→</div>
     <div class="fstep">🗺 snapshot<br><span>each admiral gets its own<br>fog-limited view + memory</span></div>
     <div class="farrow">→</div>
@@ -144,21 +178,56 @@
   </div>
   <p class="dim" style="margin-bottom:14px">…and around the whole loop: after each game
     of a series, every admiral studies its own record and writes a <b>strategy memo
-    to its future self</b>, carried into the next game. A slow or broken model never
-    crashes a game — its fleet just sails on under its last orders.</p>
+    to its future self</b>. By default (<i>memo_history</i>) every past game's memo
+    carries forward — game-numbered — into every plan, in-game prompt, and debrief,
+    so a grudge from game 1 still shapes game 4; <i>memo_history=false</i> restores
+    latest-memo-only. A slow or broken model never crashes a game — its fleet just
+    sails on under its last orders, and a real model-API outage auto-pauses the run
+    and probes it back to life rather than burning games.</p>
+
+  <h2 style="color:var(--accent);font-size:16px;margin:14px 0 8px">Combat, in one minute</h2>
+  <div class="helpsec">Ships fight at <b>adjacent cells</b>; every ship fires
+    once per <i>volley</i> ticks for <b>guns×2 − armor</b> damage (min 1) — even a
+    1-gun trader is a combatant. The volley cooldown is per-ship, so ships don't
+    fire in lockstep. A ship shoots the nearest enemy <b>ship</b> in preference to
+    a flagship — only the <b>assault</b> role targets a flagship first (for
+    guns×2 − 3). A <b>flagship's</b> battery fires proactively (not just in reply)
+    every <i>volley</i> ticks on the nearest <i>flag_targets</i> (default 4) hostile
+    ships anywhere inside its command circle (radius <i>harbor_r</i>) for 10 − armor
+    each — the whole circle is a kill zone. Repairs are <b>yard works</b>, not free:
+    with a shipyard slot they cost treasury and hold a dock (only
+    <i>shipyard_slots</i>=0 gives the old free trickle). Hull = 20 + hull-stat×10.
+    A ship sinks at 0 hull —
+    <b>a laden ship's cargo becomes a wreck</b> where she went down, ready to
+    salvage. Kills score points (<i>kill_score</i> / <i>flag_kill_score</i>), and
+    <b>destroying a flagship eliminates its entire fleet</b>. Role-autopilot ships
+    obey their aggression ladder (0 flee · 1 return fire · 2 engage if stronger ·
+    3 engage anything); conn-programmed ships follow their code. Teammates never
+    damage each other. Every admiral receives a combat report each window.
+    Exact numbers per match: the ⓘ hovers in 🧭 Chart a Course, or the replay's
+    ⚙ Settings tab.</div>
 
   <h2 style="color:var(--accent);font-size:16px;margin:14px 0 8px">Using this dashboard</h2>
   <div class="helpsec">
-    <b>⛵ Series View</b> (spoiler-free, the home tab) — one row per series. Click a
-    name to rename it (saved on the server; renames also name your downloads).
-    <b>▶ Watch</b> opens the spoiler-free player in a new tab; <b>⬇ Download</b>
-    builds a single self-contained HTML file you can send to anyone — it works
-    offline, no server needed. <b>🌐</b> (when publishing is configured) uploads
-    that same file to a public bucket and hands you a link anyone can open in a
-    browser — no login, no download.</div>
+    <b>⛵ Games</b> (spoiler-free, the home tab) — one row per series or
+    standalone match. Double-click a name to rename it (saved on the server;
+    renames also name your downloads). The 🔍 box filters rows as you type,
+    column headers sort on click, and live runs show a red ✖ Cancel in place
+    of delete (confirmed first; finished games are kept).
+    <b>▶ Watch</b> opens the spoiler-free player in a new tab; <b>⬇</b> builds a
+    single self-contained HTML file you can send to anyone — it works offline,
+    no server needed. <b>🌐</b> (when publishing is configured) uploads that
+    same file to a public bucket and hands you a link anyone can open in a
+    browser — no login, no download. <b>📦 Archive</b> hides a series from the
+    list without touching its data — tick <i>show archived</i> at the top right
+    to see archived series (dimmed) and <b>📤 Unarchive</b> them. <b>🗑</b>
+    deletes a series from the library after a confirmation — that one is
+    permanent.</div>
   <div class="helpsec">
-    <b>🎬 Individual Games</b> — every match with final scores and winners
-    (spoilers, by design). Filter by type or player.</div>
+    <b>Games inside a series</b> — click a series row to unfold its game list:
+    each finished game gets its own ▶ Watch and ⬇, and the game being played
+    right now gets a 🔴 Live button. Winners and scores stay hidden until you
+    click <i>reveal</i> — the whole view is spoiler-free by default.</div>
   <div class="helpsec">
     <b>🏆 Tournaments</b> — brackets and leaderboards. Results stay hidden until
     you hit <i>Reveal</i>, so you can watch the games unspoiled first.</div>
@@ -173,16 +242,33 @@
     <b>The player page</b> — ▶ Play, scrub, speed. Right side: Fleets (live
     scores + each admiral's latest thinking), Admirals (decisions + spend),
     Parley (the diplomacy feed), Memos (what each model told its future self),
-    Stats (score chart + game log), ⚙ Settings (this exact match's full
-    configuration + how to reproduce it). Click any ship or island to inspect it —
+    Stats (8 charts — score, ships, income rate, treasury, parley, tokens,
+    latency, cost), ⚙ Settings (this exact match's full configuration + how to
+    reproduce it). Click any ship or island to inspect it —
     ships show <i>what they're trying to do and why</i>. The 👁 selector watches
     through one admiral's fog of war: you see only what that fleet saw.</div>
+  <div class="helpsec">
+    <b>Watching a live series</b> — the ⛵ Games row shows a red 🔴 Live button
+    while a run is under way; it drops you on the game being played right now,
+    with a <b>game X of Y</b> header. ⏮/⏭ step between games; the ⏭ button turns
+    red "(Live)" when the next game is the one playing live. If a game finishes
+    while you watch, you stay on it and finish at your own pace — the next games
+    queue up (⏭) rather than yanking you forward.</div>
+  <div class="helpsec">
+    <b>🖥 Server</b> — the inference-provider ladder. Add a provider key (it is
+    verified and its models auto-discovered + mapped to the admiral ids on the
+    spot), reorder or disable rungs, and set the fallback + canary thresholds.
+    Keys live 0600 in the library, never in git and never returned to the page.
+    See <b>docs/PROVIDERS.md</b> in the repo for the ladder rules.</div>
 
   <h2 style="color:var(--accent);font-size:16px;margin:14px 0 8px">FAQ</h2>
-  <div class="helpsec"><b>Is this real time?</b> No — lockstep. The sim pauses at
-    every decision window while the models think, then simulates 10 seconds of
-    game time near-instantly. Replays play back smoothly regardless of how long
-    any model took.</div>
+  <div class="helpsec"><b>Is this real time?</b> Two pacing modes. By default it's
+    <b>lockstep</b>: the sim pauses at every decision window while the models think,
+    then simulates ~10 seconds of game time near-instantly. With <b>catch-up
+    pipelining</b> on (<i>pipeline_depth</i> &gt; 0) the sim never stops — a fast
+    admiral decides every window, a slow one misses windows and rejoins with a
+    catch-up briefing when its reply lands. Either way, replays play back smoothly
+    regardless of how long any model took.</div>
   <div class="helpsec"><b>Do the models see everything?</b> No. Each admiral gets
     only what its ships have seen (fog of war), a contact plot with last-known
     enemy positions, and its own believed island stocks. Watch with the 👁 POV
@@ -194,10 +280,14 @@
     each model's memory.</div>
   <div class="helpsec"><b>Why did a fleet just sit there?</b> Its ships only learn
     new orders inside the harbor circle or by signal flag. Command latency is a
-    game mechanic, not a bug — and the signal-flag rules vary by match settings.</div>
-  <div class="helpsec"><b>Is a game reproducible?</b> Byte-for-byte. The engine is
-    deterministic (seeded, integer math); the ⚙ Settings tab of any replay shows
-    the full config + seed to regenerate it.</div>
+    game mechanic, and the signal-flag rules vary by match settings.</div>
+  <div class="helpsec"><b>Is a game reproducible?</b> A <i>recorded</i> game is:
+    the engine is deterministic (seeded, integer math), so given the same seed
+    and the same admiral decisions it replays byte-for-byte — the ⚙ Settings tab
+    shows the config + seed. That reproduces the match you're watching. Starting
+    a <i>new</i> run from the same seed is different: the live LLMs won't make
+    the identical calls, so the game plays out its own way. The determinism is in
+    the replay, not in the admirals.</div>
   <div class="helpsec"><b>What does a game cost?</b> Each replay's Admirals panel
     shows tokens and dollars per model — scripted-bot games are free; LLM games
     range from cents (small open models) to a few dollars (frontier models).</div>
@@ -214,10 +304,29 @@
     it can author the same file directly. Only values you change are written.
   </div>
   <div style="margin-bottom:10px">
-    <label id="auxwrap" style="display:none" title="run this job on a disposable
-      worker droplet — the site stays free while it sails">
-      <input type="checkbox" id="cauxec"> ⚓ run on a fleet auxiliary
+    <div id="thinkwarn" style="display:none; color:#fbbf24; font-size:12px;
+      margin:4px 0">⚠ thinking is OFF, but it can only truly be disabled for the
+      open models (Qwen/Kimi/GLM/DeepSeek) — <span id="thinkwarnwho"></span> will
+      keep minimal hidden reasoning anyway. This handicaps the open models;
+      leave thinking on for a fair match.</div>
+    <label id="pubwrap" style="display:none; margin-left:14px" title="mirror this
+      run to the public showcase bucket AS IT RUNS: a no-login hub page with
+      every game watchable, plus a live stream for auxiliary jobs">
+      <input type="checkbox" id="cpublic"> 🌐 public showcase (live)
     </label>
+  </div>
+  <div style="margin-bottom:10px">
+    game preset:
+    <select id="cpreset" title="one-click rule bundles — pick one, then tweak
+      anything; only changed knobs are written to the config">
+      <option value="">— choose —</option>
+    </select>
+    <span id="cpresetdesc" class="dim" style="font-size:12px"></span>
+    <span style="margin-left:10px">
+      <input class="sname" id="cpresetname" style="width:130px; min-width:130px"
+        placeholder="save current as…">
+      <a href="#" class="btn btn-dl" id="cpresetsave">💾</a>
+    </span>
   </div>
   <div style="margin-bottom:10px">
     mode:
@@ -236,15 +345,89 @@
     <div id="players" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(360px,1fr));gap:10px;margin-top:8px"></div>
   </div>
   <div id="cform"></div>
-  <div style="margin-top:12px">
-    run name: <input id="cname" class="sname" style="width:220px" placeholder="my-experiment">
+  <div style="margin-top:12px;display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+    <span>run name: <input id="cname" class="sname" style="width:220px" placeholder="my-experiment"></span>
+    <label id="auxwrap" style="display:none" title="run this job on a disposable
+      worker droplet — the site stays free while it sails">
+      <input type="checkbox" id="cauxec"> ⚓ run on a fleet auxiliary
+    </label>
+    <span id="auxsizewrap" style="display:none">
+      <select id="cauxsize" title="worker droplet size — one sim runs at a time,
+        so RAM (one game's replay in memory) matters more than cores">
+        <option value="">size: server default</option>
+        <option value="s-1vcpu-1gb">s-1vcpu-1gb ($6/mo)</option>
+        <option value="s-1vcpu-2gb">s-1vcpu-2gb ($12/mo)</option>
+        <option value="s-2vcpu-2gb">s-2vcpu-2gb ($18/mo)</option>
+        <option value="s-2vcpu-4gb">s-2vcpu-4gb ($24/mo)</option>
+        <option value="s-4vcpu-8gb">s-4vcpu-8gb ($48/mo)</option>
+      </select>
+      <span id="cauxhint" class="dim"></span>
+    </span>
     <a class="btn btn-watch" id="claunch" href="#" style="display:none">⛵ Set sail on this server</a>
+    <span id="ccost" class="dim" style="align-self:center"></span>
     <a class="btn btn-dl" id="cdl" href="#">⬇ Download config.json</a>
     <a class="btn btn-dl" id="ccopy" href="#">📋 Copy JSON</a>
     <span class="dim" id="cmsg"></span>
   </div>
+</div>
+<div class="card" id="servertab" style="display:none">
+  <h3 style="color:var(--accent);font-size:14px;margin-bottom:6px">Inference providers &amp; keys</h3>
+  <div class="dim" style="margin-bottom:8px">The provider ladder, first
+    preference to last. Admirals run on the top enabled rung that serves their
+    model; a 429, a run of timeouts, or repeated 5xx errors drops that model
+    one rung, and a canary probe every few minutes climbs it back up when the
+    higher rung recovers. Keys live in a 0600 file on the server, never in
+    git; only the last characters are ever shown here.</div>
+  <div id="provlist" class="dim">loading…</div>
+  <div style="margin-top:10px; display:flex; gap:8px; flex-wrap:wrap; align-items:center">
+    <input id="pv_label" class="sname" style="width:130px" placeholder="label (e.g. Baseten)">
+    <input id="pv_base" class="sname" style="width:250px" placeholder="https://inference.baseten.co/v1">
+    <input id="pv_key" class="sname" style="width:200px" type="password" placeholder="API key">
+    <a class="btn btn-watch" id="pv_add" href="#">＋ Add provider</a>
+    <span class="dim">the key is verified and its models discovered + mapped
+      automatically on add</span>
+  </div>
+  <h3 style="color:var(--accent);font-size:13px;margin:16px 0 6px">Fallback &amp; canary</h3>
+  <div style="display:flex; flex-direction:column; gap:8px; align-items:flex-start" class="dim">
+    <label>timeouts in a row before falling back
+      <input id="fb_ts" class="sname" style="width:52px" type="number" min="1" max="20"></label>
+    <label>… when pipelined
+      <input id="fb_tsp" class="sname" style="width:52px" type="number" min="1" max="40"></label>
+    <label>5xx errors in a row
+      <input id="fb_es" class="sname" style="width:52px" type="number" min="1" max="20"></label>
+    <label>canary interval (minutes)
+      <input id="fb_cm" class="sname" style="width:56px" type="number" min="1" max="240"></label>
+    <a class="btn btn-dl" id="fb_save" href="#">Save</a>
+    <span id="fb_msg"></span>
+  </div>
+  <h3 style="color:var(--accent);font-size:13px;margin:16px 0 6px">Cost ceiling</h3>
+  <div style="display:flex; flex-direction:column; gap:8px; align-items:flex-start" class="dim">
+    <label>max estimated cost per run, $ (0 = no limit)
+      <input id="lim_cost" class="sname" style="width:70px" type="number"
+             min="0" step="1"></label>
+    <a class="btn btn-dl" id="lim_save" href="#">Save</a>
+    <span id="lim_msg"></span>
+    <span>Chart a Course warns within 25% of this and blocks a run whose
+      high-side estimate is over it.</span>
+  </div>
+  <div class="dim" style="margin-top:6px">A 429 falls back immediately. If NO
+    fallback serves a model, the run's own circuit breaker still applies: when
+    every admiral is erroring for <code>outage_pause_windows</code> straight
+    windows (a Chart a Course knob, default 2) the run freezes itself with a
+    checkpoint and the server probes it back every 10 minutes.</div>
+  <h3 style="color:var(--accent);font-size:13px;margin:16px 0 6px">Fleet auxiliaries</h3>
+  <div class="dim" style="margin-bottom:6px">Worker VMs that run sims off the
+    flagship box. Per-run size and the aux toggle stay on Chart a Course.</div>
+  <div id="auxlist" class="dim">loading…</div>
+  <div style="margin-top:8px; display:flex; gap:8px; flex-wrap:wrap; align-items:center; opacity:.5">
+    <input class="sname" style="width:130px" placeholder="label" disabled>
+    <input class="sname" style="width:200px" placeholder="API token" disabled>
+    <a class="btn btn-dl" href="#" onclick="return false">＋ Add cloud provider</a>
+    <span class="dim">multi-cloud aux workers are on the backlog — DigitalOcean
+      is the only wired provider today</span>
+  </div>
   <div id="jobscard" style="margin-top:14px;display:none">
-    <h3 style="color:var(--accent);font-size:13px;margin-bottom:6px">runs on this server</h3>
+    <h3 style="color:var(--accent);font-size:13px;margin-bottom:6px">Run log — every launch (flagship + fleet auxiliaries, series and single games)</h3>
     <div id="jobs"></div>
   </div>
 </div>
@@ -270,10 +453,22 @@ function displayName(s) {
                 : (customNames()[s.name] || s.display_name || s.name);
 }
 function safeFile(name) { return name.replace(/[^a-z0-9 _-]/gi, "").trim().replace(/ +/g, "-"); }
+// HTML-escape for any interpolation carrying model- or worker-controlled text
+// (fleet names, memos, winners, error strings, display names) — several of
+// these reach the operator's dashboard AND the public showcase.
+function esc(s) {
+  return String(s == null ? "" : s).replace(/[&<>"']/g,
+    c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+}
+function embedSafe(json) {
+  return json.replace(/</g, "\\u003c").replace(/>/g, "\\u003e")
+             .replace(/\u2028/g, "\\u2028").replace(/\u2029/g, "\\u2029");
+}
 
 async function selfContained(payload) {
   const tpl = await (await fetch("player.html")).text();
-  return tpl.replace(TOKEN, payload);
+  // <script>-safe embed + $-safe replacement (model text can contain $&/$')
+  return tpl.replace(TOKEN, () => embedSafe(payload));
 }
 function blobDl(content, fname) {
   const a = document.createElement("a");
@@ -285,10 +480,16 @@ function blobDl(content, fname) {
 
 function fmt(m) {
   return Object.entries(m.scores).map(([n, s]) =>
-    `<span class="${n === m.winner ? 'win' : ''}">${n} ${s}</span>`).join(" · ");
+    `<span class="${n === m.winner ? 'win' : ''}">${esc(n)} ${esc(s)}</span>`).join(" · ");
 }
 
 function seriesPlayers(s) {
+  const g1 = IDX.matches.find(m => m.file === (s.games[0] || {}).file);
+  return g1 ? Object.keys(g1.scores).map(esc).join(" · ") : "";
+}
+function seriesPlayersRaw(s) {
+  // the SEARCH index wants raw names — indexing the esc()'d string made
+  // players with & < > in the name unsearchable
   const g1 = IDX.matches.find(m => m.file === (s.games[0] || {}).file);
   return g1 ? Object.keys(g1.scores).join(" · ") : "";
 }
@@ -298,62 +499,228 @@ function seriesLatest(s) {
   return (when || "").replace("T", " ").slice(0, 16);
 }
 
+const OPENSERIES = new Set();          // expanded rows survive re-renders
+function gameRows(s, liveJob, byFile) {
+  // per-game sub-table: results (winner/scores) start HIDDEN — the reveal
+  // chip flips them for this series only, keeping the view spoiler-free
+  let html = `<div style="margin:4px 0 6px">` +
+    `<a class="btn btn-dl reveal" href="#" data-series="${s.name}">🙈 results hidden — click to reveal</a></div>` +
+    `<table class="subgames"><thead><tr><th style="width:90px"></th>` +
+    `<th>game</th><th>when (UTC)</th>` +
+    `<th>length</th><th>LLM cost</th><th class="res" style="display:none">winner</th>` +
+    `<th class="res" style="display:none">scores</th><th style="width:50px"></th>` +
+    `</tr></thead><tbody>`;
+  for (const g of s.games) {
+    const m = byFile[g.file] || {};
+    html += `<tr><td><a class="btn btn-watch" target="_blank" ` +
+      `href="player.html?replay=${encodeURIComponent(g.file)}">▶ Watch</a></td>` +
+      `<td>g${g.game}</td>` +
+      `<td class="dim">${(m.when || "").replace("T", " ").slice(0, 16)}</td>` +
+      `<td class="dim">${m.ticks ? Math.round(m.ticks / 600) + "m" : ""}</td>` +
+      `<td class="dim">${m.cost ? "$" + m.cost.toFixed(2) : "—"}</td>` +
+      `<td class="res win" style="display:none">${esc(g.winner || m.winner || "")}</td>` +
+      `<td class="res" style="display:none">${m.scores ? fmt(m) : ""}</td>` +
+      `<td><div class="rowbtns"><a class="btn btn-dl dlh" href="#" ` +
+      `data-file="${esc(g.file)}" data-name="${esc(displayName(s))}-g${g.game}" ` +
+      `title="download a self-contained page of this game">⬇</a></div></td></tr>`;
+  }
+  if (liveJob) {
+    html += `<tr><td><a class="btn btn-watch" target="_blank" style="background:#c22432" ` +
+      `href="player.html?live=${liveJob.id}">🔴 Live</a></td>` +
+      `<td>g${s.games.length + 1}</td>` +
+      `<td class="warn" colspan="3">⏳ being played right now</td>` +
+      `<td class="res" style="display:none"></td><td class="res" style="display:none"></td>` +
+      // Cancel sits on the RIGHT, in the same trailing cell the ⬇ uses
+      `<td><div class="rowbtns"><a class="btn btn-dl scancel" href="#" ` +
+      `style="color:#ff5d5d" data-job="${liveJob.id}" ` +
+      `data-label="${esc(displayName(s))}" ` +
+      `title="cancel — stops this game AND the rest of the series ` +
+      `(finished games are kept)">✖</a></div></td></tr>`;
+  }
+  return html + `</tbody></table>`;
+}
+
+// icon-only buttons: solid archive box (lid + slot) and box-with-up-arrow —
+// inline SVGs take the button's own color (no colored-emoji archive)
+const ICO_ARCH = '<svg width="13" height="13" viewBox="0 0 16 16" ' +
+  'fill="currentColor"><path d="M1 2.5h14V6H1z"/><path d="M2.5 7h11v6.5h-11z"/>' +
+  '<rect x="6" y="8.6" width="4" height="1.5" fill="#0b1220"/></svg>';
+const ICO_UNARCH = '<svg width="13" height="13" viewBox="0 0 16 16" ' +
+  'fill="currentColor"><path d="M8 0.5l4 4.5H9.6v4H6.4V5H4z"/>' +
+  '<path d="M2.5 10.5h11V15h-11z"/></svg>';
+function matchLabel(m) {
+  return m.display_name || `single match · ${m.type} · seed ${m.seed}`;
+}
+let SORT = { col: "started", dir: -1 };    // default: newest first
 function renderSeriesTable() {
   const tb = document.querySelector("#st tbody");
   tb.innerHTML = "";
-  for (const s of (IDX.series || [])) {
-    const tr = document.createElement("tr");
-    tr.innerHTML =
-      `<td><input class="sname" data-series="${s.name}" value="${displayName(s)
-        .replace(/"/g, "&quot;")}" title="click to rename"></td>` +
-      `<td>${s.games.length}${s.partial ? ' <span class="warn">⏳ live</span>' : ""}</td>` +
-      `<td class="dim">${seriesPlayers(s)}</td>` +
-      `<td class="dim">${seriesLatest(s)}</td>` +
-      `<td><a class="btn btn-watch" target="_blank" ` +
-      `href="player.html?series=${encodeURIComponent(s.name)}` +
-      `&title=${encodeURIComponent(displayName(s))}">▶ Watch</a>` +
-      `<a class="btn btn-dl dls" href="#" data-series="${s.name}">⬇ Download</a>` +
-      (SHOWCASE ? `<a class="btn btn-dl shpub" href="#" data-series="${s.name}" ` +
-        `title="publish a spoiler-free public link — no login needed to view">🌐</a>` : "") +
-      `</td>`;
-    tb.appendChild(tr);
+  const byFile = {};                      // built once, not per open series
+  for (const m of (IDX.matches || [])) byFile[m.file] = m;
+  const solo = (IDX.matches || [])
+    .filter(m => !String(m.type || "").startsWith("series:"));
+  // archived rows stay on disk but out of sight until the checkbox asks
+  const nArch = (IDX.series || []).filter(s => s.archived).length +
+                solo.filter(m => m.archived).length;
+  const lbl = $("showarchlbl");
+  if (lbl) {
+    lbl.style.display = nArch ? "" : "none";
+    $("showarchtxt").textContent = `show archived (${nArch})`;
+    // un-check when the label hides: a checkbox that stayed checked while
+    // invisible made the NEXT archive appear to do nothing
+    if (!nArch && $("showarch")) $("showarch").checked = false;
   }
-}
-
-function renderGames() {
-  const ft = $("ftype").value, fp = $("fplayer").value;
-  const tb = document.querySelector("#mt tbody");
-  tb.innerHTML = "";
-  for (const m of IDX.matches) {
-    if (ft && m.type !== ft) continue;
-    if (fp && !Object.keys(m.scores).includes(fp)) continue;
+  const showArch = nArch && $("showarch") && $("showarch").checked;
+  // one unified list: series (expandable) + standalone matches
+  const items = (IDX.series || [])
+    .filter(s => showArch || !s.archived)
+    .map(s => ({ kind: "s", ts: s.started || 0, s,
+                 name: displayName(s).toLowerCase(),
+                 games: s.games.length, players: seriesPlayersRaw(s),
+                 latest: seriesLatest(s) || "" }));
+  for (const m of solo) {
+    if (!showArch && m.archived) continue;
+    items.push({ kind: "m", ts: Date.parse((m.when || "") + "Z") / 1000 || 0,
+                 m, name: matchLabel(m).toLowerCase(), games: 1,
+                 players: Object.keys(m.scores || {}).join(", "),
+                 latest: (m.when || "").replace("T", " ").slice(0, 16) });
+  }
+  // live search: substring match over name + players + latest, as you type
+  const q = ($("q") && $("q").value || "").trim().toLowerCase();
+  const shown = q ? items.filter(it =>
+    (it.name + " " + it.players.toLowerCase() + " " + it.latest).includes(q))
+    : items;
+  const dir = SORT.dir, col = SORT.col;
+  shown.sort((a, b) => {
+    const av = col === "started" ? a.ts : a[col];
+    const bv = col === "started" ? b.ts : b[col];
+    if (av < bv) return -dir;
+    if (av > bv) return dir;
+    return b.ts - a.ts;                    // stable tie-break: newest first
+  });
+  for (const th of document.querySelectorAll("#st th.sortable")) {
+    th.querySelector(".sortmark").textContent =
+      th.dataset.sort === col ? (dir > 0 ? " ▲" : " ▼") : "";
+  }
+  const archBtns = (data, archived) => SERVER
+    ? `<a class="btn btn-dl sarch" href="#" ${data} data-arch="${archived ? 0 : 1}" ` +
+      `title="${archived ? "unarchive — show in the list again"
+                         : "archive — hide from this list; kept on disk"}">` +
+      `${archived ? ICO_UNARCH : ICO_ARCH}</a>`
+    : "";
+  for (const it of shown) {
     const tr = document.createElement("tr");
+    if (it.kind === "m") {
+      const m = it.m;
+      const base = m.file.split("/").pop();
+      tr.innerHTML =
+        `<td><a class="btn btn-watch" target="_blank" ` +
+        `href="player.html?replay=${encodeURIComponent(m.file)}">▶ Watch</a></td>` +
+        `<td class="${m.display_name ? "" : "dim"}">` +
+        `<span class="nmtext" data-match="${esc(base)}" ` +
+        `title="double-click to rename">${esc(matchLabel(m))}</span></td>` +
+        `<td>1</td><td class="dim">${Object.keys(m.scores || {}).map(esc).join(", ")}</td>` +
+        `<td class="dim">${(m.when || "").replace("T", " ").slice(0, 16)}</td>` +
+        `<td class="dim"></td>` +
+        `<td><div class="rowbtns"><a class="btn btn-dl dlh" href="#" data-file="${esc(m.file)}" ` +
+        `data-name="${esc(m.display_name || m.type + "-s" + m.seed)}" ` +
+        `title="download a self-contained page of this match">⬇</a>` +
+        (SHOWCASE ? `<a class="btn btn-dl shpub" href="#" data-match="${esc(m.file)}" ` +
+          `title="publish a public link">🌐</a>` : "") +
+        archBtns(`data-match="${esc(base)}"`, m.archived) +
+        (SERVER ? `<a class="btn btn-dl sdel" href="#" style="color:#ff5d5d" ` +
+          `data-match="${esc(base)}" data-label="${esc(matchLabel(m))}" ` +
+          `title="delete this match from the library (asks first)">🗑</a>` : "") +
+        `</div></td>`;
+      if (m.archived) tr.style.opacity = ".55";
+      tb.appendChild(tr);
+      continue;
+    }
+    const s = it.s;
+    const liveJob = s.partial ? JOBSCACHE.find(j => j.name === s.name &&
+      ["queued", "running", "paused"].includes(j.state)) : null;
+    const open = OPENSERIES.has(s.name);
+    tr.className = "srow";
+    tr.dataset.series = s.name;
+    tr.title = "click to " + (open ? "collapse" : "list the games");
+    tr.style.cursor = "pointer";
     tr.innerHTML =
-      `<td class="dim">${(m.when || "").replace("T", " ").slice(0, 16)}</td>` +
-      `<td>${m.type}</td><td class="dim">${m.seed}</td>` +
-      `<td>${fmt(m)}</td><td class="win">${m.winner}</td>` +
-      `<td class="dim">${Math.round((m.ticks || 0) / 600)}m</td>` +
-      `<td class="dim">${m.cost ? "$" + m.cost.toFixed(2) : "—"}</td>` +
-      `<td><a class="btn btn-watch" target="_blank" ` +
-      `href="player.html?replay=${encodeURIComponent(m.file)}">▶ Watch</a>` +
-      `<a class="btn btn-dl dlh" href="#" data-file="${m.file}" ` +
-      `data-name="${m.type}-s${m.seed}">⬇</a>` +
-      (SHOWCASE ? `<a class="btn btn-dl shpub" href="#" data-match="${m.file}" ` +
-        `title="publish a public link">🌐</a>` : "") + `</td>`;
+      `<td>` +
+      (liveJob ? `<a class="btn btn-watch" target="_blank" ` +
+        `style="background:#c22432" href="player.html?live=${liveJob.id}"` +
+        ` title="jump into the game being played RIGHT NOW">🔴 Live</a><br>` : "") +
+      `<a class="btn ${liveJob ? "btn-dl" : "btn-watch"}" target="_blank" ` +
+      `href="player.html?series=${encodeURIComponent(s.name)}` +
+      `&title=${encodeURIComponent(displayName(s))}"` +
+      ` title="replay the finished games from game 1">▶ Watch</a></td>` +
+      `<td><span class="titlecell"><span class="chev${open ? " open" : ""}">▸</span>` +
+      `<span class="nmtext" data-series="${esc(s.name)}" ` +
+      `title="double-click to rename">${esc(displayName(s))}</span></span></td>` +
+      `<td>${s.games.length}${s.cancelled ? ' <span class="warn">✖ cancelled — kept games</span>' : s.partial ? ' <span class="warn">⏳ live</span>' : ""}</td>` +
+      `<td class="dim">${seriesPlayers(s)}</td>` +
+      `<td class="dim">${s.started_utc || ""}</td>` +
+      `<td class="dim">${seriesLatest(s)}</td>` +
+      `<td><div class="rowbtns">` +
+      `<a class="btn btn-dl dls" href="#" data-series="${esc(s.name)}" ` +
+      `title="download a self-contained page of this series">⬇</a>` +
+      (SHOWCASE ? `<a class="btn btn-dl shpub" href="#" data-series="${esc(s.name)}" ` +
+        `title="publish a spoiler-free public link — no login needed to view">🌐</a>` : "") +
+      archBtns(`data-series="${esc(s.name)}"`, s.archived) +
+      (SERVER ? (liveJob
+        ? `<a class="btn btn-dl scancel" href="#" style="color:#ff5d5d" ` +
+          `data-job="${liveJob.id}" data-label="${esc(displayName(s))}" ` +
+          `title="cancel this run (asks first; finished games are kept)">✖</a>`
+        : `<a class="btn btn-dl sdel" href="#" style="color:#ff5d5d" ` +
+          `data-series="${esc(s.name)}" ` +
+          `title="delete this series from the library (asks first)">🗑</a>`) : "") +
+      `</div></td>`;
+    if (s.archived) tr.style.opacity = ".55";
     tb.appendChild(tr);
+    if (open) {
+      const xr = document.createElement("tr");
+      xr.className = "sexp";
+      xr.innerHTML = `<td></td><td colspan="6">${gameRows(s, liveJob, byFile)}</td>`;
+      tb.appendChild(xr);
+    }
   }
 }
 
 document.addEventListener("click", async e => {
   const t = e.target.closest("a, button");
-  if (!t) return;
+  if (!t) {
+    // a click on the series row itself (not its buttons/rename box) expands
+    // the per-game list in place
+    // names are double-click-to-rename targets, not expand toggles
+    const row = e.target.closest("tr.srow");
+    if (row && !e.target.closest("input") && !e.target.closest(".nmtext")) {
+      const n = row.dataset.series;
+      OPENSERIES.has(n) ? OPENSERIES.delete(n) : OPENSERIES.add(n);
+      renderSeriesTable();
+    }
+    return;
+  }
+  if (t.classList.contains("reveal")) {
+    e.preventDefault();
+    const sub = t.closest("td");
+    const hid = sub.querySelector(".res").style.display === "none";
+    for (const el of sub.querySelectorAll(".res")) {
+      el.style.display = hid ? "" : "none";
+    }
+    t.textContent = hid ? "👁 results shown — click to hide"
+                        : "🙈 results hidden — click to reveal";
+    return;
+  }
   if (t.classList.contains("tab")) {
     for (const b of document.querySelectorAll(".tab")) b.classList.toggle("on", b === t);
     $("seriestab").style.display = t.dataset.tab === "series" ? "" : "none";
-    $("gamestab").style.display = t.dataset.tab === "games" ? "" : "none";
     $("tourntab").style.display = t.dataset.tab === "tourn" ? "" : "none";
     $("configtab").style.display = t.dataset.tab === "config" ? "" : "none";
+    $("servertab").style.display = t.dataset.tab === "server" ? "" : "none";
+    if (t.dataset.tab === "server") renderProviders();
     $("helptab").style.display = t.dataset.tab === "help" ? "" : "none";
+    // the form renders while hidden (width 0 -> one column): pack it for
+    // real the moment its tab is shown
+    if (t.dataset.tab === "config") masonryLayout();
   }
   if (t.classList.contains("dlh")) {
     e.preventDefault();
@@ -374,7 +741,7 @@ document.addEventListener("click", async e => {
           a.href = r.file;
           a.download = `${safeFile(nm)}.html`;
           a.click();
-          t.textContent = "⬇ Download";
+          t.textContent = "⬇";
           return;
         }
       } catch (err) { /* fall through to the client-side build */ }
@@ -385,7 +752,64 @@ document.addEventListener("click", async e => {
     }
     const payload = JSON.stringify({ series: { name: nm, games } });
     blobDl(await selfContained(payload), `${safeFile(nm)}.html`);
-    t.textContent = "⬇ Download";
+    t.textContent = "⬇";
+  }
+  if (t.classList.contains("sarch")) {
+    e.preventDefault();
+    const body = t.dataset.series ? { series: t.dataset.series }
+                                  : { match: t.dataset.match };
+    body.archived = t.dataset.arch === "1";
+    try {
+      const r = await (await fetch("api/archive", { method: "POST",
+        body: JSON.stringify(body) })).json();
+      if (!r.ok) { window.alert("archive failed: " + r.error); return; }
+      IDX = await (await fetch("index.json")).json();
+      renderSeriesTable();
+    } catch (err) { window.alert("archive failed: " + err); }
+    return;
+  }
+  if (t.classList.contains("sdel")) {
+    e.preventDefault();
+    let api, body, what;
+    if (t.dataset.series) {
+      const s = IDX.series.find(x => x.name === t.dataset.series);
+      what = `"${s ? displayName(s) : t.dataset.series}" and its ` +
+             `${s ? s.games.length : 0} game(s)`;
+      api = "api/delete-series"; body = { series: t.dataset.series };
+    } else {
+      what = `"${t.dataset.label || t.dataset.match}"`;
+      api = "api/delete-match"; body = { match: t.dataset.match };
+    }
+    if (!window.confirm(`Delete ${what} from the library?\n` +
+        `This removes the replay(s) from the server for good.`)) return;
+    try {
+      const r = await (await fetch(api, { method: "POST",
+        body: JSON.stringify(body) })).json();
+      if (!r.ok) { window.alert("delete failed: " + r.error); return; }
+      if (body.series) OPENSERIES.delete(body.series);
+      IDX = await (await fetch("index.json")).json();
+      renderSeriesTable();
+    } catch (err) { window.alert("delete failed: " + err); }
+    return;
+  }
+  if (t.classList.contains("scancel")) {
+    e.preventDefault();
+    if (!window.confirm(`Cancel "${t.dataset.label}"?\n` +
+        `The game being played stops and the rest of the series is called ` +
+        `off. Finished games stay in the library.`)) return;
+    try {
+      const r = await (await fetch("api/cancel", { method: "POST",
+        body: JSON.stringify({ id: t.dataset.job }) })).json();
+      if (r.error) {
+        window.alert(/already/.test(r.error)
+          ? "This run already finished on its own — nothing to cancel."
+          : "cancel failed: " + r.error);
+      }
+      pollJobs();
+      IDX = await (await fetch("index.json")).json();
+      renderSeriesTable();               // either way the row is stale now
+    } catch (err) { window.alert("cancel failed: " + err); }
+    return;
   }
   if (t.classList.contains("shpub")) {
     e.preventDefault();
@@ -402,6 +826,13 @@ document.addEventListener("click", async e => {
       else window.alert("publish failed: " + r.error);
     } catch (err) { t.textContent = "🌐"; window.alert("publish failed: " + err); }
   }
+  if (t.classList && (t.classList.contains("jpause") || t.classList.contains("jresume"))) {
+    e.preventDefault();
+    fetch("api/" + (t.classList.contains("jpause") ? "pause" : "resume"),
+          { method: "POST", body: JSON.stringify({ id: t.dataset.id }) })
+      .then(r => r.json()).then(() => pollJobs()).catch(() => {});
+    return;
+  }
   if (t.classList.contains("jcancel")) {
     e.preventDefault();
     await fetch("api/cancel", { method: "POST",
@@ -409,10 +840,57 @@ document.addEventListener("click", async e => {
     pollJobs();
   }
 });
+// double-click a name -> swap the plain text for an edit box in place
+document.addEventListener("dblclick", e => {
+  const span = e.target.closest(".nmtext");
+  if (!span) return;
+  const inp = document.createElement("input");
+  inp.className = "sname nmedit";
+  if (span.dataset.series) {
+    inp.dataset.series = span.dataset.series;
+    inp.value = span.textContent;
+  } else {
+    inp.dataset.match = span.dataset.match;
+    // a match without a custom name edits from empty (the default label is
+    // generated, not a name); the placeholder shows what empty falls back to
+    // standalone matches only — series games share basenames like g1.json
+    // and a name collision prefixed the edit box from the wrong record
+    const m = (IDX.matches || []).find(x =>
+      !String(x.type || "").startsWith("series:") &&
+      x.file.split("/").pop() === span.dataset.match) || {};
+    inp.value = m.display_name || "";
+    inp.placeholder = matchLabel(m);
+  }
+  span.replaceWith(inp);
+  inp.focus();
+  inp.select();
+  inp.addEventListener("keydown", ev => {
+    if (ev.key === "Enter") inp.blur();
+    if (ev.key === "Escape") { inp.dataset.cancel = "1"; inp.blur(); }
+  });
+  inp.addEventListener("blur", () => {
+    // change (if any) fires before blur and re-renders; if the input is
+    // still in the DOM the edit was a no-op or cancelled — restore the text
+    if (inp.isConnected) renderSeriesTable();
+  });
+});
 document.addEventListener("change", async e => {
-  if (e.target.classList && e.target.classList.contains("sname") &&
-      e.target.dataset.series) {
-    const series = e.target.dataset.series, val = e.target.value;
+  const el = e.target;
+  if (!el.classList || !el.classList.contains("sname")) return;
+  if (el.dataset.cancel) return;
+  if (el.dataset.match) {
+    try {
+      const r = await (await fetch("api/rename", { method: "POST",
+        body: JSON.stringify({ match: el.dataset.match,
+                               display_name: el.value }) })).json();
+      if (!r.ok) window.alert("rename failed: " + r.error);
+    } catch (err) { window.alert("rename failed: " + err); }
+    IDX = await (await fetch("index.json")).json();
+    renderSeriesTable();
+    return;
+  }
+  if (el.dataset.series) {
+    const series = el.dataset.series, val = el.value;
     if (SERVER) {                       // persist server-side; localStorage = fallback
       try {
         const r = await (await fetch("api/rename", {
@@ -430,8 +908,19 @@ document.addEventListener("change", async e => {
     renderSeriesTable();                       // refresh watch links w/ new title
   }
 });
+// live search + sortable headers
+$("q").addEventListener("input", renderSeriesTable);
+document.querySelector("#st thead").addEventListener("click", e => {
+  const th = e.target.closest("th.sortable");
+  if (!th) return;
+  const col = th.dataset.sort;
+  if (SORT.col === col) SORT.dir = -SORT.dir;
+  else SORT = { col, dir: col === "started" || col === "latest" ? -1 : 1 };
+  renderSeriesTable();
+});
 
 // ---- Tournaments tab: spoiler-free bracket/leaderboard (results behind a reveal) ----
+let JOBSCACHE = [];                           // latest jobs — series 🔴 Live links
 let TOURN_OPEN = null;                        // name of the expanded tournament
 const TCACHE = {};                            // name -> tournament.json
 const TREV = {};                              // name -> results revealed?
@@ -445,9 +934,10 @@ function renderTournList() {
   for (const t of list) {
     const tr = document.createElement("tr");
     tr.innerHTML =
-      `<td>${t.name}</td><td class="dim">${t.format}</td>` +
+      `<td>${esc(t.name)}${t.cancelled ? ' <span class="warn">✖ cancelled</span>' : t.partial ? ' <span class="warn">⏳ live</span>' : ""}</td>` +
+      `<td class="dim">${esc(t.format)}</td>` +
       `<td class="dim">${t.matchups}</td>` +
-      `<td><a class="btn btn-watch topen" href="#" data-t="${t.name}">` +
+      `<td><a class="btn btn-watch topen" href="#" data-t="${esc(t.name)}">` +
       `${TOURN_OPEN === t.name ? "▼ Close" : "▶ Open"}</a></td>`;
     tb.appendChild(tr);
   }
@@ -465,8 +955,8 @@ function renderTournDetail() {
   const rkeys = Object.keys(rounds).sort((a, b) => a - b);
   const elim = (tcfg.format || "round_robin") === "single_elim";
   let h = `<div class="dim" style="margin-bottom:8px">` +
-    `format <b>${tcfg.format || "round_robin"}</b> · ` +
-    `${tcfg.games_per_match || 1} game(s)/matchup · memos ${tcfg.memo_policy || "none"} ` +
+    `format <b>${esc(tcfg.format || "round_robin")}</b> · ` +
+    `${esc(tcfg.games_per_match || 1)} game(s)/matchup · memos ${esc(tcfg.memo_policy || "none")} ` +
     `<a class="btn btn-dl treveal" data-t="${name}" href="#">` +
     `${rev ? "🙈 Hide results" : "👁 Reveal results (spoilers)"}</a></div>`;
   h += `<div class="brkt">`;
@@ -480,8 +970,8 @@ function renderTournDetail() {
       h += `<div class="mu">`;
       for (const p of m.players) {
         const tot = rev ? m.games.reduce((s, g) => s + (g.scores[p] || 0), 0) : "";
-        h += `<div class="p"><span class="${rev && m.winner === p ? "adv" : ""}">${p}</span>` +
-             `<span class="dim">${tot}</span></div>`;
+        h += `<div class="p"><span class="${rev && m.winner === p ? "adv" : ""}">${esc(p)}</span>` +
+             `<span class="dim">${esc(tot)}</span></div>`;
       }
       h += `<div>` + m.games.map(g =>
         `<a class="btn btn-dl" target="_blank" style="padding:1px 8px" ` +
@@ -494,18 +984,18 @@ function renderTournDetail() {
   if (rev && elim) {
     h += `<div class="rnd" style="justify-content:center">` +
          `<div class="rlabel">champion</div>` +
-         `<div class="mu"><span class="champ">🏆 ${tj.champion}</span></div></div>`;
+         `<div class="mu"><span class="champ">🏆 ${esc(tj.champion)}</span></div></div>`;
   }
   h += `</div>`;
   if (rev) {
     const rows = Object.entries(tj.standings || {})
       .sort((a, b) => b[1].wins - a[1].wins || b[1].score - a[1].score);
-    h += `<div style="margin-top:12px" class="champ">🏆 champion: ${tj.champion}</div>` +
+    h += `<div style="margin-top:12px" class="champ">🏆 champion: ${esc(tj.champion)}</div>` +
       `<table style="margin-top:6px;max-width:460px" id="tstand"><thead><tr>` +
       `<th>player</th><th>wins</th><th>games</th><th>total score</th></tr></thead><tbody>` +
       rows.map(([n, s]) =>
-        `<tr><td class="${n === tj.champion ? "win" : ""}">${n}</td>` +
-        `<td>${s.wins}</td><td>${s.games}</td><td>${s.score}</td></tr>`).join("") +
+        `<tr><td class="${n === tj.champion ? "win" : ""}">${esc(n)}</td>` +
+        `<td>${esc(s.wins)}</td><td>${esc(s.games)}</td><td>${esc(s.score)}</td></tr>`).join("") +
       `</tbody></table>`;
     const mf = tj.memos_final || {};
     if (Object.keys(mf).length) {
@@ -561,6 +1051,36 @@ function modelOptions(cur) {
     MODELS.scripted.map(m => `<option ${m === cur ? "selected" : ""}>${m}</option>`).join("") +
     `</optgroup>`;
 }
+
+// ---- model badges: family logo (logos.json, optional) or colored monogram ----
+const MODEL_FAMS = [
+  ["gpt", "#10a37f", "G"], ["openai", "#10a37f", "G"],
+  ["claude", "#d97757", "A"], ["anthropic", "#d97757", "A"],
+  ["opus", "#d97757", "A"], ["sonnet", "#d97757", "A"], ["haiku", "#d97757", "A"],
+  ["qwen", "#615ced", "Q"],
+  ["kimi", "#16d5d1", "K"], ["moonshot", "#16d5d1", "K"],
+  ["glm", "#4268fa", "Z"], ["zhipu", "#4268fa", "Z"],
+  ["deepseek", "#4d6bfe", "D"], ["llama", "#0866ff", "L"],
+  ["mistral", "#fa500f", "M"], ["gemini", "#3d81f6", "G"],
+];
+let MODEL_LOGOS = {};
+function modelBadge(idOrLabel, big) {
+  const cls = big ? "mlogo big" : "mlogo";
+  const id = String(idOrLabel || "").toLowerCase();
+  const hit = MODEL_FAMS.find(([k]) => id.includes(k));
+  if (hit && MODEL_LOGOS[hit[0]]) {
+    return `<img class="${cls}" src="${MODEL_LOGOS[hit[0]]}" alt="">`;
+  }
+  const color = hit ? hit[1] : "#3a4a6b";
+  const letter = hit ? hit[2]
+    : (String(idOrLabel || "?").trim()[0] || "?").toUpperCase();
+  return `<span class="${cls} mono" style="background:${color}">${letter}</span>`;
+}
+if (location.protocol.startsWith("http")) {
+  fetch("logos.json").then(r => r.ok ? r.json() : {})
+    .then(d => { MODEL_LOGOS = d || {}; }).catch(() => {});
+}
+
 function renderPlayers() {
   const el = $("players");
   el.innerHTML = "";
@@ -569,12 +1089,16 @@ function renderPlayers() {
     const promptNames = Object.keys(PROMPTS);
     const tile = document.createElement("div");
     tile.className = "tile";
+    tile.style.position = "relative";
     tile.innerHTML =
-      `<h3><input class="sname pf pname" data-i="${i}" data-f="label" ` +
+      `<h3 style="display:flex;align-items:center;gap:2px">` +
+      `${modelBadge(p.model, true)}` +
+      `<input class="sname pf pname" style="flex:1;min-width:0" data-i="${i}" data-f="label" ` +
       `value="${(p.label || "").replace(/"/g, "&quot;")}" ` +
       `placeholder="Player ${i + 1}" title="click to name this player">` +
-      (PLAYERS.length > 2 ? ` <a href="#" class="prm" data-i="${i}" ` +
-        `style="float:right;color:#ff6b6b">✕</a>` : "") + `</h3>` +
+      (PLAYERS.length > 2 ? `<a href="#" class="prm" data-i="${i}" ` +
+        `style="position:absolute;top:6px;right:9px;color:#ff6b6b" ` +
+        `title="remove this player">✕</a>` : "") + `</h3>` +
       `<label><span>model</span><select class="pf" data-i="${i}" data-f="model" ` +
       `style="max-width:230px">${modelOptions(p.model)}</select></label>` +
       (scripted ? `<div class="dim">scripted bot — no LLM settings</div>` :
@@ -591,9 +1115,10 @@ function renderPlayers() {
         `</select></label></div>` +
         `<label style="display:block"><span class="dim">operator prompt ` +
         `(optional, cap = memo_chars)</span></label>` +
-        `<textarea class="pf" data-i="${i}" data-f="prompt" rows="2" maxlength="8000" ` +
-        `style="width:100%;background:#0a1b33;color:var(--ink);` +
-        `border:1px solid var(--line);border-radius:6px;font:inherit;font-size:12px" ` +
+        `<textarea class="pf" data-i="${i}" data-f="prompt" rows="5" maxlength="8000" ` +
+        `style="width:100%;background:#0a1b33;color:var(--ink);min-height:76px;` +
+        `resize:vertical;border:1px solid var(--line);border-radius:6px;` +
+        `font:inherit;font-size:12px" ` +
         `placeholder="e.g. Always favor trade over war.">${p.prompt || ""}</textarea>` +
         `<div style="display:flex;gap:6px;align-items:center;margin-top:4px">` +
         `<select class="pload" data-i="${i}" style="max-width:120px">` +
@@ -616,6 +1141,7 @@ document.addEventListener("input", e => {
   if (!t.classList || !t.classList.contains("pf")) return;
   const p = PLAYERS[+t.dataset.i], f = t.dataset.f;
   if (!p) return;
+  if (f === "model") setTimeout(updateThinkWarn, 0);
   let v = t.value;
   if (f === "think") v = v === "" ? undefined : v === "true";
   else if (["temperature"].includes(f)) v = v === "" ? undefined : parseFloat(v);
@@ -624,6 +1150,7 @@ document.addEventListener("input", e => {
   }
   if (v === undefined || v === "" || Number.isNaN(v)) delete p[f]; else p[f] = v;
   if (f === "model") renderPlayers();          // scripted<->llm switches the tile body
+  if (["model", "think"].includes(f)) estimateCost();   // model/think move the $
 });
 document.addEventListener("change", async e => {
   const t = e.target;
@@ -638,7 +1165,7 @@ document.addEventListener("click", async e => {
   if (!t) return;
   if (t.id === "addplayer") {
     e.preventDefault();
-    const cap = $("cmode").value === "tournament" ? 16 : 4;
+    const cap = $("cmode").value === "tournament" ? 16 : 8;
     if (PLAYERS.length < cap) {
       PLAYERS.push({ model: MODELS.scripted[PLAYERS.length % 4] });
       renderPlayers();
@@ -704,6 +1231,20 @@ function renderConfigForm() {
           `</select>`;
       } else if (s.t === "bool") {
         input = `<input type="checkbox" id="${id}" data-sec="${sec}" data-k="${k}" ${s.d ? "checked" : ""}>`;
+      } else if (k === "base_prompt") {
+        // the one long-text knob: a real editor on its OWN full-width row
+        // (inside the flex label it was squeezed to half the tile), themed
+        // like the operator-prompt boxes + a way to start from the suggested
+        // built-in instead of a blank box
+        input = `<span style="display:block;flex-basis:100%">` +
+                `<textarea id="${id}" data-sec="${sec}" ` +
+                `data-k="${k}" rows="9" style="width:100%;min-height:140px;` +
+                `resize:vertical;background:#0a1b33;color:var(--ink);` +
+                `border:1px solid var(--line);border-radius:6px;` +
+                `font:inherit;font-size:11px" ` +
+                `placeholder="empty = the built-in suggested base prompt"></textarea>` +
+                `<a href="#" class="btn btn-dl" id="loadbase" style="padding:1px 8px">` +
+                `📜 load suggested for editing</a></span>`;
       } else {
         input = `<input class="sname" style="width:100px" id="${id}" data-sec="${sec}" ` +
                 `data-k="${k}" value="${s.d}">`;
@@ -711,14 +1252,305 @@ function renderConfigForm() {
       // the ⓘ popover text IS the schema doc — identical bytes to what an agent
       // reads in config-schema.json
       tile.insertAdjacentHTML("beforeend",
-        `<label><span>${k}` +
+        `<label${k === "base_prompt" ? ' style="flex-wrap:wrap"' : ""}><span>${k}` +
         `<span class="info">i<span class="pop">${(s.doc || "").replace(/</g, "&lt;")}` +
         `${"lo" in s ? `<br><span class="dim">range ${s.lo}–${s.hi} · default ${s.d}</span>` :
           `<br><span class="dim">default ${s.d}</span>`}</span></span></span>${input}</label>`);
     }
     holder.appendChild(tile);
   }
+  masonryLayout();
 }
+// pack the knob tiles into the shortest column (leftmost on ties) so the form
+// fills left-first at any width. Heights are estimated from row counts —
+// knob rows are uniform, so the estimate packs as well as measuring would
+function masonryLayout() {
+  const form = $("cform");
+  const tiles = [...form.querySelectorAll(".tile")];
+  if (!tiles.length) return;
+  const ncols = Math.max(1, Math.min(tiles.length,
+    Math.floor((form.clientWidth + 12) / 352) || 1));
+  if (ncols === form.querySelectorAll(":scope > .cfcol").length) return;
+  form.innerHTML = "";
+  const cols = [], heights = [];
+  for (let i = 0; i < ncols; i++) {
+    const c = document.createElement("div");
+    c.className = "cfcol";
+    form.appendChild(c);
+    cols.push(c);
+    heights.push(0);
+  }
+  // core engine tiles get FIXED columns when there is room (the layout:
+  // World→Pacing in col 1, Economy→Combat in col 2, Scenario starts col 3);
+  // everything else packs into the shortest column as before
+  const PIN = ncols >= 3
+    ? { scenario: 0, world: 1, pacing: 1, economy: 2, combat: 2 }
+    : {};
+  for (const t of tiles) {
+    const est = 2 + t.querySelectorAll("label").length +
+                6 * t.querySelectorAll("textarea").length;
+    const sec = (t.querySelector("h3") || {}).textContent || "";
+    let best = PIN[sec] ?? -1;
+    if (best < 0 || best >= ncols) {
+      best = 0;
+      for (let i = 1; i < ncols; i++) {
+        if (heights[i] < heights[best]) best = i;
+      }
+    }
+    cols[best].appendChild(t);
+    heights[best] += est;
+  }
+}
+let __mzT = null;
+function __mzKick() {
+  clearTimeout(__mzT);
+  __mzT = setTimeout(masonryLayout, 120);
+}
+window.addEventListener("resize", __mzKick);
+// the form renders while its tab is HIDDEN (clientWidth 0 -> one column);
+// re-pack whenever it actually gets a width. The ncols guard above stops
+// the observer->relayout->observer loop.
+if (window.ResizeObserver) {
+  new ResizeObserver(__mzKick).observe(document.getElementById("cform"));
+}
+// ---- game-mode presets: one-click rule bundles + user-saved ones ----
+// knobs are FLAT (schema keys are unique); players optionally replaces the roster
+const GAME_PRESETS = {
+  "Swabbie": {
+    desc: "🧽 deck duty — you just watch the crew work: deterministic bots, no LLM calls, no cost, instant results.",
+    players: ["merchant", "corsair"],
+    knobs: { role_fallback: true, programs: false, parley: false,
+             allow_designs: false, scuttle: false, voyage_reports: false,
+             warmup: false, memos: false },
+  },
+  "Midshipman": {
+    desc: "⚓ the young gentleman's first posting: classic roles only — no ship programming, return-only signals, no designs. The gentlest on-ramp.",
+    knobs: { programs: false, role_fallback: true, allow_designs: false,
+             flex_design: false, scuttle: false, islands: false,
+             signal_mode: "return_only", warmup: true },
+  },
+  "Lieutenant": {
+    desc: "🎖 first real command: conn programming ON with role autopilot as a safety net; full-order signals; no custom designs; the full conn tutorial.",
+    knobs: { programs: true, role_fallback: true, allow_designs: false,
+             flex_design: false, islands: false, signal_mode: "custom",
+             warmup: true, conn_examples: 5 },
+  },
+  "Captain": {
+    desc: "⛵ your own ship of the line, no safety nets: conn only (no autopilot), custom ship design, scuttle, passive income, full-order signals — the full conn tutorial still rides along.",
+    knobs: { programs: true, role_fallback: false, allow_designs: true,
+             flex_design: false, signal_mode: "custom", scuttle: true,
+             income_amount: 2, warmup: true, conn_examples: 5 },
+  },
+  "Admiral": {
+    desc: "🌊 the whole fleet, the whole sea, no quarter: flex ship design, island archipelago, NO warmup planning phase, NO voyage reports, and only the bare two conn examples — the models work the game out alone.",
+    knobs: { programs: true, role_fallback: false, allow_designs: true,
+             flex_design: true, islands: true, signal_mode: "custom",
+             scuttle: true, income_amount: 2, warmup: false,
+             voyage_reports: false, conn_examples: 2 },
+  },
+};
+let USER_PRESETS = {};
+function renderPresetOptions() {
+  const sel = $("cpreset");
+  const cur = sel.value;
+  sel.innerHTML = `<option value="">— choose —</option>` +
+    `<optgroup label="built-in — the ranks climb in difficulty">` +
+    Object.keys(GAME_PRESETS).map(n => `<option>${n}</option>`).join("") +
+    `</optgroup>` +
+    (Object.keys(USER_PRESETS).length
+      ? `<optgroup label="saved">` +
+        Object.keys(USER_PRESETS).map(n => `<option>${n}</option>`).join("") +
+        `</optgroup>` : "");
+  sel.value = cur;
+}
+async function refreshPresets() {
+  if (!SERVER) return;
+  try { USER_PRESETS = await (await fetch("api/presets")).json(); } catch {}
+  renderPresetOptions();
+}
+function applyPreset(name) {
+  const p = GAME_PRESETS[name] || USER_PRESETS[name];
+  if (!p) return;
+  renderConfigForm();                        // clean slate: defaults first
+  for (const [k, v] of Object.entries(p.knobs || {})) {
+    const el = document.querySelector(`#cform [data-k="${k}"]`);
+    if (!el) continue;
+    if (el.type === "checkbox") el.checked = !!v;
+    else el.value = v;
+  }
+  if (Array.isArray(p.players) && p.players.length) {
+    PLAYERS.length = 0;
+    for (const m of p.players) PLAYERS.push({ model: m });
+    renderPlayers();
+  }
+  $("cpresetdesc").textContent = p.desc || "";
+  updateAuxHint();
+  updateThinkWarn();
+}
+function currentKnobDiff() {
+  // every non-default form value, flat — the same diff buildConfig writes
+  const out = {};
+  for (const el of document.querySelectorAll("#cform [data-sec]")) {
+    const sec = el.dataset.sec, k = el.dataset.k, spec = CSCHEMA[sec][k];
+    let v = el.type === "checkbox" ? el.checked :
+            spec.t === "int" ? parseInt(el.value) :
+            spec.t === "float" ? parseFloat(el.value) : el.value;
+    if (spec.t === "enum" && typeof spec.d === "number") v = parseInt(v);
+    if (String(v) !== String(spec.d)) out[k] = v;
+  }
+  return out;
+}
+
+// think-off is asymmetric: closed reasoning models keep a minimal hidden pass
+// no matter what — warn whenever the knob is off in a mixed roster
+function updateThinkWarn() {
+  const el = document.querySelector('#cform [data-k="think"]');
+  const warn = $("thinkwarn");
+  if (!el || !warn) return;
+  const sticky = (PLAYERS || []).map(p => String(p.model || "").toLowerCase())
+    .filter(m => m.includes("gpt-5") || m.includes("anthropic")
+              || m.includes("claude") || m.includes("opus")
+              || m.includes("sonnet") || m.includes("haiku"));
+  const show = !el.checked && sticky.length > 0;
+  warn.style.display = show ? "" : "none";
+  if (show) $("thinkwarnwho").textContent = sticky.join(", ");
+}
+
+// Suggested aux size: one sim runs at a time, so the driver is a single game's
+// replay held in memory — map area × ticks relative to the standard game. A
+// hint, never an override: the operator picks.
+// read a knob's EFFECTIVE value from the form (or its schema default)
+function effKnob(sec, k) {
+  const el = document.querySelector(
+    `#cform [data-sec="${sec}"][data-k="${k}"]`);
+  const spec = CSCHEMA && CSCHEMA[sec] && CSCHEMA[sec][k];
+  if (!el) return spec ? spec.d : undefined;
+  if (el.type === "checkbox") return el.checked;
+  if (!spec) return el.value;
+  return spec.t === "int" ? parseInt(el.value)
+       : spec.t === "float" ? parseFloat(el.value) : el.value;
+}
+
+// Pre-flight cost estimate, biased HIGH on purpose (better a pleasant surprise
+// than a runaway bill): generous per-call token assumptions + round up. Calls
+// are exact-ish (windows + warmup + debrief per admiral per game); tokens/call
+// are assumed. Multiplies by the expected number of games — series count for a
+// series, and the full bracket's game total for a tournament.
+const EST_TIN = 4000, EST_TOUT_THINK = 4000, EST_TOUT_FLAT = 800;
+function combos(n, k) {                     // n choose k
+  if (k < 0 || k > n) return 0;
+  let c = 1;
+  for (let i = 0; i < k; i++) c = c * (n - i) / (i + 1);
+  return Math.round(c);
+}
+function tournamentGameTotal() {
+  const n = PLAYERS.length;
+  const fmt = effKnob("tournament", "format") || "round_robin";
+  const ppm = parseInt(effKnob("tournament", "players_per_match")) || 2;
+  const gpm = parseInt(effKnob("tournament", "games_per_match")) || 1;
+  const rounds = parseInt(effKnob("tournament", "rounds")) || 1;
+  let matchups;
+  if (fmt === "round_robin") matchups = combos(n, ppm);
+  else if (fmt === "single_elim") matchups = Math.max(1, Math.ceil((n - 1) / Math.max(1, ppm - 1)));
+  else matchups = rounds * Math.max(1, Math.floor(n / ppm));   // random_pairs
+  // high side: assume every per-matchup series is played to its full length
+  return { matchups, ppm, totalGames: matchups * gpm };
+}
+function estimateCost() {
+  const box = $("ccost");
+  if (!box || !CSCHEMA) return;
+  const mode = $("cmode").value;
+  const win = effKnob("scenario", "win");
+  const window = effKnob("pacing", "window") || 100;
+  const maxTicks = win === "domination"
+    ? (effKnob("scenario", "domination_cap") || 18000)
+    : (effKnob("pacing", "max_ticks") || 6000);
+  const warmup = effKnob("admirals", "warmup") !== false;
+  const thinkDefault = effKnob("admirals", "think") !== false;
+  const memos = mode !== "match" && effKnob("series", "memos") !== false;
+  const windows = Math.ceil(maxTicks / window);
+  const perGame = windows + (warmup ? 1 : 0) + (memos ? 1 : 0);
+  const prices = MODELS.prices || {};
+  // per-admiral cost of ONE game, per player
+  const costs = [];
+  let unpriced = 0;
+  for (const p of PLAYERS) {
+    if (MODELS.scripted.includes(p.model)) continue;
+    const pr = prices[p.model];
+    if (!pr) { unpriced++; costs.push(0); continue; }
+    const think = p.think === true ? true
+                : p.think === false ? false : thinkDefault;
+    const tout = think ? EST_TOUT_THINK : EST_TOUT_FLAT;
+    costs.push(perGame * (EST_TIN * pr[0] + tout * pr[1]) / 1e6);
+  }
+  if (!costs.length) {
+    box.textContent = "estimated run cost: free (scripted bots)";
+    box.title = ""; box.style.color = ""; COST_EST = 0; return;
+  }
+  let cost;
+  if (mode === "tournament") {
+    const t = tournamentGameTotal();
+    // total = per-matchup (avg admiral × ppm) × games × matchups
+    const avg = costs.reduce((a, b) => a + b, 0) / costs.length;
+    cost = avg * t.ppm * t.totalGames;
+  } else {
+    const games = mode === "series" ? (effKnob("series", "games") || 3) : 1;
+    cost = costs.reduce((a, b) => a + b, 0) * games;
+  }
+  cost = Math.ceil(cost * 100) / 100;       // round UP to the cent
+  COST_EST = cost;
+  let txt = `estimated run cost: $${cost.toFixed(2)}`;
+  if (unpriced) txt += ` (+${unpriced} model${unpriced > 1 ? "s" : ""} unpriced)`;
+  box.textContent = txt;
+  box.title = "Deliberately high. Calls = ceil(ticks ÷ window) + warmup + "
+    + "debrief, per admiral per game, × the games in this run (a tournament "
+    + "counts its whole bracket); each call assumed ~" + EST_TIN + " in / ~"
+    + EST_TOUT_FLAT + "–" + EST_TOUT_THINK + " out tokens at the model's "
+    + "price, rounded up. Real cost is usually lower — a replay's Admirals "
+    + "panel shows the actual figure.";
+  applyCostCeiling();
+}
+let COST_EST = 0, COST_MAX = 0;
+// warn as the estimate nears the server's series-cost ceiling; block over it
+function applyCostCeiling() {
+  const box = $("ccost"), launch = $("claunch");
+  if (!box) return;
+  if (!COST_MAX || !COST_EST) {
+    box.style.color = ""; if (launch) launch.classList.remove("overbudget");
+    return;
+  }
+  if (COST_EST > COST_MAX) {
+    box.style.color = "#ff5d5d";
+    box.textContent += ` — over the $${COST_MAX} ceiling`;
+    if (launch) launch.classList.add("overbudget");
+  } else if (COST_EST >= COST_MAX * 0.75) {
+    box.style.color = "#ffb454";
+    box.textContent += ` — within 25% of the $${COST_MAX} ceiling`;
+    if (launch) launch.classList.remove("overbudget");
+  } else {
+    box.style.color = ""; if (launch) launch.classList.remove("overbudget");
+  }
+}
+
+function updateAuxHint() {
+  estimateCost();
+  const wrap = $("auxsizewrap");
+  $("claunch").textContent = $("cauxec").checked
+    ? "⚓ Set sail on a fleet auxiliary" : "⛵ Set sail on this server";
+  if (!$("cauxec").checked) { wrap.style.display = "none"; return; }
+  wrap.style.display = "";
+  let load = 1;
+  try {
+    const sc = buildConfig().scenario || {};
+    const mt = sc.win === "domination" ? (sc.domination_cap || 18000)
+                                       : (sc.max_ticks || 6000);
+    load = ((sc.width || 90) * (sc.height || 60) * mt) / (90 * 60 * 6000);
+  } catch (e) { /* form mid-edit */ }
+  const sug = load <= 1.5 ? "s-1vcpu-1gb" : load <= 4 ? "s-1vcpu-2gb"
+            : load <= 10 ? "s-2vcpu-4gb" : "s-4vcpu-8gb";
+  $("cauxhint").textContent = `suggested for this config: ${sug}`;
+}
+
 function buildConfig() {
   const mode = $("cmode").value;
   const cfg = { mode, seed: parseInt($("cseed").value) || 42 };
@@ -735,6 +1567,15 @@ function buildConfig() {
     const bucket = engineSecs.includes(sec) ? "scenario" : sec;
     buckets[bucket][k] = v;
   }
+  // domination overrides flag_salvage to 50 whenever the key is ABSENT, so
+  // "only non-defaults" would turn an explicit 0 back into 50 — always send
+  // the value in domination games (the one knob whose engine default depends
+  // on the mode)
+  if (buckets.scenario.win === "domination" &&
+      !("flag_salvage" in buckets.scenario)) {
+    const el = document.querySelector('#cform [data-k="flag_salvage"]');
+    if (el) buckets.scenario.flag_salvage = parseInt(el.value) || 0;
+  }
   for (const [b, vals] of Object.entries(buckets)) {
     if (Object.keys(vals).length) cfg[b] = vals;
   }
@@ -743,8 +1584,29 @@ function buildConfig() {
 }
 document.addEventListener("change", e => {
   if (e.target.id === "cmode") renderConfigForm();
+  if (e.target.id === "cpreset" && e.target.value) applyPreset(e.target.value);
 });
 document.addEventListener("click", e => {
+  if (e.target.id === "cpresetsave") {
+    e.preventDefault();
+    const name = $("cpresetname").value.trim();
+    if (!name) { $("cmsg").textContent = "✗ name the preset first"; return; }
+    fetch("api/presets", { method: "POST", body: JSON.stringify(
+      { name, knobs: currentKnobDiff(),
+        players: PLAYERS.map(p => p.model) }) })
+      .then(r => r.json()).then(d => {
+        if (!d.error) { USER_PRESETS = d; renderPresetOptions();
+                        $("cmsg").textContent = `preset "${name}" saved ✓`; }
+        else $("cmsg").textContent = "✗ " + d.error;
+      }).catch(err => { $("cmsg").textContent = "✗ " + err; });
+  }
+  if (e.target.id === "loadbase") {
+    e.preventDefault();
+    fetch("api/base-prompt").then(r => r.json()).then(d => {
+      const ta = document.querySelector('#cform [data-k="base_prompt"]');
+      if (ta && d.suggested) ta.value = d.suggested;
+    }).catch(() => {});
+  }
   if (e.target.id === "cdl") {
     e.preventDefault();
     const a = document.createElement("a");
@@ -757,8 +1619,19 @@ document.addEventListener("click", e => {
     e.preventDefault();
     const cfg = buildConfig();
     if ($("cname").value.trim()) cfg.name = $("cname").value.trim();
-    if ($("cauxec") && $("cauxec").checked) cfg.executor = "auxiliary";
+    if ($("cauxec") && $("cauxec").checked) {
+      cfg.executor = "auxiliary";
+      if ($("cauxsize") && $("cauxsize").value) cfg.aux_size = $("cauxsize").value;
+    }
+    if ($("cpublic") && $("cpublic").checked) cfg.public = true;
     delete cfg.outdir;
+    // over the ceiling: confirm + override (the server also hard-blocks
+    // without ack_cost, so this is the operator's deliberate bypass)
+    if (COST_MAX && COST_EST > COST_MAX) {
+      if (!window.confirm(`Estimated cost $${COST_EST.toFixed(2)} is over the ` +
+          `$${COST_MAX} ceiling. Launch anyway?`)) return;
+      cfg.ack_cost = true;
+    }
     fetch("api/run", { method: "POST", body: JSON.stringify(cfg) })
       .then(r => r.json()).then(d => {
         $("cmsg").textContent = d.error ? ("✗ " + d.error) :
@@ -777,6 +1650,7 @@ document.addEventListener("click", e => {
 fetch("config-schema.json").then(r => r.json()).then(s => {
   CSCHEMA = s;
   renderConfigForm();
+  estimateCost();
 }).catch(() => {});
 
 // ---- server-side launching: only offered when a live server answers ----
@@ -787,18 +1661,26 @@ fetch("api/health").then(r => r.json()).then(async h => {
     SERVER = true;
     SHOWCASE = !!h.showcase;
     if (h.aux) $("auxwrap").style.display = "";
+    if (h.showcase) $("pubwrap").style.display = "";
+    $("cauxec").addEventListener("change", updateAuxHint);
+    $("cform").addEventListener("change", () => { updateAuxHint(); updateThinkWarn(); });
     $("claunch").style.display = "";
     $("jobscard").style.display = "";
     pollJobs();
     setInterval(pollJobs, 5000);
     try { MODELS = await (await fetch("api/models")).json(); } catch {}
+    COST_MAX = +(MODELS.max_series_cost || 0);   // the server-tab ceiling
+    estimateCost();                              // prices just arrived
+    refreshPresets();
     // one-time migration: push anything stored browser-side to the server
     const ln = customNames();
     for (const [series, val] of Object.entries(ln)) {
       try {
-        const r = await (await fetch("api/rename", {
-          method: "POST", body: JSON.stringify({ series, display_name: val }) })).json();
-        if (r.ok) delete ln[series];
+        const resp = await fetch("api/rename", {
+          method: "POST", body: JSON.stringify({ series, display_name: val }) });
+        // any DEFINITIVE answer clears the local copy — a 404 (series gone)
+        // retried forever put an error in the console on every page load
+        if (resp.ok || resp.status === 404) delete ln[series];
       } catch {}
     }
     localStorage.setItem("flotilla-series-names", JSON.stringify(ln));
@@ -821,9 +1703,182 @@ fetch("api/health").then(r => r.json()).then(async h => {
 }).catch(() => {});
 refreshPrompts().then(renderPlayers);
 let LASTSIG = "";
+let RP_SEQ = 0;
+const FB_IDS = ["fb_ts", "fb_tsp", "fb_es", "fb_cm"];
+async function renderProviders() {
+  const box = $("provlist");
+  const seq = ++RP_SEQ;
+  let d;
+  try {
+    d = await (await fetch("api/providers", { method: "POST", body: "{}" })).json();
+  } catch (e) { box.textContent = "provider list unavailable: " + e; return; }
+  if (seq !== RP_SEQ) return;   // a newer render is in flight — last wins,
+  // not last-to-resolve (an add's stale render used to overwrite the
+  // post-check state until the tab was revisited)
+  const fb = d.fallback || {};
+  // never clobber unsaved fallback edits: a ⟳ or any provider op re-renders,
+  // and snapping the fields back to server state silently discarded them
+  const fbBusy = FB_IDS.some(id => $(id) &&
+    ($(id).dataset.dirty === "1" || document.activeElement === $(id)));
+  if (!fbBusy) {
+    $("fb_ts").value = fb.timeout_streak ?? 3;
+    $("fb_tsp").value = fb.timeout_streak_pipelined ?? 5;
+    $("fb_es").value = fb.error_streak ?? 2;
+    $("fb_cm").value = fb.canary_minutes ?? 10;
+  }
+  const lim = d.limits || {};
+  if ($("lim_cost") && document.activeElement !== $("lim_cost")) {
+    $("lim_cost").value = lim.max_series_cost ?? 0;
+  }
+  COST_MAX = +(lim.max_series_cost || 0);       // keep the launch guard in sync
+  applyCostCeiling();
+  const ax = d.aux || {};
+  $("auxlist").innerHTML = `<table style="width:100%"><thead><tr>
+    <th style="text-align:left">#</th><th style="text-align:left">Provider</th>
+    <th style="text-align:left">Region</th><th style="text-align:left">Default size</th>
+    <th style="text-align:left">Warm pool</th><th style="text-align:left">Status</th>
+    </tr></thead><tbody><tr><td>1</td><td><b>DigitalOcean droplets</b></td>
+    <td>${esc(ax.region || "—")}</td><td>${esc(ax.size || "—")}</td>
+    <td>${ax.pool != null ? esc(String(ax.pool)) : "—"}</td>
+    <td>${ax.configured ? "✓ configured (token in the server environment)"
+                        : "not configured"}</td></tr></tbody></table>`;
+  box.innerHTML = `<table style="width:100%"><thead><tr>
+    <th style="text-align:left">#</th><th style="text-align:left">Provider</th>
+    <th style="text-align:left">Key</th><th style="text-align:left">Models</th>
+    <th style="text-align:left">Checked</th><th></th></tr></thead><tbody>` +
+    (d.providers || []).map((p, i) => {
+      const models = (p.models || []);
+      const nmap = Object.keys(p.model_map || {}).length;
+      const mtxt = models.length
+        ? `${models.length} model${models.length === 1 ? "" : "s"}` +
+          (p.builtin ? "" : ` · ${nmap} mapped`) +
+          ` <span class="dim" title="${models.map(esc).join("&#10;")}">(hover)</span>`
+        : `<span class="dim">unchecked</span>`;
+      const when = p.checked
+        ? new Date(p.checked * 1000).toISOString().slice(0, 16).replace("T", " ")
+        : "—";
+      return `<tr style="${p.enabled === false ? "opacity:.5" : ""}">
+        <td>${i + 1}</td>
+        <td><b>${esc(p.label || p.id)}</b><br>
+          <span class="dim">${esc(p.base_url || "")}</span></td>
+        <td class="dim">${esc(p.key_hint || "")}</td>
+        <td>${mtxt}</td><td class="dim">${when}</td>
+        <td><div class="rowbtns">
+          <a class="btn btn-dl pvchk" href="#" data-id="${esc(p.id)}"
+             title="verify the key + refresh its model list">⟳</a>
+          <a class="btn btn-dl pvmv" href="#" data-id="${esc(p.id)}" data-dir="-1"
+             title="move up the ladder">↑</a>
+          <a class="btn btn-dl pvmv" href="#" data-id="${esc(p.id)}" data-dir="1"
+             title="move down the ladder">↓</a>
+          <a class="btn btn-dl pvtog" href="#" data-id="${esc(p.id)}"
+             data-en="${p.enabled === false ? 1 : 0}"
+             title="a disabled key stays stored but is skipped by fallback">
+             ${p.enabled === false ? "enable" : "disable"}</a>` +
+          (p.builtin ? "" : `<a class="btn btn-dl pvdel" href="#"
+             style="color:#ff5d5d" data-id="${esc(p.id)}"
+             title="remove this key from the server (asks first)">🗑</a>`) +
+        `</div></td></tr>`;
+    }).join("") + `</tbody></table>`;
+}
+async function provOp(body) {
+  let r;
+  try {
+    r = await (await fetch("api/providers-op", { method: "POST",
+      body: JSON.stringify(body) })).json();
+  } catch (err) {
+    // a dropped connection used to fail SILENTLY — the row kept its pre-op
+    // state and the operator believed the change landed
+    window.alert("provider change did not reach the server (mid-deploy? " +
+                 "network?) — the list shows the last saved state");
+    await renderProviders();
+    return { ok: false };
+  }
+  if (!r.ok) window.alert("provider change failed: " + r.error);
+  await renderProviders();
+  return r;
+}
+for (const id of FB_IDS) {
+  const el = $(id);
+  if (el) el.addEventListener("input", () => { el.dataset.dirty = "1"; });
+}
+document.addEventListener("click", async e => {
+  const t = e.target.closest("a");
+  if (!t) return;
+  if (t.classList.contains("pvchk")) {
+    e.preventDefault();
+    t.textContent = "…";
+    try {
+      const r = await (await fetch("api/provider-check", { method: "POST",
+        body: JSON.stringify({ id: t.dataset.id }) })).json();
+      if (!r.ok) window.alert("check failed: " + r.error);
+    } catch (err) {
+      window.alert("check did not complete (the server may be mid-deploy " +
+                   "— try again in a few seconds)");
+    }
+    renderProviders();
+    return;
+  }
+  if (t.classList.contains("pvmv")) {
+    e.preventDefault();
+    await provOp({ op: "move", id: t.dataset.id, dir: +t.dataset.dir });
+    return;
+  }
+  if (t.classList.contains("pvtog")) {
+    e.preventDefault();
+    await provOp({ op: "toggle", id: t.dataset.id, enabled: t.dataset.en === "1" });
+    return;
+  }
+  if (t.classList.contains("pvdel")) {
+    e.preventDefault();
+    if (!window.confirm("Remove this provider key from the server?")) return;
+    await provOp({ op: "remove", id: t.dataset.id });
+    return;
+  }
+  if (t.id === "pv_add") {
+    e.preventDefault();
+    const label = $("pv_label").value;
+    const r = await provOp({ op: "add", label,
+                   base_url: $("pv_base").value, key: $("pv_key").value });
+    // a rejected add keeps the typed key (fix the base_url and resubmit) and
+    // must NOT run the follow-up check — a same-label collision used to
+    // re-query the EXISTING provider and overwrite its discovered models
+    if (!r.ok) return;
+    $("pv_key").value = "";
+    // verify + discover models + auto-map immediately — the SERVER's id, so
+    // client/server id derivations can never disagree
+    try {
+      const r2 = await (await fetch("api/provider-check", { method: "POST",
+        body: JSON.stringify({ id: r.id }) })).json();
+      if (!r2.ok) window.alert("key added but the check failed: " + r2.error);
+    } catch (err) { /* table shows unchecked; ⟳ retries */ }
+    renderProviders();
+    return;
+  }
+  if (t.id === "fb_save") {
+    e.preventDefault();
+    for (const id of FB_IDS) { if ($(id)) delete $(id).dataset.dirty; }
+    await provOp({ op: "fallback", fallback: {
+      timeout_streak: $("fb_ts").value,
+      timeout_streak_pipelined: $("fb_tsp").value,
+      error_streak: $("fb_es").value,
+      canary_minutes: $("fb_cm").value } });
+    $("fb_msg").textContent = "saved ✓";
+    setTimeout(() => { $("fb_msg").textContent = ""; }, 2500);
+  }
+  if (t.id === "lim_save") {
+    e.preventDefault();
+    await provOp({ op: "limits",
+      fallback: {}, limits: { max_series_cost: +$("lim_cost").value || 0 } });
+    COST_MAX = +$("lim_cost").value || 0;
+    estimateCost();
+    $("lim_msg").textContent = "saved ✓";
+    setTimeout(() => { $("lim_msg").textContent = ""; }, 2500);
+  }
+});
 async function pollJobs() {
   try {
     const d = await (await fetch("api/runs")).json();
+    JOBSCACHE = d.jobs || [];
     const el = $("jobs");
     el.innerHTML = (d.jobs || []).map(j => {
       const prog = j.mode === "match" ? "" :
@@ -832,40 +1887,46 @@ async function pollJobs() {
         `<span class="st-${j.state === "running" ? "run" : j.state}">${j.state}</span>${prog}` +
         (j.state === "running" && j.mode !== "tournament" ?
           ` <a class="btn btn-watch" target="_blank" href="player.html?live=${j.id}">👁 watch live</a>` : "") +
-        (["queued", "running"].includes(j.state) ?
+        (j.state === "running" ?
+          ` <a class="btn btn-dl jpause" href="#" data-id="${j.id}"
+             title="freeze at the next window boundary — checkpoint kept, resume any time">⏸ pause</a>` : "") +
+        (j.state === "paused" ?
+          ` <a class="btn btn-watch jresume" href="#" data-id="${j.id}">▶ resume</a>` : "") +
+        (["queued", "running", "paused"].includes(j.state) ?
           ` <a class="btn btn-dl jcancel" href="#" data-id="${j.id}">✕ cancel</a>` : "") +
-        (j.error ? ` <span class="st-failed">${j.error}</span>` : "") +
+        (j.error ? ` <span class="st-failed">${esc(j.error)}</span>` : "") +
         (j.state === "running" && j.log && j.log.length ?
           `<div class="dim" style="font-size:11px">${(j.log.at(-1) || "").replace(/</g, "&lt;").slice(0, 140)}</div>` : "") +
         `</div>`;
     }).join("") || `<div class="dim">no runs yet — configure above and launch</div>`;
     // refresh the library whenever a run finishes OR any series lands a game
     const sig = (d.jobs || []).filter(j => j.state === "done").length + "|" +
-                (d.jobs || []).reduce((n, j) => n + (j.games_done || 0), 0);
-    if (sig !== LASTSIG) {
+                (d.jobs || []).reduce((n, j) => n + (j.games_done || 0), 0) + "|" +
+                (d.jobs || []).filter(j => ["queued", "running"].includes(j.state))
+                              .map(j => j.name).sort().join(",");
+    // never re-render over a rename in progress: wiping the tbody removes
+    // the focused input without firing change, silently dropping the typed
+    // name. LASTSIG stays stale so the next poll retries.
+    const editing = document.activeElement && document.activeElement.classList
+      && document.activeElement.classList.contains("nmedit");
+    if (sig !== LASTSIG && !editing) {
       LASTSIG = sig;
       const idx = await (await fetch("index.json")).json();
       IDX = idx;
       renderSeriesTable();
-      renderGames();
       renderTournList();
     }
   } catch (e) { /* server went away */ }
 }
 
+$("showarch").addEventListener("change", renderSeriesTable);
 fetch("index.json").then(r => r.json()).then(idx => {
   IDX = idx;
   const nt = (idx.tournaments || []).length;
   $("sub").textContent = `${(idx.series || []).length} series · ${idx.matches.length} games` +
     (nt ? ` · ${nt} tournament${nt > 1 ? "s" : ""}` : "") +
     ` · updated ${(idx.updated || "").replace("T", " ").slice(0, 16)} UTC`;
-  const types = [...new Set(idx.matches.map(m => m.type))];
-  const players = [...new Set(idx.matches.flatMap(m => Object.keys(m.scores)))];
-  for (const t of types) $("ftype").insertAdjacentHTML("beforeend", `<option>${t}</option>`);
-  for (const p of players.sort()) $("fplayer").insertAdjacentHTML("beforeend", `<option>${p}</option>`);
-  $("ftype").onchange = $("fplayer").onchange = renderGames;
   renderSeriesTable();
-  renderGames();
   renderTournList();
 });
 </script>

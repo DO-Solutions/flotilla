@@ -30,6 +30,24 @@ def main():
     assert r["alive"] == [0], r
     assert r["ticks"] < 6000, "match should end early on elimination"
     assert eng.fleets[0].kills >= 150, "flagship bounty not credited"
+
+    # elimination purges the dead fleet's ghost contacts from EVERY plot —
+    # impossible data must not haunt state.enemies for contact_ttl
+    eng2 = Engine([("corsair", BOTS["corsair"]), ("idle", Idle())], seed=7,
+                  scenario={"role_fallback": True})
+    tgt2 = eng2.fleets[1]
+    # plant a stale contact of fleet 1 on fleet 0's plot, then eliminate 1
+    ghost = next(s for s in eng2.ships.values() if s.fleet == 1)
+    eng2.fleets[0].contacts[ghost.id] = {"x": ghost.x, "y": ghost.y,
+                                         "t": 0, "fleet": 1,
+                                         "preset": ghost.preset,
+                                         "laden": False}
+    tgt2.flag_hull = 0
+    eng2.tick()
+    assert not tgt2.alive
+    assert all(rec["fleet"] != 1
+               for f in eng2.fleets.values() for rec in f.contacts.values()), \
+        "dead fleet's ghosts must be purged from every plot"
     print("PASS test_elimination")
 
 

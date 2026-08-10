@@ -34,20 +34,20 @@ def _mid(a, b):
 
 
 class Merchant:
-    """Economy-max: many traders, a scout, guards only after being hit."""
+    """Economy-max: many trawlers, a scout, guards only after being hit."""
     name = "merchant"
 
     def decide(self, summary, rng):
         you = summary["you"]
         c = _counts(summary)
         build = []
-        budget = you["cargo"]
+        budget = you["treasury"]
         want_guards = 2 if you["recent_hits"] > 0 else 0
         while budget >= 15 and len(build) + you["builds"] < 3:
             if c.get("C", 0) + sum(1 for b in build if b["squad"] == "C") < want_guards:
                 build.append(dict(preset="frigate", squad="C"))
             elif c.get("A", 0) + sum(1 for b in build if b["squad"] == "A") < 8:
-                build.append(dict(preset="trader", squad="A"))
+                build.append(dict(preset="trawler", squad="A"))
             elif c.get("B", 0) < 1:
                 build.append(dict(preset="scout", squad="B"))
             else:
@@ -67,7 +67,7 @@ class Merchant:
             "C": dict(role="guard", rally=rally if you["recent_hits"] else you["harbor"],
                       aggression=2, retreat_hull_pct=25),
         }
-        th = f"Trade winds favor us — {c.get('A', 0)} traders on the {rally} grounds."
+        th = f"Trade winds favor us — {c.get('A', 0)} trawlers on the {rally} grounds."
         if you["recent_hits"]:
             th = "We were hit! Commissioning frigates to guard the harbor."
         return dict(orders=orders, build=build, signal=False, thoughts=th)
@@ -82,18 +82,18 @@ class Corsair:
         c = _counts(summary)
         target = _richest_enemy(summary)
         build = []
-        budget = you["cargo"]
+        budget = you["treasury"]
         raiders = c.get("D", 0) + c.get("E", 0)
         while budget >= 15 and len(build) + you["builds"] < 3:
             have = lambda sq: c.get(sq, 0) + sum(1 for b in build if b["squad"] == sq)
             if have("A") < 3:
-                build.append(dict(preset="trader", squad="A"))
+                build.append(dict(preset="trawler", squad="A"))
             elif have("D") < 5:
                 build.append(dict(preset="raider", squad="D"))
             elif have("E") < 6:
                 build.append(dict(preset="raider", squad="E"))
             elif have("A") < 6:
-                build.append(dict(preset="trader", squad="A"))
+                build.append(dict(preset="trawler", squad="A"))
             else:
                 break
             budget -= 15
@@ -141,11 +141,11 @@ class Admiralty:
         you = summary["you"]
         c = _counts(summary)
         build = []
-        budget = you["cargo"]
+        budget = you["treasury"]
         while budget >= 15 and len(build) + you["builds"] < 3:
             have = lambda sq: c.get(sq, 0) + sum(1 for b in build if b["squad"] == sq)
             if have("A") < 4:
-                build.append(dict(preset="trader", squad="A"))
+                build.append(dict(preset="trawler", squad="A"))
             elif have("B") < 1:
                 build.append(dict(preset="scout", squad="B"))
             elif have("C") < 2:
@@ -155,7 +155,7 @@ class Admiralty:
             elif have("D") < 3:
                 build.append(dict(preset="raider", squad="D"))
             elif have("A") < 7:
-                build.append(dict(preset="trader", squad="A"))
+                build.append(dict(preset="trawler", squad="A"))
             else:
                 break
             budget -= 15
@@ -191,13 +191,13 @@ class Turtle:
         you = summary["you"]
         c = _counts(summary)
         build = []
-        budget = you["cargo"]
+        budget = you["treasury"]
         while budget >= 15 and len(build) + you["builds"] < 3:
             have = lambda sq: c.get(sq, 0) + sum(1 for b in build if b["squad"] == sq)
             if have("C") < 2:
                 build.append(dict(preset="frigate", squad="C"))
             elif have("A") < 6:
-                build.append(dict(preset="trader", squad="A"))
+                build.append(dict(preset="trawler", squad="A"))
             elif have("E") < 2:
                 build.append(dict(preset="frigate", squad="E"))
             else:

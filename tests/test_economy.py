@@ -37,7 +37,7 @@ class Idle(Scripted):
         super().__init__([])
 
 
-ok(resolve({})["timeout_s"] == 90, "decision timeout default is 90s")
+ok(resolve({})["timeout_s"] == 300, "decision timeout default is 300s (Kimi thinking measured to 171s+)")
 ok(resolve({})["role_fallback"] is False, "role autopilot defaults OFF")
 
 # --- roles off: ordered-but-unprogrammed ships stay in port ---
@@ -97,7 +97,7 @@ eng3.fleets[0].cargo = 2                       # deposits may have refilled it
 ok(eng3.fleets[0].queued_signal is None, "cancel clears the queued signal")
 
 # build drop warning
-bot4 = Scripted([{"build": [{"preset": "trader", "squad": "A"}]}, {}])
+bot4 = Scripted([{"build": [{"preset": "trawler", "squad": "A"}]}, {}])
 eng4 = Engine([("B", bot4), ("X", Idle())], seed=3)
 eng4.fleets[0].cargo = 3                       # ship costs 15
 for _ in range(WINDOW + 1):
@@ -147,8 +147,8 @@ class Hostile(Scripted):
 
 
 HOSTILE_ACTIONS = [
-    {"build": {"preset": "trader"}},                  # the field-crash shape
-    {"build": "trader", "scuttle": {"id": 1}},
+    {"build": {"preset": "trawler"}},                  # the field-crash shape
+    {"build": "trawler", "scuttle": {"id": 1}},
     {"orders": ["forage"], "programs": ["when"], "refit": ["A"]},
     {"designs": "corvette", "parley": {"to": "all"}},
     {"signal": ["return"], "scratchpad": ["x"]},

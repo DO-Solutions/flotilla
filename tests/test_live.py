@@ -87,8 +87,6 @@ ok(d["state"] == "running" and d["name"] == "live-series" and d["game"] == 1,
 ofs = d["ofs"]
 d2 = get(f"/api/live/livejob?ofs={ofs}")
 ok(d2["lines"] == [] and d2["ofs"] == ofs, "caught up: no lines, stable offset")
-with open(lf, "a") as fh:
-    fh.seek(0, 2)
 with open(lf, "r+") as fh:
     fh.seek(ofs)
     fh.write(json.dumps(flushes[1]) + "\n")
@@ -101,8 +99,36 @@ with open(lf, "w") as fh:                       # new game: file truncated
 d4 = get(f"/api/live/livejob?ofs={d3['ofs']}")
 ok(len(d4["lines"]) == 1 and d4["lines"][0].get("header"),
    "truncation (new game) resets the reader to the fresh header")
-ok(get("/api/live/nope?ofs=0" if False else "/api/live/livejob?ofs=999999")["lines"][0].get("header"),
+ok(get("/api/live/livejob?ofs=999999")["lines"][0].get("header"),
    "absurd offset also resets cleanly")
+
+# --- 2 MB chunking + `more` + stream_game (wringer pass 2/3): a cold join
+# on a big backlog must drain in bounded chunks, delivering every line
+# exactly once in order, and carry the file's first-header game number ---
+big_hdr = dict(hdr, header=True, game=2)
+with open(lf, "w") as fh:
+    fh.write(json.dumps(big_hdr) + "\n")
+    pad = "x" * 6000
+    for i in range(500):                          # ~3 MB total
+        fh.write(json.dumps({"t": i, "pad": pad}) + "\n")
+d5 = get("/api/live/livejob?ofs=0")
+ok(d5.get("more") is True and d5["ofs"] < os.path.getsize(lf),
+   "oversize backlog ships chunked with more=True")
+ok(d5.get("stream_game") == 2,
+   f"stream_game carries the first header's game ({d5.get('stream_game')})")
+got = list(d5["lines"])
+ofs5 = d5["ofs"]
+for _ in range(10):
+    dn = get(f"/api/live/livejob?ofs={ofs5}")
+    got.extend(dn["lines"])
+    ofs5 = dn["ofs"]
+    if not dn.get("more"):
+        break
+ok(len(got) == 501 and got[0].get("header")
+   and [l.get("t") for l in got[1:]] == list(range(500)),
+   f"draining the chunks yields every line exactly once, in order "
+   f"({len(got)} lines)")
+
 try:
     get("/api/live/nope?ofs=0")
     ok(False, "unknown job -> 404")
