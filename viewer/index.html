@@ -33,8 +33,12 @@
   body.fsmode { overflow: hidden; }
   body.fsmode header, body.fsmode #legend { display: none; }
   body.fsmode #layout { display: block; }
+  /* the chart is FIXED 16:9; on wider/taller displays the spill-over is
+     painted as open sea (the map's own gradient), not dead black bars — the
+     water reaches the screen edges even where the chart can't */
   body.fsmode #seawrap { position: fixed; inset: 0; height: 100dvh; z-index: 5;
-    margin: 0; border: 0; border-radius: 0; padding: 0; background: #060d1c;
+    margin: 0; border: 0; border-radius: 0; padding: 0;
+    background: linear-gradient(#0a1b33, #081426);
     display: flex; align-items: center; justify-content: center; }
   body.fsmode canvas#sea { width: min(100vw, calc(100dvh * 16 / 9));
     max-height: 100dvh; border-radius: 0; }
@@ -451,6 +455,7 @@ try {
   S.spoiler = localStorage.getItem("flotilla-spoiler") !== "off";
   S.showNames = localStorage.getItem("flotilla-names") === "on";
   S.showGrid = localStorage.getItem("flotilla-grid") === "on";
+  S.eco = localStorage.getItem("flotilla-eco") === "on";
 } catch (e) {}
 const $ = id => document.getElementById(id);
 const canvas = $("sea");
@@ -604,10 +609,14 @@ function renderSettingsPanel() {
     `<label style="display:block;margin-bottom:6px">` +
     `<input type="checkbox" id="showgrid"${S.showGrid ? " checked" : ""}> ` +
     `grid lines (faint cell grid, brighter every 8 cells)</label>` +
-    `<label style="display:block;margin-bottom:8px">` +
+    `<label style="display:block;margin-bottom:6px">` +
     `<input type="checkbox" id="hidpi"${S.quality !== "standard" ? " checked" : ""}> ` +
     `sharp rendering (match display resolution — uncheck on slow machines)` +
-    `</label>`;
+    `</label>` +
+    `<label style="display:block;margin-bottom:8px">` +
+    `<input type="checkbox" id="ecomode"${S.eco ? " checked" : ""}> ` +
+    `⚡ economy playback — render at ~30 fps to leave GPU headroom for a ` +
+    `video call or screen share running alongside</label>`;
   const sec = (title, body, note) =>
     `<details><summary>${title}` +
     (note ? ` <span class="dim">${note}</span>` : "") +
@@ -775,11 +784,13 @@ function renderNav() {
     fg.innerHTML = `${I2L} Game 1`;
   } else fg.style.display = "none";
   // Game Y — jump to the last game; or straight to the LIVE game if the
-  // series is playing right now
-  if (S.bundle.liveJobId) {
+  // series is playing right now. When NEXT already is the live game, the
+  // Next button carries the red link alone — two live buttons side by side
+  // just made people wonder which to press.
+  if (S.bundle.liveJobId && S.gameIdx < fin - 1) {
     lg.style.display = ""; lg.innerHTML = `${I2R} Live game`;
     lg.style.background = "#c22432"; lg.dataset.live = S.bundle.liveJobId;
-  } else if (fin >= 3 && S.gameIdx < fin - 1) {
+  } else if (!S.bundle.liveJobId && fin >= 3 && S.gameIdx < fin - 1) {
     lg.style.display = ""; lg.innerHTML = `${I2R} Game ${fin}`;
     lg.style.background = ""; lg.dataset.live = "";
   } else { lg.style.display = "none"; lg.dataset.live = ""; }
@@ -1556,10 +1567,19 @@ function updateInspectorBody(fr) {
   const cat = S.cat[sid] || {};
   cat.preset = classAt(sid, fr.t) || cat.preset;   // refit-aware display class
   const stats = statsOf(cat.preset, cat.fleet) || {};
+  const hadProg = (S.byShip[sid] || []).some(
+    e => e.via === "port-program" || e.via === "signal-program");
   if (!row) {
+    // a sunk ship's PROGRAM HISTORY is exactly what a post-mortem wants —
+    // the memorial tile links it like the living tile does
     box.className = "on";
-    box.innerHTML = `<h3>ship ${sid} — ${cat.preset || "?"}</h3>` +
-      `<div class="intent">☠ sunk at ${fmtTime(S.sinkAt[sid] ?? 0)}</div>`;
+    box.innerHTML = `<h3>ship ${sid} — ${escHtml(cat.preset || "?")}</h3>` +
+      `<div class="intent">☠ sunk at ${fmtTime(S.sinkAt[sid] ?? 0)}</div>` +
+      (hadProg ? `<div class="sqrow" onclick="selProg(${sid})">⌨ view the conn ` +
+                 `program she sailed under →</div>` : "") +
+      (cat.squad != null ? `<div class="sqrow" onclick="selSquad(${cat.fleet},` +
+        `${escHtml(JSON.stringify(String(cat.squad)))})">⚑ squadron ` +
+        `${escHtml(String(cat.squad))} →</div>` : "");
     return;
   }
   const rowFleet = shipFleet(sid);
@@ -1609,7 +1629,11 @@ function updateInspectorBody(fr) {
     `<div>hull ${row[3]}% · cargo ${row[4]}</div>` +
     `<div class="intent">⛯ ${it ? escHtml(it.s) : "(no intent recorded yet)"}</div>` +
     `<div class="ord">orders${od && od.via ? " (" + escHtml(od.via) + ")" : ""}: ` +
-    `${od ? escHtml(JSON.stringify(od.od)) : "(initial standing orders)"}</div>`;
+    `${od ? escHtml(JSON.stringify(od.od)) : "(initial standing orders)"}</div>` +
+    // the header's small ⌨ link proved easy to miss — a full-width row makes
+    // "show me this ship's code" one obvious click
+    (hasProg ? `<div class="sqrow" onclick="selProg(${sid})">⌨ view this ` +
+               `ship's conn program (delivery history + diffs) →</div>` : "");
 }
 
 // per-fleet chart series (score, ship count, hauled) — built incrementally so
@@ -2715,6 +2739,14 @@ function loop(ts) {
   $("scrub").value = S.fi;
   const fr = S.rp.frames[S.fi];
   if (!fr) return;
+  // economy playback: render at ~30fps instead of every animation frame —
+  // playback stays in time (the accumulator above already advanced), only
+  // the paint rate halves. Frees GPU/compositor for a video call or webinar
+  // screen share running beside the replay.
+  if (S.eco) {
+    if (ts - (S._lastDraw || 0) < 31) return;
+    S._lastDraw = ts;
+  }
   try {
     updatePanels(fr);
     draw(fr, S.rp.frames[S.fi - 1], Math.min(1, S.acc));
@@ -2740,8 +2772,11 @@ function setPlay(p) {
 // so resizing the store rescales everything (text included) automatically.
 function fitCanvas() {
   if (!ctx) return;
+  // cap the backing store at 2× device pixels: 3× was 2.25× the pixels of 2×
+  // for sharpness nobody could see, and that fill cost is exactly what fights
+  // a screen-share encoder for the GPU
   const q = S.quality === "standard" ? 1
-    : Math.min(window.devicePixelRatio || 1, 3);
+    : Math.min(window.devicePixelRatio || 1, 2);
   const r = canvas.getBoundingClientRect();
   if (!r.width) return;
   // the store matches the DISPLAYED size × DPR; drawing stays in the LW×LH
@@ -3245,6 +3280,10 @@ document.addEventListener("change", e => {
     S.showNames = e.target.checked;
     try { localStorage.setItem("flotilla-names", S.showNames ? "on" : "off"); } catch (e2) {}
     if (S.rp) seek(S.fi);              // instant, in any replay or live view
+  }
+  if (e.target && e.target.id === "ecomode") {
+    S.eco = e.target.checked;
+    try { localStorage.setItem("flotilla-eco", S.eco ? "on" : "off"); } catch (e2) {}
   }
   if (e.target && e.target.id === "showgrid") {
     S.showGrid = e.target.checked;
