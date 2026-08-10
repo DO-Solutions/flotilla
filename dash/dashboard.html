@@ -39,7 +39,9 @@
   .tab .warn { color:#fbbf24; font-size:11px; }
   .btn { display:inline-block; border-radius:6px; padding:3px 12px; font-size:12px;
          margin-right:6px; }
-  .rowbtns { display:flex; flex-wrap:wrap; gap:4px; justify-content:flex-end; }
+  /* one line while there's room; wrapping is for narrow screens only */
+  .rowbtns { display:flex; flex-wrap:nowrap; gap:4px; justify-content:flex-end; }
+  @media (max-width: 1000px) { .rowbtns { flex-wrap:wrap; } }
   .rowbtns .btn { margin-right:0; }
   .rowbtns svg { vertical-align:-2px; }
   /* names read as plain text; double-click swaps in the edit box */
@@ -176,7 +178,7 @@
     <th class="sortable" data-sort="players">Players<span class="sortmark"></span></th>
     <th class="sortable" data-sort="started">Started (UTC)<span class="sortmark"></span></th>
     <th class="sortable" data-sort="latest">Latest game (UTC)<span class="sortmark"></span></th>
-    <th style="width:175px"></th>
+    <th style="width:215px"></th>
   </tr></thead><tbody></tbody></table>
 </div>
 <div class="card" id="tourntab" style="display:none">

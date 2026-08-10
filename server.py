@@ -748,6 +748,18 @@ def _run_job(job, cfg, resume=False):
                                       "FLOTILLA_LIVE": os.path.join(outdir,
                                                                     "live.jsonl")})
             PROCS[job["id"]] = p
+            # REGISTER, THEN RE-CHECK: state went "running" above, but PROCS was
+            # empty until this line — a /api/cancel landing in that window found
+            # no process to terminate and matched no branch in the handler, so
+            # the API answered 200 while the runner sailed on (and kept spending
+            # inference money) until it finished on its own. Closing the window
+            # here keeps ONE settle path: p.wait() below sees job["cancel"] and
+            # settles the state exactly once.
+            if job.get("cancel"):
+                try:
+                    p.terminate()
+                except Exception:
+                    pass
             for line in p.stdout:
                 job["log"].append(line.rstrip()[:400])
                 if '"winner"' in line:
@@ -3177,6 +3189,20 @@ def main():
     host, port = BIND.rsplit(":", 1)
     if not os.environ.get("DO_INFERENCE_KEY"):
         print("NOTE: DO_INFERENCE_KEY not set — scripted-bot runs only until you export it.")
+    # This process authenticates NOTHING. Every mutating route (/api/run,
+    # /api/delete-series, /api/providers-op, …) is open to whoever can reach the
+    # socket; the CSRF Origin check only bites browsers, so any script sending no
+    # Origin header sails straight through. That is fine on loopback and fine
+    # behind the documented auth proxy — it is a full compromise on 0.0.0.0 with
+    # nothing in front, so say so loudly rather than leaving it to the docs.
+    if host not in ("127.0.0.1", "::1", "localhost"):
+        print(f"⚠ WARNING: binding {host} — NOT loopback. This server has no "
+              "authentication of its own:\n"
+              "⚠   anyone who can reach this port can start runs, delete "
+              "library entries, and read/rotate\n"
+              "⚠   provider config. Put an authenticating reverse proxy in "
+              "front of it (see the module docstring),\n"
+              "⚠   or bind FLOTILLA_BIND=127.0.0.1:8080 and tunnel in.")
     _restore_state()
     _heal_stale_tournaments()          # no live job -> no '⏳ live' ghost
     threading.Thread(target=_aux_reaper, daemon=True).start()

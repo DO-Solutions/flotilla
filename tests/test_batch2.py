@@ -75,8 +75,23 @@ def test_memo_trim():
     assert "…[cut@limit]" in memo
     head = memo.replace(" …[cut@limit]", "")
     assert head.endswith("."), f"cut must land on a sentence boundary: …{memo[-40:]!r}"
-    # defaults: the cap now matches the token budget
-    assert LLMAdmiral("m").memo_chars == 2500
+    # DEFAULTS COME FROM THE SCHEMA — never a second copy in llm.py. This used
+    # to pin 2500 while config_schema said 6000: two defaults for one knob, and
+    # whichever construction path you took decided the behavior.
+    import config_schema
+    adm = {k: v["d"] for k, v in config_schema.SCHEMA["admirals"].items()}
+    a = LLMAdmiral("m")
+    for ctor_attr, schema_key in (("memo_chars", "memo_chars"),
+                                  ("history_chars", "history_chars"),
+                                  ("scratchpad_chars", "scratchpad_chars"),
+                                  ("max_tokens", "max_tokens"),
+                                  ("temperature", "temperature"),
+                                  ("think", "think"),
+                                  ("timeout", "timeout_s"),
+                                  ("warmup_timeout", "warmup_timeout_s")):
+        assert getattr(a, ctor_attr) == adm[schema_key], (
+            f"LLMAdmiral default {ctor_attr}={getattr(a, ctor_attr)!r} has drifted "
+            f"from SCHEMA admirals.{schema_key}={adm[schema_key]!r}")
 
 
 def main():

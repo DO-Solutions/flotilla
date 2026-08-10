@@ -8,12 +8,41 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
+      # COLLECT failures, never abort on the first one. Under `bash -e` this
+      # loop used to stop at the earliest failing file: a broken test_config.py
+      # (5th alphabetically) hid the other 28 sim files AND the server step for
+      # 12 pushes. A red X must report every failure it knows about.
+      # node is TEST-ONLY (tests/test_viewer_replay.py runs the viewer's real JS
+      # canonicalization). Pinned here so the gate can never silently skip it:
+      # FLOTILLA_REQUIRE_NODE=1 turns a missing node into a failure rather than a
+      # SKIPPED line that reads like a pass. The shipped product is unaffected —
+      # still pure-stdlib Python, still one self-contained viewer HTML file.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
       - name: sim tests
         working-directory: sim
+        env:
+          FLOTILLA_REQUIRE_NODE: "1"
         run: |
+          failed=""
           for t in ../tests/test_*.py; do
             [ "$(basename "$t")" = "test_server.py" ] && continue
-            python "$t"
+            echo "::group::$(basename "$t")"
+            if python "$t"; then
+              echo "::endgroup::"
+            else
+              echo "::endgroup::"
+              echo "::error::$(basename "$t") FAILED"
+              failed="$failed $(basename "$t")"
+            fi
           done
+          if [ -n "$failed" ]; then
+            echo "FAILED:$failed"
+            exit 1
+          fi
+          echo "all sim tests passed"
+      # `if: always()` so a sim failure can never hide a server failure again.
       - name: server endpoint tests
+        if: always()
         run: python tests/test_server.py

@@ -35,9 +35,21 @@ whole `tests/test_*.py` suite** (on Python 3.12), so run the rest before a PR to
 `test_config.py` also fails if the committed `CONFIG.md` / `config-schema.json` have
 drifted from the schema — regenerate them with `python3 sim/config_schema.py >
 CONFIG.md` and `python3 sim/config_schema.py --json > config-schema.json`
-(markdown is the default output; `--json` switches it). (Note: Actions may be disabled on the
-upstream repo by org policy — it runs fine on forks, and every upstream release is
-gated on the same suite before it ships.)
+(markdown is the default output; `--json` switches it).
+
+One test — `tests/test_viewer_replay.py` — needs **node**, which is the only
+test-time tool outside the stdlib. It runs the replay-canonicalization JS
+*extracted from `viewer/index.html` itself*, so the viewer half of the replay
+contract is gated instead of trusted. Without node it prints `SKIPPED` and says
+plainly that nothing was verified; CI sets `FLOTILLA_REQUIRE_NODE=1`, which turns
+that skip into a failure so the gate can't quietly stop checking. The shipped
+product is unchanged: pure-stdlib Python, one self-contained viewer HTML file.
+
+CI **collects** failures instead of stopping at the first one, and the server step
+runs even when a sim test fails. That is deliberate: the workflow used to abort on
+the earliest failing file, and a `CONFIG.md` that was never committed hid the other
+28 sim files *and* the whole server step for 12 pushes. One red X should tell you
+everything that is broken, not just the alphabetically-first thing.
 
 ## The schema is the single source of truth
 

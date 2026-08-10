@@ -22,7 +22,12 @@ LINEUP = ["merchant", "corsair", "admiralty", "turtle"]
 
 def run_one(seed, rotate):
     names = LINEUP[rotate:] + LINEUP[:rotate]
-    eng = Engine([(n, BOTS[n]) for n in names], seed=seed)
+    # role_fallback is REQUIRED for scripted bots: ships obey only conn programs
+    # by default, so without it every bot idled, every score was 0, nobody was
+    # eliminated and the "winner" was just seat order — winrate_cap and elim_rate
+    # printed PASS while asserting nothing at all.
+    eng = Engine([(n, BOTS[n]) for n in names], seed=seed,
+                 scenario={"role_fallback": True})
     result = eng.run()
     # leader at tick 1500 (frame index) for snowball index
     lead1500 = None

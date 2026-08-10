@@ -602,13 +602,16 @@ function renderSettingsPanel() {
   const scn = rp.meta.scenario || {};
   // the viewer's own toggles stay in the open — everything about the MATCH
   // lives in collapsed sections below (click a section to unfold it)
+  // each setting is ONE button named for the feature; the fill + the ●/○
+  // pip show its state, and the explanation lives in the ⓘ beside it
   const tog = (key, on, label, hint) =>
-    `<div style="display:flex;justify-content:space-between;align-items:center;` +
-    `gap:8px;margin-bottom:6px"><span>${label}` +
-    (hint ? ` <span class="desc" style="display:inline">${hint}</span>` : "") +
-    `</span><a href="#" class="btn ${on ? "btn-watch" : "btn-dl"} togbtn" ` +
-    `data-set="${key}" style="min-width:44px;text-align:center">` +
-    `${on ? "On" : "Off"}</a></div>`;
+    `<div style="display:flex;align-items:center;gap:6px;margin-bottom:6px">` +
+    `<a href="#" class="btn ${on ? "btn-watch" : "btn-dl"} togbtn" ` +
+    `data-set="${key}" title="${on ? "on — click to turn off"
+                                   : "off — click to turn on"}">` +
+    `${on ? "●" : "○"} ${label}</a>` +
+    (hint ? `<span class="info">i<span class="pop">${hint}</span></span>` : "") +
+    `</div>`;
   let h = `<h3>view</h3>` +
     tog("perf", S.eco, "⚡ Performance Mode",
         "~30 fps, no wakes — keeps GPU headroom for a screen share or call") +
@@ -886,7 +889,7 @@ function load(rp) {
   S.yardJobs = [];
   S.liveRate = null;                     // live-pace tuner resets per game
   $("pov").innerHTML = `<option value="-1">👁 all-seeing</option>` +
-    rp.fleets.map(f => `<option value="${f.id}">⚓ ${f.name}'s fog</option>`).join("");
+    rp.fleets.map(f => `<option value="${f.id}">⚓ ${escHtml(f.name)}'s fog</option>`).join("");
   $("pov").value = "-1";
   // v2: intent strings are interned in meta.intern — de-reference once at load
   // (guarded by presence, so v1 replays and the un-interned live stream both
@@ -998,7 +1001,7 @@ function load(rp) {
     d.title = "click to expand";
     d.style.setProperty("--fc", COLORS[f.id % COLORS.length]);
     d.innerHTML = `<div class="row"><span class="nm">` +
-      `${modelBadge(f.model || f.name)}${f.name}</span>` +
+      `${modelBadge(f.model || f.name)}${escHtml(f.name)}</span>` +
       `<a class="btn myvis" data-fleet="${f.id}" style="display:none" ` +
       `title="watch through this admiral's fog of war">👁 My Vision</a>` +
       `<span class="sc">0</span></div>` +

@@ -189,5 +189,77 @@ def play(seed):
 
 ok(play(11) == play(11), "byte-determinism holds with designs + refits")
 
+
+# --- PAY FOR WHAT YOU DEFINED: no redefining a class with work already paid for ---
+# Cost is charged when a build is queued / a refit starts, but stats resolved at
+# COMPLETION. So an admiral could define a 6-point class, queue it for 6, then
+# redefine the same name to 24 points and receive a 24-point hull for a 6-point
+# price. (At fixed points the same trick bought a free re-spec.) Probe-confirmed
+# before the fix: paid 6, spawned with 24-point stats.
+CHEAP = {"speed": 1, "hold": 1, "guns": 1, "armor": 1, "hull": 1, "lookout": 1}
+FAT = {"speed": 4, "hold": 2, "guns": 6, "armor": 6, "hull": 4, "lookout": 2}
+engx = Engine([("F", Scripted([
+    {"designs": {"swap": CHEAP}, "build": [{"preset": "swap", "squad": "A"}]},
+    {"designs": {"swap": FAT}},          # the swap attempt, one window later
+])), ("X", Idle())], seed=7,
+    scenario={"flex_design": True, "design_points_max": 24,
+              "build_ticks": 600})       # long build: still in flight next window
+fx = engx.fleets[0]
+fx.cargo = 100
+engx.tick()
+paid = 100 - fx.cargo
+ok(fx.designs.get("swap") == CHEAP and paid == engx.class_cost(fx, "swap"),
+   f"cheap class queued and charged {paid}")
+for _ in range(WINDOW + 1):
+    engx.tick()
+ok(fx.designs.get("swap") == CHEAP,
+   f"redefine REFUSED while the paid build is in flight (got {fx.designs.get('swap')})")
+ok(any(e["k"] == "design_rejected" and e.get("name") == "swap"
+       for e in engx.events), "the refusal is recorded as a design_rejected event")
+ok(any("already paid for" in w for w in fx.warnings),
+   f"the admiral is TOLD why it was refused (warnings: {fx.warnings})")
+# and the ship that eventually spawns has the stats that were paid for
+while any(s.fleet == 0 and s.preset == "swap" for s in engx.ships.values()) is False \
+        and engx.t < 1500:
+    engx.tick()
+_sw = [s for s in engx.ships.values() if s.fleet == 0 and s.preset == "swap"]
+ok(_sw and _sw[0].stats == CHEAP,
+   f"the delivered hull matches what was paid for (got {_sw[0].stats if _sw else None})")
+
+# redefining an IDLE class stays legal — the refusal must be narrow
+engi = Engine([("F", Scripted([{"designs": {"free": CHEAP}},
+                               {"designs": {"free": FAT}}])),
+               ("X", Idle())], seed=7,
+              scenario={"flex_design": True, "design_points_max": 24})
+fi = engi.fleets[0]
+fi.cargo = 100
+engi.tick()
+for _ in range(WINDOW + 1):
+    engi.tick()
+ok(fi.designs.get("free") == FAT,
+   f"redefining a class with NO work in flight still works (got {fi.designs.get('free')})")
+
+# --- refit is keyed by SQUADRON: a ship id must be refused, not swallowed ---
+# docs/ACTIONS.md advertised {"refit": {"<squad or ship id>": ...}} but the engine
+# only ever read key[:1].upper(), so {"refit": {"12": "frigate"}} set
+# pending_refits["1"], matched no squadron, and vanished with no warning at all —
+# a model following the repo's own documentation lost the order silently.
+engk = Engine([("K", Scripted([{"refit": {"12": "frigate"}}])), ("X", Idle())],
+              seed=7, scenario={"shipyard_slots": 8})
+engk.fleets[0].cargo = 100
+engk.tick()
+fk = engk.fleets[0]
+ok("1" not in fk.pending_refits and "12" not in fk.pending_refits,
+   f"a ship-id refit key sets no directive (got {fk.pending_refits})")
+ok(any("not a squadron" in w for w in fk.warnings),
+   f"the admiral is TOLD a ship id is not a squadron (warnings: {fk.warnings})")
+
+engb = Engine([("K", Scripted([{"refit": {"A": "battleship-9000"}}])), ("X", Idle())],
+              seed=7, scenario={"shipyard_slots": 8})
+engb.tick()
+ok(any("not a class you can build" in w for w in engb.fleets[0].warnings),
+   f"an unknown class is refused OUT LOUD (warnings: {engb.fleets[0].warnings})")
+ok("A" not in engb.fleets[0].pending_refits, "and sets no directive")
+
 print("FAILURES:", fails)
 sys.exit(1 if fails else 0)

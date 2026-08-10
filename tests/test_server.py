@@ -407,6 +407,68 @@ for _ in range(240):
         break
     time.sleep(0.25)
 
+# ---- cancel INSIDE the register window: state=="running", PROCS still empty ----
+# _run_job flips state to "running" and only registers PROCS after makedirs +
+# config write + Popen. A cancel landing in that gap found no process to
+# terminate and matched no branch in the handler: the API answered 200 while the
+# runner sailed on. This is the flake behind "resumed job settles cancelled" —
+# reproduced deterministically here by holding Popen open instead of racing it.
+#
+# The assertion is on the EFFECT (the child died of a SIGNAL), not on the state
+# label: a short series can finish naturally inside any timeout and then get
+# stamped "cancelled" by the p.wait() branch, so asserting the label alone passes
+# whether or not the cancel did anything. returncode < 0 means terminate landed.
+_real_popen = server.subprocess.Popen
+_window_open = threading.Event()
+_spawned = []
+
+
+def _slow_popen(*a, **kw):
+    _window_open.set()
+    time.sleep(2.0)                        # hold the window wide open
+    p = _real_popen(*a, **kw)
+    _spawned.append(p)                     # our own handle: PROCS is popped later
+    return p
+
+
+server.subprocess.Popen = _slow_popen
+try:
+    st, r = req("/api/run", {"mode": "series", "seed": 46,
+                             "bots": ["merchant", "merchant"],
+                             "scenario": {"width": 64, "height": 36,
+                                          "max_ticks": 40000,
+                                          "role_fallback": True,
+                                          "warmup": False},
+                             "series": {"games": 2, "memos": False},
+                             "name": "cancel-window"})
+    jidw = r["job"]["id"]
+    ok(_window_open.wait(60), "runner reached Popen (cancel window open)")
+    ok(server._job(jidw)["state"] == "running"
+       and server.PROCS.get(jidw) is None,
+       "cancel window reproduced: running with no process registered")
+    st, r = req("/api/cancel", {"id": jidw})
+    ok(st == 200, "cancel accepted inside the register window")
+finally:
+    server.subprocess.Popen = _real_popen
+for _ in range(240):
+    if server._job(jidw)["state"] == "cancelled":
+        break
+    time.sleep(0.25)
+ok(server._job(jidw)["state"] == "cancelled",
+   "job cancelled inside the register window settles cancelled")
+_cw = _spawned[0] if _spawned else None
+if _cw is not None:
+    for _ in range(240):
+        if _cw.poll() is not None:
+            break
+        time.sleep(0.25)
+ok(_cw is not None and _cw.returncode is not None and _cw.returncode < 0,
+   f"the runner was actually SIGNALLED, not left to finish "
+   f"(returncode {None if _cw is None else _cw.returncode})")
+if _cw is not None and _cw.poll() is None:     # never starve the run-queue
+    _cw.kill()                                 # semaphore for the later blocks
+    _cw.wait()
+
 # ---- a FAILED resume must preserve the checkpoint and re-pause the job ----
 st, r = req("/api/run", {"mode": "series", "seed": 45,
                          "bots": ["merchant", "merchant"],
