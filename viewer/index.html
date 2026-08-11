@@ -3931,7 +3931,18 @@ if (qs.get("livejsonl")) {
     // Watch ALWAYS starts at game 1 (what the button promises, and what the
     // embedded/public path already does) — the Live button and the in-viewer
     // next-game queue are the routes to the front of the action.
-    const finish = () => loadBundle(bundle, gParam(bundle.games));
+    const finish = () => {
+      loadBundle(bundle, gParam(bundle.games));
+      if (qs.get("g") === "last" && s.partial) {
+        // the Live entrance lands on the newest FINISHED game — game N+1 is
+        // still at sea (parallel tournaments have no per-lane live stream),
+        // and without this line the page reads as if it disagrees about
+        // which game is current
+        const m = $("meta");
+        if (m) m.innerHTML += ` <span class="mdim">· game ${bundle.games.length + 1}` +
+          ` is at sea now — this is the newest finished game</span>`;
+      }
+    };
     if (s.partial) {
       fetch("api/runs").then(r => r.json()).then(d => {
         const lj = (d.jobs || []).find(j => j.name === s.name &&

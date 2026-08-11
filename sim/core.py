@@ -155,6 +155,8 @@ class Fleet:
         self.kills = 0                     # kill POINTS (kill_score/flag_kill_score)
         self.kill_count = 0                # ships actually sunk (for the prompt)
         self.alive = True
+        self.died_t = None                 # tick the flagship fell (final ranking)
+        self.windows_lost = 0              # decision windows lost to admiral errors
         self.pending = {}                  # squad -> the admiral's standing orders;
                                            # ships copy them in port or on a signal hoist
         self.pending_reassign = {}         # ship id -> squad (applies as the ship docks)
@@ -233,6 +235,13 @@ class Engine:
         self.max_ticks = max_ticks if max_ticks is not None else c["max_ticks"]
         if c["win"] == "domination" and max_ticks is None:
             self.max_ticks = c["domination_cap"]   # no clock — cap is a safety net
+        if c.get("clock_jitter", 0) > 0 and c["win"] != "domination":
+            # anti-turtle (playtest feedback): a leader who can compute the
+            # exact bell freezes for the final stretch; an unknowable extension
+            # keeps "sail it out" unsafe. Seeded draw — fully reproducible —
+            # and taken ONLY when the knob is on, so jitter=0 games are
+            # byte-identical to before the knob existed.
+            self.max_ticks += self.rng.randrange(0, int(c["clock_jitter"]) + 1)
         if not c["description"]:
             if c["win"] == "domination":
                 c["description"] = (
@@ -240,7 +249,9 @@ class Engine:
                     "way to win: be the last admiral afloat — a fleet is eliminated when "
                     "its flagship is destroyed. Cargo funds ships but does not score; "
                     "kills alone win nothing while any rival flag flies. Survive, "
-                    "outbuild, and destroy every enemy flagship.")
+                    "outbuild, and destroy every enemy flagship. FINAL RANKING: "
+                    "survivors rank above the fallen — no score outranks staying "
+                    "afloat; among the fallen, falling LATER ranks higher.")
             elif c["win"] == "territory":
                 c["description"] = (
                     "TERRITORIES match: the sea is split into named territories. Hold a "
@@ -263,12 +274,16 @@ class Engine:
                     "the lower id) — state.regions "
                     "lists the seats, so you can work out which territory any "
                     "point is in. Ship programs can read terr.owner / terr.mine / "
-                    "terr.capture for the territory under their keel.")
+                    "terr.capture for the territory under their keel. FINAL "
+                    "RANKING: surviving fleets rank above eliminated ones, then "
+                    "score decides.")
             else:
                 c["description"] = (
                     f"SCORE match (timed): score = cargo hauled to port + {c['kill_score']}/enemy "
                     f"ship sunk + {c['flag_kill_score']}/flagship destroyed. Highest "
-                    "score at the bell wins; losing your flagship eliminates you.")
+                    "score at the bell wins; losing your flagship eliminates you. "
+                    "FINAL RANKING: surviving fleets rank above eliminated ones, "
+                    "then score decides.")
         self.roles_allowed = set(ROLES)
         if c["roles_allowed"].strip():
             self.roles_allowed = {r.strip() for r in c["roles_allowed"].split(",")
@@ -864,8 +879,15 @@ class Engine:
             if self._fleet_sees(fleet, n.x, n.y):
                 fleet.node_mem[n.id] = (n.remaining, self.t)
                 fleet._bel_v = getattr(fleet, "_bel_v", 0) + 1
+        # believed stock LIES without an age (playtest feedback: "my grounds
+        # were dry ~1500 ticks while charts showed stock") — surveyed_s_ago
+        # makes the staleness readable
         nodes = [dict(id=n.id, name=n.name, x=n.x, y=n.y, kind=n.kind,
-                      believed=self.believed(fleet, n)) for n in self.nodes.values()]
+                      believed=self.believed(fleet, n),
+                      surveyed_s_ago=round(
+                          (self.t - fleet.node_mem[n.id][1]) / 10, 1)
+                      if n.id in fleet.node_mem else None)
+                 for n in self.nodes.values()]
         messages, fleet.inbox = fleet.inbox, []
         reports, fleet.reports_pending = fleet.reports_pending[:12], []
         warnings, fleet.warnings = list(fleet.warnings), []
@@ -925,11 +947,29 @@ class Engine:
                           for sq, p in fleet.pending_programs.items()},
                 designs=dict(fleet.designs),
                 refits=dict(fleet.pending_refits),
-                warnings=warnings[:10]),
+                warnings=warnings[:10],
+                windows_lost=fleet.windows_lost,
+                # hostile contacts near YOUR harbor (playtest ask: an attack
+                # warning) — count + closest distance from the fleet's own
+                # accumulated plot, so it is fog-honest
+                harbor_threat=(lambda th: dict(
+                    contacts=len(th), nearest=min(th) if th else None))(
+                    [cheb(r["x"], r["y"], fleet.hx, fleet.hy)
+                     for r in fleet.contacts.values()
+                     if self.t - r["t"] <= self.cfg["window"] * 2
+                     and cheb(r["x"], r["y"], fleet.hx, fleet.hy) <= 14])),
             enemies=enemies, nodes=nodes, reports=reports,
             parley_log=fleet.parley_log[-200:],
             admirals={f.id: f.name for f in self.fleets.values()},
-            scores={f.id: f.score() for f in self.fleets.values()},
+            scores=(lambda sv:
+                    {f.id: f.score() for f in self.fleets.values()}
+                    if sv == "exact" else
+                    {f.id: (f.score() if f.id == fleet.id
+                            else (f.score() // 100) * 100)
+                     for f in self.fleets.values()}
+                    if sv == "banded" else
+                    {fleet.id: fleet.score()})(
+                        self.cfg.get("score_visibility", "exact")),
             harbors={f.id: (f.hx, f.hy) for f in self.fleets.values() if f.alive},
             alive=[f.id for f in self.fleets.values() if f.alive],
         )
@@ -1507,6 +1547,15 @@ class Engine:
             f = self.fleets[rec["fid"]]
             actions = rec.get("result") or dict(
                 thoughts="(admiral produced no reply; standing orders continue)")
+            if rec.get("err"):
+                # a lost window is VISIBLE (playtest feedback: "losing to
+                # infrastructure, not play, is the worst outcome in a skill
+                # test" — the silent version ran standing orders with no flag)
+                f.windows_lost += 1
+                f.warnings.append(
+                    f"⚠ your decision window opened at t={rec['t0']} was LOST "
+                    f"to an error ({rec['err']}) — standing orders ran; this "
+                    "snapshot is current")
             if not f.alive:
                 self.decisions.append(dict(
                     t=self.t, fleet=f.id, ot=rec["t0"],
@@ -1558,6 +1607,7 @@ class Engine:
                     rec["result"] = f.bot.decide(summary, bot_rng)
                 except Exception as e:      # a broken admiral never crashes the sim
                     rec["result"] = dict(thoughts=f"(admiral error: {e})")
+                    rec["err"] = f"{type(e).__name__}: {str(e)[:120]}"
 
             th = threading.Thread(target=_call, daemon=True)
             rec["thread"] = th
@@ -2116,7 +2166,8 @@ class Engine:
                     try:
                         return f.bot.decide(summary, bot_rng)
                     except Exception as e:              # a broken admiral never crashes the sim
-                        return dict(thoughts=f"(admiral error: {e})")
+                        return dict(thoughts=f"(admiral error: {e})",
+                                    _win_err=f"{type(e).__name__}: {str(e)[:120]}")
 
                 if len(jobs) > 1:
                     with ThreadPoolExecutor(max_workers=len(jobs)) as ex:
@@ -2124,6 +2175,17 @@ class Engine:
                 else:
                     results = [_decide(j) for j in jobs]
                 for (f, _, _), actions in zip(jobs, results):
+                    if isinstance(actions, dict) \
+                            and actions.pop("_win_err", None) is not None:
+                        # a lost window is VISIBLE (playtest feedback: "losing
+                        # to infrastructure, not play, is the worst outcome in
+                        # a skill test" — the silent version ran standing
+                        # orders with no flag anywhere)
+                        f.windows_lost += 1
+                        f.warnings.append(
+                            f"⚠ your decision window at t={t} was LOST to an "
+                            f"error ({str(actions.get('thoughts', ''))[:140]}) "
+                            "— standing orders ran; this snapshot is current")
                     try:
                         self._apply_actions(f, actions)
                     except Exception as e:  # NOTHING an admiral emits kills the sim
@@ -2463,6 +2525,7 @@ class Engine:
         for f in self.fleets.values():
             if f.alive and f.flag_hull <= 0:
                 f.alive = False
+                f.died_t = self.t
                 # a dead fleet's capture claims die with it NOW — leaving them
                 # for the next territory evaluation had frames reporting a
                 # ghost "contested_by" for up to territory_tick ticks
@@ -2651,6 +2714,14 @@ class Engine:
         else:
             out["winner"] = max(scores,
                                 key=lambda k: (self.fleets[k].alive, scores[k], -k))
+        # the DISPLAYED order now matches the winner rule (playtest feedback:
+        # an eliminated fleet read as rank 1 on banked score while the sole
+        # survivor placed third): survivors first, then later-fallen, then score
+        out["rank"] = sorted(
+            scores, key=lambda k: (self.fleets[k].alive,
+                                   self.fleets[k].died_t
+                                   if self.fleets[k].died_t is not None else -1,
+                                   scores[k], -k), reverse=True)
         return out
 
     def replay(self, result):
@@ -2758,6 +2829,7 @@ class Engine:
             reports_pending=f.reports_pending, queued_signal=f.queued_signal,
             warnings=f.warnings, territory=f.territory,
             recent_hits=f.recent_hits,
+            died_t=f.died_t, windows_lost=f.windows_lost,
             combat=[[list(k), v] for k, v in f.combat.items()],
             bel_v=getattr(f, "_bel_v", 1))
 
@@ -2883,6 +2955,7 @@ class Engine:
                       "alive", "hx", "hy", "team", "flag_acc", "build_t",
                       "yards", "yard_done_t",
                       "signal_cd", "pending_refits", "designs",
+                      "died_t", "windows_lost",
                       "reports_pending", "queued_signal", "warnings",
                       "territory", "recent_hits", "inbox", "parley_log"):
                 if k in fd:
