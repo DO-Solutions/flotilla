@@ -154,7 +154,6 @@
 </header>
 <div class="tabs">
   <button class="tab on" data-tab="series">⛵ Games <span class="dim">(spoiler-free)</span></button>
-  <button class="tab" data-tab="tourn">🏆 Tournaments</button>
   <button class="tab" data-tab="config">🧭 Chart a Course</button>
   <button class="tab" data-tab="server">🖥 Server</button>
   <button class="tab" data-tab="help">❓ Help</button>
@@ -164,6 +163,14 @@
     <span class="dim">Click a series row to list its games — results stay
       hidden until you ask. Double-click a name to rename it.</span>
     <span style="display:flex; align-items:center; gap:12px; margin-left:auto">
+      <span id="typef" style="display:flex; gap:6px">
+        <a href="#" class="btn btn-watch tfbtn" data-tf="m"
+           title="standalone single games">● games</a>
+        <a href="#" class="btn btn-watch tfbtn" data-tf="s"
+           title="series (and their games)">● series</a>
+        <a href="#" class="btn btn-watch tfbtn" data-tf="t"
+           title="tournaments (and their series)">● tournaments</a>
+      </span>
       <input id="q" class="sname" style="width:190px; min-width:120px"
              placeholder="🔍 filter as you type" autocomplete="off">
       <label id="showarchlbl" style="cursor:pointer; display:none; white-space:nowrap">
@@ -181,17 +188,6 @@
     <th style="width:215px"></th>
   </tr></thead><tbody></tbody></table>
 </div>
-<div class="card" id="tourntab" style="display:none">
-  <label id="tshowarchlbl" style="cursor:pointer; display:none; float:right">
-    <input type="checkbox" id="tshowarch" style="vertical-align:-2px">
-    <span id="tshowarchtxt">show archived</span></label>
-  <div class="dim" id="tempty" style="display:none">No tournaments yet — configure one
-    under 🧭 Chart a Course (mode: tournament), or run
-    <code>python3 sim/run_config.py your-tournament.json</code>.</div>
-  <table id="tt"><thead><tr>
-    <th>tournament</th><th>format</th><th>matchups</th><th style="width:110px"></th>
-  </tr></thead><tbody></tbody></table>
-  <div id="tdetail" style="margin-top:10px"></div>
 </div>
 <div class="card" id="helptab" style="display:none">
   <h2 style="color:var(--accent);font-size:16px;margin-bottom:8px">How Flotilla works</h2>
@@ -694,6 +690,14 @@ function renderSeriesTable() {
     if (!nArch && $("showarch")) $("showarch").checked = false;
   }
   const showArch = nArch && $("showarch") && $("showarch").checked;
+  const tf = window.TYPEF = window.TYPEF
+    || { m: true, s: true, t: true };     // games / series / tournaments
+  for (const b of document.querySelectorAll("#typef .tfbtn")) {
+    const on = tf[b.dataset.tf];
+    b.className = `btn ${on ? "btn-watch" : "btn-dl"} tfbtn`;
+    b.textContent = `${on ? "●" : "○"} ${b.dataset.tf === "m" ? "games"
+      : b.dataset.tf === "s" ? "series" : "tournaments"}`;
+  }
   // one unified list: series (expandable) + standalone matches + TOURNAMENTS
   // as single nested items (tournament → its series → their games)
   const tSubs = {};                     // tournament name -> matchup series
@@ -749,6 +753,8 @@ function renderSeriesTable() {
       `${archived ? ICO_UNARCH : ICO_ARCH}</a>`
     : "";
   for (const it of shown) {
+    const _ty = it.kind === "t" ? "t" : it.kind === "m" ? "m" : "s";
+    if (!tf[_ty]) continue;
     const tr = document.createElement("tr");
     if (it.kind === "m") {
       const m = it.m;
@@ -777,6 +783,9 @@ function renderSeriesTable() {
     }
     if (it.kind === "t") {
       const t = it.t, open = OPENSERIES.has("t:" + t.name);
+            const tjob = (t.partial && !t.cancelled)
+        ? JOBSCACHE.find(j => j.name === t.name &&
+            ["queued", "running", "paused"].includes(j.state)) : null;
       tr.className = "srow";
       tr.dataset.series = "t:" + t.name;
       tr.title = "click to " + (open ? "collapse" : "list the series");
@@ -794,6 +803,10 @@ function renderSeriesTable() {
         `<td class="dim">${esc(it.latest)}</td>` +
         `<td><div class="rowbtns">` +
         pubBtns({ tournament: t.name }, `data-tournament="${esc(t.name)}"`) +
+        (tjob ? `<a class="btn btn-dl scancel" href="#" style="color:#ff5d5d" ` +
+          `data-job="${esc(tjob.id)}" data-label="${esc(t.name)}" ` +
+          `data-tourn="1" title="cancel the whole tournament (asks first)">` +
+          `✖ Cancel</a>` : "") +
         (SERVER ? `<a class="btn btn-dl tarch" href="#" data-t="${esc(t.name)}" ` +
           `data-arch="${t.archived ? 0 : 1}" title="${t.archived
             ? "unarchive the tournament and all its series"
@@ -985,11 +998,22 @@ document.addEventListener("click", async e => {
     } catch (err) { window.alert("delete failed: " + err); }
     return;
   }
+  if (t.classList.contains("tfbtn")) {
+    e.preventDefault();
+    const tf = window.TYPEF = window.TYPEF || { m: true, s: true, t: true };
+    tf[t.dataset.tf] = !tf[t.dataset.tf];
+    renderSeriesTable();
+    return;
+  }
   if (t.classList.contains("scancel")) {
     e.preventDefault();
-    if (!window.confirm(`Cancel "${t.dataset.label}"?\n` +
-        `The game being played stops and the rest of the series is called ` +
-        `off. Finished games stay in the library.`)) return;
+    if (!window.confirm(t.dataset.tourn === "1"
+        ? `Cancel the WHOLE tournament "${t.dataset.label}"?\n` +
+          `Every series still at sea stops (the games being played are ` +
+          `abandoned). Finished games and decided series stay in the library.`
+        : `Cancel "${t.dataset.label}"?\n` +
+          `The game being played stops and the rest of the series is called ` +
+          `off. Finished games stay in the library.`)) return;
     try {
       const r = await (await fetch("api/cancel", { method: "POST",
         body: JSON.stringify({ id: t.dataset.job }) })).json();
@@ -1153,49 +1177,8 @@ const TCACHE = {};                            // name -> tournament.json
 const TREV = {};                              // name -> results revealed?
 
 function renderTournList() {
-  const tb = document.querySelector("#tt tbody");
-  tb.innerHTML = "";
-  const all = IDX.tournaments || [];
-  const nArch = all.filter(t => t.archived).length;
-  const lbl = $("tshowarchlbl");
-  if (lbl) {
-    lbl.style.display = nArch ? "" : "none";
-    $("tshowarchtxt").textContent = `show archived (${nArch})`;
-    if (!nArch && $("tshowarch")) $("tshowarch").checked = false;
-  }
-  const showArch = nArch && $("tshowarch") && $("tshowarch").checked;
-  const list = all.filter(t => showArch || !t.archived);
-  $("tempty").style.display = list.length ? "none" : "";
-  document.getElementById("tt").style.display = list.length ? "" : "none";
-  for (const t of list) {
-    const live = t.partial && !t.cancelled;
-    const tr = document.createElement("tr");
-    tr.innerHTML =
-      `<td>${esc(t.name)}${t.cancelled ? ' <span class="warn">✖ ended early</span>' : t.partial ? ' <span class="warn">⏳ live</span>' : ""}</td>` +
-      `<td class="dim">${esc(t.format)}</td>` +
-      `<td class="dim">${t.matchups}</td>` +
-      `<td><div class="rowbtns">` +
-      `<a class="btn btn-watch" target="_blank" ` +
-      `href="tournament.html?t=${encodeURIComponent(t.name)}" ` +
-      `title="the tournament page: bracket, live series, standings ` +
-      `(spoilers hidden by default)">🏆 Open</a>` +
-      (SHOWCASE ? pubBtns({ tournament: t.name },
-                          `data-tournament="${esc(t.name)}"`) : "") +
-      (SERVER ? `<a class="btn btn-dl tarch" href="#" ` +
-        `data-t="${esc(t.name)}" data-arch="${t.archived ? 0 : 1}" ` +
-        `title="${t.archived ? "unarchive — show this tournament and its "
-          + "series again" : "archive — hide the tournament AND all its "
-          + "series/games from the lists; kept on disk"}">` +
-        `${t.archived ? ICO_UNARCH : ICO_ARCH}</a>` : "") +
-      (SERVER && !live ? `<a class="btn btn-dl tdel" href="#" ` +
-        `style="color:#ff5d5d" data-t="${esc(t.name)}" ` +
-        `title="delete the tournament AND all its series/games (asks first)">` +
-        `🗑</a>` : "") +
-      `</div></td>`;
-    if (t.archived) tr.style.opacity = ".55";
-    tb.appendChild(tr);
-  }
-  renderTournDetail();
+  // the Tournaments tab retired 2026-08-11 — tournaments live on the Games
+  // page (nested rows + the type filter); shared handlers still call this.
 }
 document.addEventListener("click", async e => {
   const t = e.target.closest("a");

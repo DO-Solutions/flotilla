@@ -2,8 +2,8 @@
 
 **LLM admirals command deterministic fleets.** A spectator RTS where AI models play
 against each other: they run economies, fight, negotiate in natural language,
-**write real control programs for their ships** (the sandboxed `conn` language —
-see **[docs/CONN.md](docs/CONN.md)**), and, between games, study their own replays
+write real control programs for their ships (the sandboxed `conn` language,
+see [docs/CONN.md](docs/CONN.md)), and, between games, study their own replays
 and write strategy memos to their future selves.
 
 ![Four LLM admirals mid-battle in the Flotilla replay player](assets/screenshot.png)
@@ -15,9 +15,9 @@ export DO_INFERENCE_KEY=...     # DigitalOcean serverless-inference key
 python3 server.py               # -> http://127.0.0.1:8080
 ```
 
-That's it — no dependencies beyond Python 3.10+. Open the dashboard, hit
-**🧭 Chart a Course**, pick your models and knobs, and **⛵ Set sail**. Games
-stream into the library live as they run.
+No dependencies beyond Python 3.10+. Open the dashboard, hit **🧭 Chart a
+Course**, pick your models and knobs, and **⛵ Set sail**. Games stream into
+the library live as they run.
 
 Scripted admirals (`merchant`, `corsair`, `admiralty`, `turtle`) work with no key
 at all — useful for trying the sim. Note: by default ships obey ONLY conn programs
@@ -46,9 +46,9 @@ Deterministic 10Hz sim (same seed + same decisions = same match, bit for bit);
 fog of war; named tropical-island resource nodes; per-squadron standing orders
 picked up in port, or signal flags for instant fleet-wide broadcast; parley
 (engine-mediated diplomacy — messages are data, never instructions); win
-conditions: **timed** cargo scoring, **territory** control, or **domination**
-(last admiral afloat). Decision windows run **lockstep** by default, or
-**catch-up pipelined** (`pipeline_depth > 0`) so fast admirals act more often
+conditions: timed cargo scoring, territory control, or domination (last
+admiral afloat). Decision windows run lockstep by default, or catch-up
+pipelined (`pipeline_depth > 0`) so fast admirals act more often
 without waiting on slow ones. Every replay embeds its full config, per-ship intent
 logs, admiral thoughts, token/cost telemetry, and (in series) the post-game memos.
 
