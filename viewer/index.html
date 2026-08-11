@@ -3871,6 +3871,27 @@ function sameOriginPath(v) {
       || v.startsWith("\\")) return null;
   return v;
 }
+// series catalog with a PUBLIC fallback: the flagship serves index.json; a
+// published tournament prefix serves series-index.json (the matchup slice)
+// with library-relative file paths — normalize those to prefix-relative so
+// every series affordance (game nav, self-upgrade) works on public pages too.
+function seriesCatalog() {
+  return fetch("index.json").then(r => { if (!r.ok) throw 0; return r.json(); })
+    .catch(() => fetch("series-index.json")
+      .then(r => { if (!r.ok) throw 0; return r.json(); })
+      .then(d => ({ series: (d.series || []).map(x => Object.assign({}, x, {
+        games: (x.games || []).map(g => Object.assign({}, g, {
+          file: String(g.file).replace(/^tournaments\/[^/]+\//, "") })) })) }))
+      .catch(() => ({ series: [] })));
+}
+
+function gParam(games) {              // ?g=N (1-based) or g=last -> bundle index
+  const gv = qs.get("g");
+  if (gv === "last") return games.length - 1;
+  const n = parseInt(gv || "", 10);
+  return n >= 1 && n <= games.length ? n - 1 : 0;
+}
+
 if (qs.get("livejsonl")) {
   const pfx = sameOriginPath(qs.get("livejsonl").replace(/\/+$/, ""));
   if (!pfx) { $("meta").textContent = "refusing an off-site live source"; }
@@ -3887,12 +3908,14 @@ if (qs.get("livejsonl")) {
   // a direct link to a series game upgrades itself to full series context,
   // so Previous/Next (x/y) work from every entrance
   const rfile = qs.get("replay");
-  const m2 = rfile.match(/^replays\/([^/]+)\/g(\d+)\.json$/);
+  const m2 = rfile.match(/^(?:replays\/)?([^/]+)\/g(\d+)\.json$/);
   const plain = () => fetch(rfile).then(r => r.json()).then(load)
     .catch(e => { $("meta").textContent = "failed to load replay: " + e; });
   if (m2 && location.protocol.startsWith("http")) {
-    fetch("index.json").then(r => r.json()).then(idx => {
-      const sr = (idx.series || []).find(x => x.name === m2[1]);
+    seriesCatalog().then(idx => {
+      const sr = (idx.series || []).find(x => x.name === m2[1])
+        || (idx.series || []).find(x =>
+             (x.games || []).some(g => g.file === rfile));
       const gi = sr ? sr.games.findIndex(g => g.file === rfile) : -1;
       if (!sr || gi < 0) { plain(); return; }
       const bundle = { name: qs.get("title") || sr.display_name || sr.name,
@@ -3913,7 +3936,7 @@ if (qs.get("livejsonl")) {
     }).catch(plain);
   } else plain();
 } else if (qs.get("series")) {
-  fetch("index.json").then(r => r.json()).then(idx => {
+  seriesCatalog().then(idx => {
     const s = (idx.series || []).find(x => x.name === qs.get("series"));
     if (!s) { $("meta").textContent = "series not found: " + qs.get("series"); return; }
     if (!s.games.length) {
@@ -3930,7 +3953,7 @@ if (qs.get("livejsonl")) {
     // Watch ALWAYS starts at game 1 (what the button promises, and what the
     // embedded/public path already does) — the Live button and the in-viewer
     // next-game queue are the routes to the front of the action.
-    const finish = () => loadBundle(bundle, 0);
+    const finish = () => loadBundle(bundle, gParam(bundle.games));
     if (s.partial) {
       fetch("api/runs").then(r => r.json()).then(d => {
         const lj = (d.jobs || []).find(j => j.name === s.name &&

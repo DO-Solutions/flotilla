@@ -160,10 +160,14 @@ function matchupCards() {
   return { names, mus };
 }
 
-function gameHref(m, g) {
-  if (!TNAME) return `player.html?replay=${encodeURIComponent(m.dir + "/" + g.file.split("/").pop())}`;
-  return `player.html?series=${encodeURIComponent(TNAME + "/" + m.dir)}` +
-         `&title=${encodeURIComponent(m.players.join(" vs "))}`;
+function gameHref(m, g, gpos) {
+  // ALWAYS a series link (public pages resolve it via series-index.json), so
+  // every entrance gets the full game navigation; gpos picks the game (1-based,
+  // "last" = newest landed — the live tile's entry point).
+  const tn = TNAME || (TJ && TJ.config && TJ.config.name) || "";
+  return `player.html?series=${encodeURIComponent(tn + "/" + m.dir)}` +
+         `&title=${encodeURIComponent(m.players.join(" vs "))}` +
+         (gpos ? `&g=${gpos}` : "");
 }
 
 function render() {
@@ -211,24 +215,34 @@ function render() {
     for (const g of m.games || []) {
       if (g.winner) wins[g.winner] = (wins[g.winner] || 0) + 1;
     }
+    const haveW = Object.keys(wins).length > 0;   // a decided record with no
     const rlab = elim && !byRound && m.round > 0 && m.round < 9e9
       ? ` · ${m.round === maxRound ? "final" : "round " + m.round}` : "";
+    const g1 = (m.games || [])[0] || { file: "g1.json", game: 1 };
     let h = `<div class="mu${st === "live" ? " liv" : ""}">` +
       `<div class="hd"><span class="stat">${st === "live"
         ? '<span class="live">🔴 series live</span>'
         : (m.winner ? "✓ decided" : "✓ complete") + rlab}</span>` +
-      `<a class="btn btn-watch" target="_blank" href="${gameHref(m, (m.games || [])[0] || { file: "g1.json", game: 1 })}"` +
-      ` title="watch this series from game 1 — spoiler-free">▶ Watch</a></div>`;
+      (st === "live"
+        ? `<a class="btn btn-watch" style="background:#c22432" target="_blank" ` +
+          `href="${gameHref(m, g1, "last")}"` +
+          ` title="jump to the newest game of this live series">🔴 Live</a>`
+        : `<a class="btn btn-watch" target="_blank" href="${gameHref(m, g1, 1)}"` +
+          ` title="watch this series from game 1 — spoiler-free">▶ Watch</a>`) +
+      `</div>`;
     for (const p of m.players) {
       h += `<div class="p"><span style="color:${playerColor(names, p)}"` +
         `${REVEAL && m.winner === p ? ' class="adv"' : ""}>${esc(p)}` +
         `${REVEAL && m.winner === p ? " 🏆" : ""}</span>` +
-        `<span class="stat">${sh(esc(wins[p] || 0))}</span></div>`;
+        // per-game winners can lag the record briefly; "–" is honest,
+        // 0/0 reads as "never played"
+        `<span class="stat">${sh(esc(haveW ? (wins[p] || 0) : "–"))}</span></div>`;
     }
     // per-game links only under spoilers: how many games a series took (and
-    // which exist) IS the outcome — Watch is the only spoiler-safe entry
-    h += `<div class="gchips">` + (REVEAL ? (m.games || []).map(g =>
-      `<a class="btn btn-dl" target="_blank" href="${gameHref(m, g)}">` +
+    // which exist) IS the outcome — Watch is the only spoiler-safe entry.
+    // Every chip opens the SERIES view at that game (full ⏮◀▶⏭ navigation).
+    h += `<div class="gchips">` + (REVEAL ? (m.games || []).map((g, i) =>
+      `<a class="btn btn-dl" target="_blank" href="${gameHref(m, g, i + 1)}">` +
       `▶ g${esc(g.game)}</a>`).join("") : "") +
       (st === "live" ? `<span class="stat live" style="align-self:center">` +
         `next game playing…</span>` : "") + `</div></div>`;
