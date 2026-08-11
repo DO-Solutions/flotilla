@@ -23,7 +23,8 @@ ROOT = os.path.dirname(HERE)
 ENGINE = os.path.join(ROOT, "engine")
 
 # game-side module names the engine must never import
-BANNED = {"flotilla", "core", "bots", "replay_codec"}
+BANNED = {"flotilla", "core", "bots", "replay_codec", "series",
+          "config_schema", "conn", "run_config"}
 
 fails = 0
 

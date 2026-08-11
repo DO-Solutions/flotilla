@@ -6,7 +6,10 @@ sys.modules aliasing keeps both paths the same module object."""
 import os
 import sys
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+import run_config                                  # noqa: E402,F401 — registers
+                                                   # Flotilla's Game (contract)
 from engine import llm as _mod                     # noqa: E402
 import config_schema as _cs                        # noqa: E402
 

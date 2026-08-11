@@ -411,9 +411,10 @@ class LLMAdmiral:
                 int(scen.get("conn_examples", 5) or 5))
         if getattr(self, "_sys_progs", None) != want:
             self._sys_progs = want
-            from conn import api_reference
-            self._sys_full = self.system + (api_reference(examples=want[1])
-                                            if want[0] else "")
+            from . import contract
+            api_ref = contract.game().api_reference
+            self._sys_full = self.system + (
+                api_ref(examples=want[1]) if want[0] and api_ref else "")
         return self._sys_full
 
     def decide(self, summary, rng):
