@@ -176,7 +176,10 @@ def main():
         p = subprocess.Popen(argv,
                              stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                              text=True, cwd=HERE, env=env)
-        for line in p.stdout:
+        _tail = []                         # last output lines: the fail post
+        for line in p.stdout:              # must say WHY, not just the code
+            _tail.append(line.rstrip()[:200])
+            del _tail[:-12]
             if '"winner"' in line:
                 try:
                     row = json.loads(line)
@@ -234,7 +237,8 @@ def main():
                 post("fail", {"error": f"paused but checkpoint unreadable: {e}"})
             return
         if rc != 0:
-            post("fail", {"error": f"runner exited {rc}"})
+            post("fail", {"error": f"runner exited {rc}: "
+                          + " | ".join(_tail[-6:])[:280]})
             return
         series = {}
         sj = os.path.join(outdir, "series.json")
