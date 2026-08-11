@@ -188,53 +188,60 @@ function render() {
   $("standings").style.display = STATSOPEN ? "none" : "";
   $("tstats").style.display = STATSOPEN ? "" : "none";
   $("sub").textContent = "";
-  // bracket: matchups grouped by round (in-flight lanes join round ?)
-  const rounds = {};
-  for (const m of mus) (rounds[m.round] = rounds[m.round] || []).push(m);
-  const rkeys = Object.keys(rounds).sort((a, b) => a - b);
+  // bracket: three status columns — Scheduled | Live | Completed. A series
+  // with games on record that is not live IS completed, whatever the
+  // tournament.json snapshot says (the public copy is a publish-time
+  // snapshot, so "has the matchup record landed" cannot be the test).
   const elim = (cfg.format || "round_robin") === "single_elim";
+  const maxRound = Math.max(0, ...mus.map(m =>
+    m.round > 0 && m.round < 9e9 ? m.round : 0));
+  const statusOf = (m) => m.live ? "live"
+    : (m.pendingLane || !(m.games || []).length) ? "sched" : "done";
+  const card = (m) => {
+    const st = statusOf(m);
+    if (st === "sched") {                  // nothing landed yet, nothing to watch
+      return `<div class="mu" style="opacity:.6">` +
+        `<div class="hd"><span class="stat">⛵ at sea — no games reported ` +
+        `yet</span></div>` +
+        m.players.map(p => `<div class="p"><span style="color:` +
+          `${playerColor(names, p)}">${esc(p)}</span></div>`).join("") +
+        `</div>`;
+    }
+    const wins = {};
+    for (const g of m.games || []) {
+      if (g.winner) wins[g.winner] = (wins[g.winner] || 0) + 1;
+    }
+    const rlab = elim && m.round > 0 && m.round < 9e9
+      ? ` · ${m.round === maxRound ? "final" : "round " + m.round}` : "";
+    let h = `<div class="mu${st === "live" ? " liv" : ""}">` +
+      `<div class="hd"><span class="stat">${st === "live"
+        ? '<span class="live">🔴 series live</span>'
+        : (m.winner ? "✓ decided" : "✓ complete") + rlab}</span>` +
+      `<a class="btn btn-watch" target="_blank" href="${gameHref(m, (m.games || [])[0] || { file: "g1.json", game: 1 })}"` +
+      ` title="watch this series from game 1 — spoiler-free">▶ Watch</a></div>`;
+    for (const p of m.players) {
+      h += `<div class="p"><span style="color:${playerColor(names, p)}"` +
+        `${REVEAL && m.winner === p ? ' class="adv"' : ""}>${esc(p)}` +
+        `${REVEAL && m.winner === p ? " 🏆" : ""}</span>` +
+        `<span class="stat">${sh(esc(wins[p] || 0))}</span></div>`;
+    }
+    // per-game links only under spoilers: how many games a series took (and
+    // which exist) IS the outcome — Watch is the only spoiler-safe entry
+    h += `<div class="gchips">` + (REVEAL ? (m.games || []).map(g =>
+      `<a class="btn btn-dl" target="_blank" href="${gameHref(m, g)}">` +
+      `▶ g${esc(g.game)}</a>`).join("") : "") +
+      (st === "live" ? `<span class="stat live" style="align-self:center">` +
+        `next game playing…</span>` : "") + `</div></div>`;
+    return h;
+  };
+  const cols = [["sched", "Scheduled"], ["live", "Live"], ["done", "Completed"]];
   let h = "";
-  for (const r of rkeys) {
-    h += `<div class="rnd">`;
-    if (rkeys.length > 1 || elim) {
-      const last = elim && r === rkeys[rkeys.length - 1];
-      h += `<div class="rlabel">${r === "0" ? "in progress"
-        : r === "9000000000" ? "still to sail"
-        : last ? "final" : "round " + r}</div>`;
-    }
-    for (const m of rounds[r]) {
-      if (m.pendingLane) {                 // scheduled, nothing landed yet
-        h += `<div class="mu" style="opacity:.6">` +
-          `<div class="hd"><span class="stat">⛵ at sea — no games reported ` +
-          `yet</span></div>` +
-          m.players.map(p => `<div class="p"><span style="color:` +
-            `${playerColor(names, p)}">${esc(p)}</span></div>`).join("") +
-          `</div>`;
-        continue;
-      }
-      const wins = {};
-      for (const g of m.games || []) {
-        if (g.winner) wins[g.winner] = (wins[g.winner] || 0) + 1;
-      }
-      h += `<div class="mu${m.live ? " liv" : ""}">` +
-        `<div class="hd"><span class="stat">${m.live
-          ? '<span class="live">🔴 series live</span>'
-          : m.winner ? "✓ decided" : "scheduled"}</span>` +
-        `<a class="btn btn-watch" target="_blank" href="${gameHref(m, (m.games || [])[0] || { file: "g1.json", game: 1 })}"` +
-        ` title="watch this series from game 1 — spoiler-free">▶ Watch</a></div>`;
-      for (const p of m.players) {
-        h += `<div class="p"><span style="color:${playerColor(names, p)}"` +
-          `${REVEAL && m.winner === p ? ' class="adv"' : ""}>${esc(p)}` +
-          `${REVEAL && m.winner === p ? " 🏆" : ""}</span>` +
-          `<span class="stat">${sh(esc(wins[p] || 0))}</span></div>`;
-      }
-      h += `<div class="gchips">` + (m.games || []).map(g =>
-        `<a class="btn btn-dl" target="_blank" href="${gameHref(m, g)}">` +
-        `▶ g${esc(g.game)}</a>`).join("") +
-        (m.live ? `<span class="stat live" style="align-self:center">` +
-          `next game playing…</span>` : "") + `</div></div>`;
-    }
-    h += `</div>`;
+  for (const [key, label] of cols) {
+    const col = mus.filter(m => statusOf(m) === key);
+    h += `<div class="rnd"><div class="rlabel">${label}</div>` +
+      (col.length ? col.map(card).join("")
+        : `<div class="stat" style="text-align:center;color:var(--dim)">` +
+          `— none —</div>`) + `</div>`;
   }
   $("bracket").innerHTML = h || `<div class="card">no matchups yet — the ` +
     `first games are still being played</div>`;

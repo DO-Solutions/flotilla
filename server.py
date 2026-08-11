@@ -1225,8 +1225,13 @@ def _showcase_purge(ident):
         except Exception as e:
             failed.append(f"{key}: {type(e).__name__}"[:120])
     if not failed:
+        # drop by ident AND by the deleted keys' URLs — pre-ident registry
+        # entries carry no ident, and matching only ident left them dangling
+        # (a copy-link button pointing at an object that no longer exists)
+        gone = {f"https://{cfg['bucket']}.{cfg['endpoint']}/{k}" for k in keys}
         _showcase_list_update(
-            lambda pub: [x for x in pub if x.get("ident") != ident])
+            lambda pub: [x for x in pub if x.get("ident") != ident
+                         and x.get("url") not in gone])
     return deleted, failed
 
 

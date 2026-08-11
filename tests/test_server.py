@@ -349,6 +349,10 @@ try:
     os.makedirs(os.path.join(TMP, "series", "sx"), exist_ok=True)
     with open(os.path.join(TMP, "series", "sx", "series.json"), "w") as fh:
         json.dump({"name": "sx", "games": []}, fh)
+    # a PRE-IDENT registry entry (url only, no ident) must fall to the same
+    # purge via url-match — ident-only filtering left these dangling
+    server._showcase_list_update(lambda pub: pub + [
+        {"name": "sx (legacy)", "url": "https://b.e.com/showcase/sx.html"}])
     _deleted.clear()
     st, r = req("/api/delete-series", {"series": "sx"})
     ok(st == 200 and r.get("showcase_purged") == 2
@@ -356,6 +360,9 @@ try:
        f"series DELETE purges its bundle + the pre-ident legacy key ({r}, {_deleted})")
     ok(all(x.get("ident") != "series-sx" for x in server._showcase_list()),
        "series registry entry dropped")
+    ok(all(x.get("url") != "https://b.e.com/showcase/sx.html"
+           for x in server._showcase_list()),
+       "pre-ident legacy registry entry dropped by url-match")
     # match delete purges its bundle
     os.makedirs(os.path.join(TMP, "matches"), exist_ok=True)
     with open(os.path.join(TMP, "matches", "mx.json"), "w") as fh:
