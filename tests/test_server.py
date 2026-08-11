@@ -1,9 +1,11 @@
 #!/usr/bin/env python3
 """server.py endpoint tests — rename, bundle, cancel, import. Stdlib only:
 spins the real handler up in-process on an ephemeral port with a temp library."""
+import io
 import json
 import os
 import shutil
+import subprocess
 import sys
 import tempfile
 import threading
@@ -510,6 +512,22 @@ for _ in range(240):
     if _p is None or _p.poll() is not None:
         break
     time.sleep(0.25)
+
+# ---- the WORKER tarball must be runnable as shipped: _app_tarball is a
+# second, separate packing list from the deploy artifact, and a missing
+# import root (engine/, post-split) crash-looped three aux resumes while
+# every local suite stayed green. Extract and import like a worker would.
+import tarfile as _tarfile
+_wt = tempfile.mkdtemp(prefix="worker-tar-")
+with _tarfile.open(fileobj=io.BytesIO(server._app_tarball()), mode="r:gz") as _tf:
+    _tf.extractall(_wt)
+_smoke = subprocess.run(
+    [sys.executable, "-c", "import conn, core, run_config"],
+    cwd=os.path.join(_wt, "sim"), capture_output=True, text=True, timeout=120)
+ok(_smoke.returncode == 0,
+   "worker tarball imports as shipped"
+   + ("" if _smoke.returncode == 0 else " — " + _smoke.stderr.strip()[-200:]))
+shutil.rmtree(_wt, ignore_errors=True)
 
 # ---- cancel INSIDE the register window: state=="running", PROCS still empty ----
 # _run_job flips state to "running" and only registers PROCS after makedirs +

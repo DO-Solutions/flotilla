@@ -1587,7 +1587,12 @@ def _app_tarball():
     import tarfile
     buf = io.BytesIO()
     with tarfile.open(fileobj=buf, mode="w:gz") as tar:
-        for item in ("server.py", "VERSION", "sim", "scripts", "viewer", "dash"):
+        # every top-level import root ships, or the worker crash-loops on a
+        # ModuleNotFoundError the flagship never sees (engine/ was missing
+        # here for three resume attempts after the split — the deploy tarball
+        # and THIS one are separate manifests, each needing the smoke test)
+        for item in ("server.py", "VERSION", "engine", "sim", "scripts",
+                     "viewer", "dash"):
             p = os.path.join(HERE, item)
             if os.path.exists(p):
                 tar.add(p, arcname=item, filter=lambda ti:
