@@ -82,10 +82,13 @@ def main():
         "mem p = 0\nset p = 5\n"
         + "\n".join(f"when mem.p == {i}: helm.hold()" for i in range(60, 120)))
     mem2 = big.init_mem()
-    # exhaust the budget artificially by shrinking it via many evals
-    saved = conn.BUDGET
+    # exhaust the budget artificially by shrinking it via many evals.
+    # BUDGET lives in engine.program since the split — patch the OWNING
+    # module (conn re-exports it by value, which a monkeypatch can't reach)
+    import engine.program as _prog
+    saved = _prog.BUDGET
     try:
-        conn.BUDGET = 3                       # guarantees mid-walk exhaustion
+        _prog.BUDGET = 3                      # guarantees mid-walk exhaustion
         try:
             big.run({}, mem2)
             raise AssertionError("expected ConnError")
@@ -94,7 +97,7 @@ def main():
         assert mem2.get("p", 0.0) == 0.0, \
             f"partial mem write survived a fault: {mem2}"
     finally:
-        conn.BUDGET = saved
+        _prog.BUDGET = saved
 
     # 6) section_resolve: bounds finally bite (series.games lo=1)
     assert config_schema.section_resolve("series", {"games": 0})["games"] == 1
