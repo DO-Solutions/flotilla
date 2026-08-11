@@ -1,0 +1,18 @@
+{
+ "mode": "match",
+ "seed": 37,
+ "bots": [
+  "admiralty",
+  "corsair"
+ ],
+ "scenario": {
+  "width": 64,
+  "height": 36,
+  "max_ticks": 5000,
+  "role_fallback": true,
+  "warmup": false,
+  "win": "domination",
+  "flag_move": true,
+  "flag_salvage": 40
+ }
+}

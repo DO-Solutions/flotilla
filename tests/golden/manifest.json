@@ -1,0 +1,28 @@
+{
+ "configs": {
+  "conquest": {
+   "match.json": "e5959e522dbb43773584a27f528bc67607cf89c96b94aefd9bc690a487dd4abc"
+  },
+  "designs-yards": {
+   "match.json": "225a24b3642a71fd8903e07ec0dddd6b27385a4e41ea60ebea5dfe40ec843120"
+  },
+  "match-basic": {
+   "match.json": "84ce19bab26b1db47c694c2e7faca3811da031a7e916a2a188f81d02a39211e9"
+  },
+  "series-2g": {
+   "g1.json": "aa345d6ff9c6b8b2b26da3ad1ab8f3530bf0f95e3ae752469968253abe1737c2",
+   "g2.json": "aa345d6ff9c6b8b2b26da3ad1ab8f3530bf0f95e3ae752469968253abe1737c2",
+   "series.json": "a66873f06528b5cfaf78982f473fb6f1ca068815f679ec127a05ab251afb5483"
+  },
+  "teams-2v2": {
+   "match.json": "87aef86c834a6e34f8a8b8f7a84d4c4204238624600b823ce526cc902e339372"
+  },
+  "territory-4p": {
+   "match.json": "dd55aa47f9f92b94333a3909f12110463cb9cac41818b7addbf3940af5b14994"
+  }
+ },
+ "perf": {
+  "host": "cc-01",
+  "ticks_per_cpu_sec": 2678.6
+ }
+}

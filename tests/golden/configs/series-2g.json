@@ -1,0 +1,19 @@
+{
+ "mode": "series",
+ "seed": 63,
+ "bots": [
+  "merchant",
+  "corsair"
+ ],
+ "series": {
+  "games": 2,
+  "memos": false
+ },
+ "scenario": {
+  "width": 64,
+  "height": 36,
+  "max_ticks": 2500,
+  "role_fallback": true,
+  "warmup": false
+ }
+}

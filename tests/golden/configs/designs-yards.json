@@ -1,0 +1,18 @@
+{
+ "mode": "match",
+ "seed": 51,
+ "bots": [
+  "merchant",
+  "admiralty"
+ ],
+ "scenario": {
+  "width": 64,
+  "height": 36,
+  "max_ticks": 4000,
+  "role_fallback": true,
+  "warmup": false,
+  "default_designs": "{\"skiff\":{\"speed\":3,\"hold\":2,\"guns\":2,\"armor\":1,\"hull\":2,\"lookout\":2}}",
+  "shipyard_slots": 2,
+  "shipyard_max": 3
+ }
+}

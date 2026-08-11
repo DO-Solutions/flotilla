@@ -1,0 +1,15 @@
+{
+ "mode": "match",
+ "seed": 11,
+ "bots": [
+  "merchant",
+  "corsair"
+ ],
+ "scenario": {
+  "width": 64,
+  "height": 36,
+  "max_ticks": 3000,
+  "role_fallback": true,
+  "warmup": false
+ }
+}
