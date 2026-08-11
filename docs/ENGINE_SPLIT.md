@@ -112,9 +112,12 @@ is the engine, and a new game gets it all for free.
 - **Stage 0** — the gate itself: golden-replay harness + perf benchmark +
   the engine-boundary import test (asserting a boundary that doesn't exist
   yet is trivially green; it hardens as modules move).
-- **Stage 1** — move the already-generic modules: providers, llm, series,
+- **Stage 1** — move the already-generic modules: providers, llm,
   schema machinery, interpreter core → `engine/`; game tables stay behind
-  and are injected. `sim/*.py` become re-export shims.
+  and are injected. `sim/*.py` become re-export shims. (1a: providers ✓.
+  1b finding: `series.py` is ONLY the fog digest + its CLI — game-side per
+  the contract, so it stays put; the memo-carry scaffolding lives in
+  run_config and moves at Stage 2.)
 - **Stage 2** — `run_config` → `engine/runner.py` with the game plugged via
   the contract; `sim/run_config.py` stays as the CLI shim (aux unaffected).
 - **Stage 3** — the core.py split (the careful one): engine machinery
