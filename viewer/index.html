@@ -113,6 +113,15 @@
   /* the scratchpad belongs to the Admirals tab ONLY — hard-gate its
      visibility on the mode so stale DOM can never leak it onto Fleets */
   #fleetcards:not(.adm) .padbox { display: none; }
+  .ybar { display:flex; align-items:center; gap:6px; font-size:11px;
+          color:var(--dim); padding:1px 0; }
+  .ybar .yl { flex:0 0 auto; max-width:46%; overflow:hidden;
+              text-overflow:ellipsis; white-space:nowrap; }
+  .ybar .yt { flex:1; height:6px; background:#ffffff14; border-radius:3px;
+              overflow:hidden; }
+  .ybar .yt i { display:block; height:100%; background:var(--accent);
+                border-radius:3px; }
+  .ybar .yp { flex:0 0 30px; text-align:right; }
   .hull { height: 4px; background: #24304d; border-radius: 2px; margin-top: 6px; }
   .hull i { display: block; height: 100%; border-radius: 2px; background: var(--fc); }
   .dead { opacity: .45; }
@@ -1885,9 +1894,41 @@ function updatePanels(fr) {
         ? `<div class="pad"><span title="Scratchpad — the admiral's own ` +
           `persistent notes, rewritten as it thinks">📝</span> ` +
           `${linkify(escHtml(pad), id)}</div>` : "";
+      // yard progress bars live in a SIBLING cached separately from the pad:
+      // the bars advance every few ticks, and sharing one innerHTML with the
+      // scratchpad would reset its scrollTop on every percent step
+      let yh = "";
+      if (S.expandedCard === id) {
+        const yjobs = (S.yardJobs || []).filter(e => e.fleet === id &&
+          e.t <= fr.t && fr.t < e.ready);
+        yh = yjobs.length ? `<div style="margin-top:4px">` + yjobs.map(j => {
+          const pct = Math.min(99, Math.max(1, Math.round(
+            (fr.t - j.t) / Math.max(1, j.ready - j.t) * 100)));
+          const lab = j.k === "build_start"
+              ? `🔨 building ${escHtml(j.preset)}`
+            : j.k === "repair_start"
+              ? `🔧 repairing #${j.ship}`
+            : j.k === "refit_start"
+              ? `⚙ refit #${j.ship} → ${escHtml(j.to)}`
+              : `🏗 harbor +1 slot`;
+          return `<div class="ybar"><span class="yl">${lab}</span>` +
+            `<span class="yt"><i style="width:${pct}%"></i></span>` +
+            `<span class="yp">${pct}%</span></div>`;
+        }).join("") + `</div>` : "";
+      }
+      if (pb.childElementCount !== 2 || pb.dataset.split !== "1") {
+        pb.dataset.split = "1";
+        pb.innerHTML = `<div class="pi"></div><div class="yb"></div>`;
+        if (S.padCache) S.padCache[id] = undefined;
+        if (S.ybarCache) S.ybarCache[id] = undefined;
+      }
       if ((S.padCache = S.padCache || {})[id] !== ph) {
         S.padCache[id] = ph;
-        pb.innerHTML = ph;
+        pb.firstElementChild.innerHTML = ph;
+      }
+      if ((S.ybarCache = S.ybarCache || {})[id] !== yh) {
+        S.ybarCache[id] = yh;
+        pb.lastElementChild.innerHTML = yh;
       }
     } else {
       // the FLEET tile is about the fleet itself — numbers, not narration
@@ -1895,7 +1936,9 @@ function updatePanels(fr) {
       const pb2 = el.querySelector(".padbox");
       if (pb2 && pb2.innerHTML) {        // the Admirals-tab scratchpad must
         pb2.innerHTML = "";              // not leak onto the Fleets tile
+        delete pb2.dataset.split;
         if (S.padCache) S.padCache[id] = "";
+        if (S.ybarCache) S.ybarCache[id] = "";
       }
       const sigs = S.tl.filter(e => e.k === "signal" && e.fleet === id && e.t <= fr.t).length;
       const msgs = (S.parley || []).filter(e => e.fleet === id && e.t <= fr.t).length;
@@ -3883,8 +3926,11 @@ if (qs.get("livejsonl")) {
                      seriesName: s.name,
                      games: s.games.map(g => ({ game: g.game, file: g.file })) };
     // if the series is still live, find its running job so the last completed
-    // game can offer a "next game (Live)" jump straight into the live view
-    const finish = () => loadBundle(bundle, bundle.games.length - 1);
+    // game can offer a "next game (Live)" jump straight into the live view.
+    // Watch ALWAYS starts at game 1 (what the button promises, and what the
+    // embedded/public path already does) — the Live button and the in-viewer
+    // next-game queue are the routes to the front of the action.
+    const finish = () => loadBundle(bundle, 0);
     if (s.partial) {
       fetch("api/runs").then(r => r.json()).then(d => {
         const lj = (d.jobs || []).find(j => j.name === s.name &&

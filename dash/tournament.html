@@ -211,7 +211,7 @@ function render() {
     for (const g of m.games || []) {
       if (g.winner) wins[g.winner] = (wins[g.winner] || 0) + 1;
     }
-    const rlab = elim && m.round > 0 && m.round < 9e9
+    const rlab = elim && !byRound && m.round > 0 && m.round < 9e9
       ? ` · ${m.round === maxRound ? "final" : "round " + m.round}` : "";
     let h = `<div class="mu${st === "live" ? " liv" : ""}">` +
       `<div class="hd"><span class="stat">${st === "live"
@@ -234,14 +234,30 @@ function render() {
         `next game playing…</span>` : "") + `</div></div>`;
     return h;
   };
-  const cols = [["sched", "Scheduled"], ["live", "Live"], ["done", "Completed"]];
+  // round_robin reads as a pipeline: Scheduled | Live | Completed. A real
+  // BRACKET (single_elim) keeps its by-round shape — advancement is the
+  // story there, and cards update in place as games land.
+  const byRound = elim;
   let h = "";
-  for (const [key, label] of cols) {
-    const col = mus.filter(m => statusOf(m) === key);
-    h += `<div class="rnd"><div class="rlabel">${label}</div>` +
-      (col.length ? col.map(card).join("")
-        : `<div class="stat" style="text-align:center;color:var(--dim)">` +
-          `— none —</div>`) + `</div>`;
+  if (byRound) {
+    const rounds = {};
+    for (const m of mus) (rounds[m.round] = rounds[m.round] || []).push(m);
+    for (const r of Object.keys(rounds).sort((a, b) => a - b)) {
+      const last = +r === maxRound && maxRound > 0;
+      h += `<div class="rnd"><div class="rlabel">${r === "0" ? "in progress"
+          : r === "9000000000" ? "still to sail"
+          : last ? "final" : "round " + r}</div>` +
+        rounds[r].map(card).join("") + `</div>`;
+    }
+  } else {
+    const cols = [["sched", "Scheduled"], ["live", "Live"], ["done", "Completed"]];
+    for (const [key, label] of cols) {
+      const col = mus.filter(m => statusOf(m) === key);
+      h += `<div class="rnd"><div class="rlabel">${label}</div>` +
+        (col.length ? col.map(card).join("")
+          : `<div class="stat" style="text-align:center;color:var(--dim)">` +
+            `— none —</div>`) + `</div>`;
+    }
   }
   $("bracket").innerHTML = h || `<div class="card">no matchups yet — the ` +
     `first games are still being played</div>`;

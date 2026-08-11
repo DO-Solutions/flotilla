@@ -623,14 +623,23 @@ class Engine:
             if any(cheb(x, y, px, py) < 10 for px, py, _ in pts):
                 continue
             if sym:
-                # 4-WAY symmetry (both axes, the fish-shoal scheme): every
-                # seed lands with its three mirrors, so every admiral's CORNER
-                # of the map carves into the same territory layout. (180°
-                # pairs still favored the two fleets whose harbors sat on the
-                # pair axis in 3-4 player games.)
-                quad = [(x, y), (self.W - 1 - x, y),
-                        (x, self.H - 1 - y), (self.W - 1 - x, self.H - 1 - y)]
-                if len(pts) >= n - 3:
+                # symmetry matched to the FAIRNESS the player count needs.
+                # 3-4 players: 4-WAY mirrors (both axes) so every corner
+                # carves into the same layout — but a mirrored seed is by
+                # construction a 2x2 rectangle, and at small counts the map
+                # reads as "two rows of territories". Head-to-head (<=2
+                # fleets) only needs 180° point symmetry: each half is the
+                # other's rotation, provably even, and the diagonal pairs
+                # place twice the free seeds — organic layouts instead of
+                # the grid. (Straight 180° stays out of 3-4p games: it
+                # favored the fleets whose harbors sat on the pair axis.)
+                if len(self.fleets) <= 2:
+                    quad = [(x, y), (self.W - 1 - x, self.H - 1 - y)]
+                else:
+                    quad = [(x, y), (self.W - 1 - x, y),
+                            (x, self.H - 1 - y),
+                            (self.W - 1 - x, self.H - 1 - y)]
+                if len(pts) > n - len(quad):
                     # fewer than 4 slots left: prefer the self-symmetric
                     # center for ONE, then let the relaxed fill below finish —
                     # count beats perfection (the parity lesson from the

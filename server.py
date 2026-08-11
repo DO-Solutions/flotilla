@@ -1297,6 +1297,39 @@ def _showcase_put_file(job, rel, path):
         pass
 
 
+def _showcase_refresh_tournament(tname, rel=None, blob=None):
+    """A REGISTERED tournament link (the 🌐 prefix under showcase/tournament-*)
+    auto-updates as games land: put only the DELTA — the replay that just
+    arrived plus the two small status files (tournament.json, the
+    series-index slice) — never the whole prefix. A 30-game tournament
+    re-publishing wholesale on every landing would move hundreds of MB; the
+    delta is one replay + a few KB. No registered link = no-op."""
+    cfg = _showcase_cfg()
+    if cfg is None:
+        return
+    ident = f"tournament-{tname}"
+    if not any(x.get("ident") == ident for x in _showcase_list()):
+        return
+    prefix = f"showcase/{ident}"
+    try:
+        if rel and blob and rel != "tournament.json":
+            _s3_put_public(cfg, f"{prefix}/{rel}", blob, "application/json")
+        tp = os.path.join(LIB, "tournaments", tname, "tournament.json")
+        if os.path.isfile(tp):
+            with open(tp, "rb") as fh:
+                _s3_put_public(cfg, f"{prefix}/tournament.json", fh.read(),
+                               "application/json")
+        with open(os.path.join(LIB, "index.json")) as fh:
+            full = json.load(fh)
+        slc = [x for x in full.get("series", [])
+               if x.get("tournament") == tname]
+        _s3_put_public(cfg, f"{prefix}/series-index.json",
+                       json.dumps({"series": slc}).encode(),
+                       "application/json")
+    except Exception:
+        pass                     # refresh is best-effort; publish still syncs
+
+
 def _showcase_job_game(job, rel, rp, blob=None):
     """Aux path: the replay dict is already in hand. Pass `blob` (the compact
     bytes the caller just wrote to disk) to skip a second multi-MB dumps —
@@ -2733,6 +2766,12 @@ class H(BaseHTTPRequestHandler):
                         _showcase_job_game(j, fn, rp, blob=blob)
                         build_index(LIB)
                         _persist_jobs()
+                        # registered public link tracks the bracket live —
+                        # threaded: a multi-MB S3 put must not stall the
+                        # worker's callback
+                        threading.Thread(
+                            target=_showcase_refresh_tournament,
+                            args=(j["name"], fn, blob), daemon=True).start()
                         return self._send(200, {"ok": True})
                     if j["mode"] == "series":
                         dst = os.path.join(LIB, "series", j["name"])

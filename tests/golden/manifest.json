@@ -17,12 +17,15 @@
   "teams-2v2": {
    "match.json": "87aef86c834a6e34f8a8b8f7a84d4c4204238624600b823ce526cc902e339372"
   },
+  "territory-1v1": {
+   "match.json": "89bfe25a243836c4575b4561ab31123a32b5f4e2ccaf788934a246e7fd9d47fd"
+  },
   "territory-4p": {
    "match.json": "dd55aa47f9f92b94333a3909f12110463cb9cac41818b7addbf3940af5b14994"
   }
  },
  "perf": {
   "host": "cc-01",
-  "ticks_per_cpu_sec": 2678.6
+  "ticks_per_cpu_sec": 2666.7
  }
 }

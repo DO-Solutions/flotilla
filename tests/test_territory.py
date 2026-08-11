@@ -116,8 +116,10 @@ def main():
     assert rid3 not in e3._contest, "abandoning the claim resets the clock"
     for sh, ox, oy in moved:
         sh.x, sh.y = ox, oy
-    # --- symmetric generation is 4-WAY (both axes, 2026-08-10): every seed
-    # has all three mirrors (or is the self-symmetric center) ---
+    # --- symmetry adapts to PLAYER COUNT (2026-08-11): head-to-head games
+    # use 180-degree point pairs (a 4-way mirrored seed is by construction a
+    # 2x2 rectangle — small counts rendered "two rows of territories"), while
+    # 3-4 player games keep the full 4-way quads for corner fairness ---
     e4 = Engine([("A", Idle()), ("B", Idle())], seed=21, max_ticks=1,
                 scenario={"win": "territory", "territories": 12,
                           "territory_symmetry": True})
@@ -125,12 +127,21 @@ def main():
     W, H = e4.W, e4.H
     unmirrored = [c for c in ctrs
                   if c != (W // 2, H // 2)
-                  and not {(W - 1 - c[0], c[1]), (c[0], H - 1 - c[1]),
-                           (W - 1 - c[0], H - 1 - c[1])} <= ctrs]
-    # the relaxed count-fill may add a few unpaired seeds when the paired
-    # placement runs dry — but a 12-territory default map should mirror all
-    # but the center/fill slots
-    assert len(unmirrored) <= 3, f"unmirrored territory seeds: {unmirrored}"
+                  and (W - 1 - c[0], H - 1 - c[1]) not in ctrs]
+    assert len(unmirrored) <= 3, f"unpaired 1v1 seeds: {unmirrored}"
+    assert len({y for _, y in ctrs}) > 4, \
+        f"1v1 layout must not be row-locked (rows: {len({y for _, y in ctrs})})"
+    e4q = Engine([("A", Idle()), ("B", Idle()), ("C", Idle()), ("D", Idle())],
+                 seed=21, max_ticks=1,
+                 scenario={"win": "territory", "territories": 12,
+                           "territory_symmetry": True})
+    cq = {(r["x"], r["y"]) for r in e4q.regions}
+    Wq, Hq = e4q.W, e4q.H
+    unq = [c for c in cq
+           if c != (Wq // 2, Hq // 2)
+           and not {(Wq - 1 - c[0], c[1]), (c[0], Hq - 1 - c[1]),
+                    (Wq - 1 - c[0], Hq - 1 - c[1])} <= cq]
+    assert len(unq) <= 3, f"unmirrored 4p quad seeds: {unq}"
     # --- territory_size drives the count ---
     e5 = Engine([("A", Idle()), ("B", Idle())], seed=21, max_ticks=1,
                 scenario={"win": "territory", "territory_size": 180,
