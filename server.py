@@ -96,6 +96,9 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(HERE, "sim"))
 sys.path.insert(0, os.path.join(HERE, "scripts"))
+import run_config                       # noqa: E402,F401 — registers the
+                                        # game (engine/contract.py) at boot
+from engine import contract             # noqa: E402
 import config_schema                    # noqa: E402
 from libindex import build_index, matches_meta, save_matches_meta  # noqa: E402
 from make_bundle import build_bundle    # noqa: E402
@@ -1033,7 +1036,7 @@ def _s3_put_public(cfg, key, data, content_type="text/html"):
 
 # ---------------- saved ship classes (the Configure page's designer) ---------
 SHIPS_LOCK = threading.Lock()
-SHIP_STATS = ("speed", "hold", "guns", "armor", "hull", "lookout")
+SHIP_STATS = tuple(contract.game().ship_stats)   # the game's designer stats
 
 
 def _ships_path():
@@ -1055,9 +1058,8 @@ def _clean_ship(name, st):
     """(name, stats) validated for storage: safe name, every stat an int 1-40.
     Point-total rules are per-run (design_points) — the engine enforces them
     at match start, where the run's own budget is known."""
-    import core as _core
     name = re.sub(r"[^A-Za-z0-9_-]", "", str(name))[:24]
-    if not name or name in _core.PRESETS or not isinstance(st, dict):
+    if not name or name in contract.game().presets or not isinstance(st, dict):
         return None, None
     clean = {}
     for k in SHIP_STATS:
@@ -2349,9 +2351,8 @@ class H(BaseHTTPRequestHandler):
             return self._send(200, {"enabled": _showcase_cfg() is not None,
                                     "published": _showcase_list()})
         if path == "/api/ships":
-            import core as _core
             return self._send(200, {"builtin": {k: dict(v) for k, v
-                                                in _core.PRESETS.items()},
+                                                in contract.game().presets.items()},
                                     "saved": _load_ships(),
                                     "stats": list(SHIP_STATS)})
         if path == "/api/runs":
@@ -3051,10 +3052,9 @@ class H(BaseHTTPRequestHandler):
                     with open(tmp, "w") as fh:
                         json.dump(ships, fh, indent=1, sort_keys=True)
                     os.replace(tmp, _ships_path())
-                import core as _core
                 return self._send(200, {"ok": True,
                                         "builtin": {k: dict(v) for k, v
-                                                    in _core.PRESETS.items()},
+                                                    in contract.game().presets.items()},
                                         "saved": ships,
                                         "stats": list(SHIP_STATS)})
             if path == "/api/rename":

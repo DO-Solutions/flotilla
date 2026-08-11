@@ -49,6 +49,21 @@ def one_line(s, cap):
 class SimBase:
     """Extend with your game (see the module docstring for the surface)."""
 
+    #: the methods a game MUST define — checked the moment the subclass is
+    #: created, so an incomplete game fails at import with a list of what is
+    #: missing, never as an AttributeError mid-match
+    WORLD_PROTOCOL = ("tick", "summary_for", "_apply_actions",
+                      "_frame", "live_header")
+
+    def __init_subclass__(cls, **kw):
+        super().__init_subclass__(**kw)
+        missing = [m for m in SimBase.WORLD_PROTOCOL
+                   if not callable(getattr(cls, m, None))]
+        if missing:
+            raise TypeError(
+                f"{cls.__name__} does not satisfy the SimBase World protocol "
+                f"— missing: {', '.join(missing)} (see engine/sim.py)")
+
     def _ev(self, kind, **kw):
         kw["t"] = self.t
         kw["k"] = kind

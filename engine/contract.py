@@ -36,7 +36,9 @@ _REQUIRED = {
 
 # optional pieces default harmlessly: a game without a ship-program language
 # simply has no API card to append to prompts
-_OPTIONAL = {"api_reference": None}
+_OPTIONAL = {"api_reference": None,   # ship-language teaching card
+             "presets": {},           # built-in unit classes {name: stats}
+             "ship_stats": ()}        # designer stat names, in display order
 
 _game = None
 _binders = []

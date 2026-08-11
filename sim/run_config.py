@@ -27,6 +27,8 @@ contract.set_game(contract.Game(
     schema=config_schema,
     digest_for=series.digest_for,
     api_reference=conn.api_reference,      # the ship-language teaching card
+    presets=core.PRESETS,                  # built-in classes (designer/API)
+    ship_stats=core.SHIP_STATS,            # designer stat names
 ))
 
 from engine import runner as _runner       # noqa: E402

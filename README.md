@@ -66,6 +66,8 @@ logs, admiral thoughts, token/cost telemetry, and (in series) the post-game memo
   library with `scripts/migrate_replays.py <library-dir> [--dry-run]`.
 - **[docs/FLEET_AUXILIARIES.md](docs/FLEET_AUXILIARIES.md)** — the disposable
   cloud-worker fleet (running games off-box, pause/resume, the showcase).
+- **[docs/ENGINE.md](docs/ENGINE.md)** — the game-agnostic engine under
+  Flotilla: what `engine/` provides and how to build a second game on it.
 - In-app **❓ Help** in the dashboard and the replay viewer (numbers match the
   match you're looking at).
 

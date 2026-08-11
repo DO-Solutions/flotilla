@@ -16,6 +16,8 @@ import conn
 from config_schema import resolve as _resolve_cfg
 from engine.sim import SimBase, one_line   # noqa: E402  (conn bootstraps ROOT)
 
+SHIP_STATS = ("speed", "hold", "guns", "armor", "hull", "lookout")
+
 # --- tunables (balance knobs live here; the harness sweeps matches against them) ---
 TICKS_PER_SEC = 10
 WINDOW = 100            # ticks between admiral decision windows (10s)
