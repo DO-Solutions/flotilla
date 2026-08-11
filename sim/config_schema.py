@@ -7,6 +7,12 @@ config-schema.json, writes a config JSON, and runs `python3 sim/run_config.py
 config.json` — same power as the GUI, no extra ceremony.
 """
 
+import os as _os
+import sys as _sys
+
+_sys.path.insert(0, _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))))
+from engine import schema as _schema     # noqa: E402  (machinery; content lives HERE)
+
 SCHEMA = {
     "world": {
         "width":       dict(d=96,   t="int", lo=48, hi=384, doc="Map width in cells (the viewer zooms + pans, so huge charts stay watchable)."),
@@ -140,97 +146,41 @@ ALIASES = {
 
 
 def _unalias(overrides):
-    out = {}
-    for k, v in (overrides or {}).items():
-        nk = ALIASES.get(k, k)
-        if nk in out and nk != k:
-            continue                      # the new name was set explicitly: it wins
-        out[nk] = v
-    return out
+    return _schema.unalias(ALIASES, overrides)
 
 
 def defaults():
-    return {k: spec["d"] for sec in SCHEMA.values() for k, spec in sec.items()}
+    return _schema.defaults(SCHEMA)
 
 
 def section_resolve(section, overrides=None):
-    """resolve() for ONE schema section (admirals/series/tournament): defaults
-    merged with overrides, unknown keys rejected, values clamped to bounds.
-    These sections used to bypass validation entirely — series.games=0 (schema
-    lo=1) ran to completion and filed an empty green run into the library."""
-    spec_map = SCHEMA[section]
-    cfg = {k: s["d"] for k, s in spec_map.items()}
-    for k, v in _unalias(overrides).items():
-        if k not in spec_map:
-            raise KeyError(f"unknown {section} key '{k}' — see config-schema.json")
-        spec = spec_map[k]
-        if spec["t"] == "int":
-            v = max(spec["lo"], min(spec["hi"], int(v)))
-        elif spec["t"] == "float":
-            v = max(spec["lo"], min(spec["hi"], float(v)))
-        elif spec["t"] == "enum" and v not in spec["opts"]:
-            raise ValueError(f"{section} key '{k}' must be one of "
-                             f"{spec['opts']}, got {v!r}")
-        elif spec["t"] == "bool":
-            v = bool(v)
-        cfg[k] = v
-    return cfg
+    return _schema.section_resolve(SCHEMA, ALIASES, section, overrides)
 
 
 def resolve(overrides=None):
-    """Merge overrides onto defaults; unknown keys rejected loudly (agents get a
-    clear error, not silent misconfiguration). Values are clamped to bounds."""
-    cfg = defaults()
-    known = set(cfg)
-    for k, v in _unalias(overrides).items():
-        if k in ("rules",):
-            continue
-        if k not in known:
-            raise KeyError(f"unknown config key '{k}' — see config-schema.json")
-        spec = next(s[k] for s in SCHEMA.values() if k in s)
-        if spec["t"] == "int":
-            v = max(spec["lo"], min(spec["hi"], int(v)))
-        elif spec["t"] == "float":
-            v = max(spec["lo"], min(spec["hi"], float(v)))
-        elif spec["t"] == "enum" and v not in spec["opts"]:
-            raise ValueError(f"config key '{k}' must be one of {spec['opts']}, got {v!r}")
-        elif spec["t"] == "bool":
-            v = bool(v)
-        cfg[k] = v
-    return cfg
+    return _schema.resolve(SCHEMA, ALIASES, overrides)
 
 
 def schema_json():
-    import json
-    return json.dumps({sec: {k: {kk: vv for kk, vv in spec.items()}
-                             for k, spec in knobs.items()}
-                       for sec, knobs in SCHEMA.items()}, indent=1)
+    return _schema.schema_json(SCHEMA)
+
+
+_MD_HEADER = ["# Flotilla configuration reference",
+              "",
+              "Every knob, its default, bounds, and effect. Agent-first: read",
+              "`config-schema.json` (same content, machine-readable), write a config",
+              "JSON with any subset of these keys, run `python3 sim/run_config.py",
+              "your-config.json`. Unknown keys fail loudly; values clamp to bounds.",
+              "Some knobs carry a `show_if` hint in config-schema.json — purely a",
+              "UI visibility cue (the knob only matters when another knob has that",
+              "value); the engine accepts every key regardless. Renamed knobs",
+              "(regions→territories, region_*→territory_*, ship_designs→",
+              "default_designs) keep their old names as accepted aliases.",
+              ""]
 
 
 def config_md():
-    out = ["# Flotilla configuration reference",
-           "",
-           "Every knob, its default, bounds, and effect. Agent-first: read",
-           "`config-schema.json` (same content, machine-readable), write a config",
-           "JSON with any subset of these keys, run `python3 sim/run_config.py",
-           "your-config.json`. Unknown keys fail loudly; values clamp to bounds.",
-           "Some knobs carry a `show_if` hint in config-schema.json — purely a",
-           "UI visibility cue (the knob only matters when another knob has that",
-           "value); the engine accepts every key regardless. Renamed knobs",
-           "(regions→territories, region_*→territory_*, ship_designs→",
-           "default_designs) keep their old names as accepted aliases.",
-           ""]
-    for sec, knobs in SCHEMA.items():
-        out.append(f"## {sec}")
-        out.append("")
-        out.append("| key | default | range | effect |")
-        out.append("|---|---|---|---|")
-        for k, s in knobs.items():
-            rng = f"{s['lo']}–{s['hi']}" if "lo" in s else \
-                  " / ".join(map(str, s["opts"])) if "opts" in s else "text"
-            out.append(f"| `{k}` | `{s['d']}` | {rng} | {s['doc']} |")
-        out.append("")
-    return "\n".join(out)
+    return _schema.config_md(SCHEMA, _MD_HEADER)
 
 
 if __name__ == "__main__":
