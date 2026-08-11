@@ -1900,41 +1900,9 @@ function updatePanels(fr) {
         ? `<div class="pad"><span title="Scratchpad — the admiral's own ` +
           `persistent notes, rewritten as it thinks">📝</span> ` +
           `${linkify(escHtml(pad), id)}</div>` : "";
-      // yard progress bars live in a SIBLING cached separately from the pad:
-      // the bars advance every few ticks, and sharing one innerHTML with the
-      // scratchpad would reset its scrollTop on every percent step
-      let yh = "";
-      if (S.expandedCard === id) {
-        const yjobs = (S.yardJobs || []).filter(e => e.fleet === id &&
-          e.t <= fr.t && fr.t < e.ready);
-        yh = yjobs.length ? `<div style="margin-top:4px">` + yjobs.map(j => {
-          const pct = Math.min(99, Math.max(1, Math.round(
-            (fr.t - j.t) / Math.max(1, j.ready - j.t) * 100)));
-          const lab = j.k === "build_start"
-              ? `🔨 building ${escHtml(j.preset)}`
-            : j.k === "repair_start"
-              ? `🔧 repairing #${j.ship}`
-            : j.k === "refit_start"
-              ? `⚙ refit #${j.ship} → ${escHtml(j.to)}`
-              : `🏗 harbor +1 slot`;
-          return `<div class="ybar"><span class="yl">${lab}</span>` +
-            `<span class="yt"><i style="width:${pct}%"></i></span>` +
-            `<span class="yp">${pct}%</span></div>`;
-        }).join("") + `</div>` : "";
-      }
-      if (pb.childElementCount !== 2 || pb.dataset.split !== "1") {
-        pb.dataset.split = "1";
-        pb.innerHTML = `<div class="pi"></div><div class="yb"></div>`;
-        if (S.padCache) S.padCache[id] = undefined;
-        if (S.ybarCache) S.ybarCache[id] = undefined;
-      }
       if ((S.padCache = S.padCache || {})[id] !== ph) {
         S.padCache[id] = ph;
-        pb.firstElementChild.innerHTML = ph;
-      }
-      if ((S.ybarCache = S.ybarCache || {})[id] !== yh) {
-        S.ybarCache[id] = yh;
-        pb.lastElementChild.innerHTML = yh;
+        pb.innerHTML = ph;
       }
     } else {
       // the FLEET tile is about the fleet itself — numbers, not narration
@@ -1942,9 +1910,7 @@ function updatePanels(fr) {
       const pb2 = el.querySelector(".padbox");
       if (pb2 && pb2.innerHTML) {        // the Admirals-tab scratchpad must
         pb2.innerHTML = "";              // not leak onto the Fleets tile
-        delete pb2.dataset.split;
         if (S.padCache) S.padCache[id] = "";
-        if (S.ybarCache) S.ybarCache[id] = "";
       }
       const sigs = S.tl.filter(e => e.k === "signal" && e.fleet === id && e.t <= fr.t).length;
       const msgs = (S.parley || []).filter(e => e.fleet === id && e.t <= fr.t).length;
@@ -1990,17 +1956,23 @@ function updatePanels(fr) {
       if (xp && S.expandedCard === id) {
         // expanded fleet card: a live ship legend (the real silhouettes) +
         // what every yard slot is working on
+        const ybar = (j) => {
+          const pct = Math.min(99, Math.max(1, Math.round(
+            (fr.t - j.t) / Math.max(1, j.ready - j.t) * 100)));
+          return `<div class="ybar"><span class="yt"><i style="width:${pct}%">` +
+            `</i></span><span class="yp">${pct}%</span></div>`;
+        };
         const jl = jobs.map(j =>
-          j.k === "build_start"
-            ? `<div>🔨 building ${escHtml(j.preset)} — ready ${fmtTime(j.ready)}</div>`
+          (j.k === "build_start"
+            ? `<div>🔨 building ${escHtml(j.preset)} — ready ${fmtTime(j.ready)}`
           : j.k === "repair_start"
             ? `<div>🔧 repairing ${escHtml(classAt(j.ship, fr.t) || "ship")} ` +
-              `#${j.ship} — done ${fmtTime(j.ready)}</div>`
+              `#${j.ship} — done ${fmtTime(j.ready)}`
           : j.k === "refit_start"
             ? `<div>⚙ refitting #${j.ship} → ${escHtml(j.to)} — done ` +
-              `${fmtTime(j.ready)}</div>`
+              `${fmtTime(j.ready)}`
             : `<div>🏗 expanding the harbor (+1 slot, no dock occupied) — ` +
-              `done ${fmtTime(j.ready)}</div>`).join("");
+              `done ${fmtTime(j.ready)}`) + ybar(j) + `</div>`).join("");
         const selSq = S.sel && S.sel.k === "q" && S.sel.fleet === id
           ? S.sel.squad : null;
         const xph =
