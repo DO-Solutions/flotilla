@@ -108,6 +108,38 @@ thaws, and continues mid-game (`run_config --resume`). That is the
 spot-instance workflow: pause on an interruption notice, resume when capacity
 or prices return.
 
+**Tournaments pause too (2026-08-12).** A tournament freezes a **two-level
+checkpoint**: every in-flight matchup lane writes its own series checkpoint
+(the same freeze a standalone series does), then the tournament writes one
+`checkpoint.json` embedding them all plus the bracket state — completed
+matchup records, standings, carried memos. One pause request fans in across
+parallel lanes (each freezes at its next window boundary) and the tournament
+checkpoint is written **last**, so it can never point at a lane that is not
+on disk. Resume rebuilds the schedule deterministically from the config,
+replays nothing that is recorded, thaws each frozen lane mid-game, and plays
+on. A lane whose checkpoint did not survive resumes from its completed-game
+rows — the worst case is losing one partially-played game per lane, never
+the run. The old "tournaments cannot pause" exemption and its 72h runaway
+ceiling are gone.
+
+**Fail-safe, not fail-dead.** A pause the runner cannot honor — the
+checkpoint write fails — is *refused*: the run logs `pause_refused` and keeps
+playing. Exit 75 with nothing on disk is no longer a reachable state (that
+gap killed champions-cup-1 at 6/50 and champions-cup-2 at 33/50). Belt and
+braces on the worker: `aux_agent` retries an unreadable checkpoint before
+reporting anything, and every finished game is already in the library —
+`POST /api/reconcile-tournament {"name", "write"?}` (or
+`scripts/reconcile_tournament.py <dir> --write`) rebuilds a bracket's records
+and standings from the replays on disk. A rebuilt matchup only gets a winner
+the games mathematically decide; the champion field is never invented.
+
+**Worker rotation is a Server-tab setting**: ♻ worker rotation on/off + the
+age cap in hours (default 8, range 1–168), stored in `library/rotation.json`
+via `POST /api/aux-rotation` — separate from `/api/aux-config` so changing it
+never re-posts the DO token. The watcher re-reads it every pass, so a change
+applies to live jobs. At the cap the job is checkpointed onto a fresh droplet
+(the cap re-arms on thaw); rotation off means no age cap at all.
+
 Checkpoints are **plain JSON** (2026-08-08): `Engine.freeze()` records only the
 mutable runtime state; `Engine.thaw()` overlays it onto a freshly-constructed
 engine on CURRENT code, so a checkpoint written by an older build resumes

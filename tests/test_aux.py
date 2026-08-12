@@ -411,9 +411,9 @@ st, _ = req("/api/aux/pwatch/done", {"series": {}},
 ok(st == 200 and server._job("pwatch")["state"] == "done",
    "revived job completes on the minted bearer")
 
-# ---- tournaments are EXEMPT from pause-rotation (they cannot checkpoint;
-# the rotation pause request killed champions-cup-1 at the 8h cap) — they run
-# under the tournament_max_age_h runaway ceiling instead ----
+# ---- tournaments ROTATE like series now (the runner freezes a two-level
+# checkpoint) — the old cannot-checkpoint exemption + runaway ceiling are
+# gone with the gap that forced them ----
 tj1 = dict(id="twatch", name="twatch-cup", mode="tournament", state="done",
            games_done=6, games_expected=50, submitted=time.time(),
            started=time.time() - 10 * 3600,      # 10h old: PAST max_age_h=8
@@ -425,17 +425,74 @@ with open(os.path.join(TMP, "aux.json")) as fh:
 server._aux_watch(tj1, auxcfg_t)         # done -> returns; must NOT fail it
 ok(tj1["state"] == "done" and tj1["error"] is None,
    "a finished tournament past the rotation cap is left alone")
-ok(any("rotation cap does not apply" in l for l in tj1["log"]),
-   "tournament watcher logs the exemption")
+# a RUNNING tournament past the cap gets the same graceful rotation pause a
+# series gets: command=pause on its AUX record, then a grace window. Flip the
+# job to paused from another thread (as the checkpoint callback would) and
+# the watcher must resume it rather than fail it.
 tj2 = dict(id="twatch2", name="twatch2-cup", mode="tournament",
            state="running", games_done=3, games_expected=50,
-           submitted=time.time(), started=time.time() - 80 * 3600,  # 80h: past
-           finished=None, error=None, log=[], aux=True)             # the 72h ceiling
+           submitted=time.time(), started=time.time() - 10 * 3600,
+           finished=None, error=None, log=[], aux=True)
 with server.JOBS_LOCK:
     server.JOBS.append(tj2)
-server._aux_watch(tj2, dict(auxcfg_t, tournament_max_age_h=72))
-ok(tj2["state"] == "failed" and "runaway ceiling" in (tj2["error"] or ""),
-   "a tournament past the runaway ceiling is failed loudly")
+with server.AUX_LOCK:
+    server.AUX["twatch2"] = {"bearer": "tb2", "droplet_id": None,
+                             "config": {}, "command": None}
+
+
+_real_sleep = time.sleep
+
+
+def _land_pause():
+    deadline = time.time() + 20
+    while time.time() < deadline:        # the watcher asked for the rotation
+        with server.AUX_LOCK:
+            if server.AUX.get("twatch2", {}).get("command") == "pause":
+                break
+        _real_sleep(0.05)
+    tj2["state"] = "paused"              # the checkpoint "shipped home"
+    while tj2["state"] != "running" and time.time() < deadline:
+        _real_sleep(0.05)                # _aux_resume thaws on a fresh box…
+    tj2["state"] = "done"                # …where the job then finishes
+
+
+threading.Thread(target=_land_pause, daemon=True).start()
+DO_CALLS.clear()
+# fast-forward the watcher's 20s polls for this block (restored below)
+server.time.sleep = lambda s: _real_sleep(min(s, 0.05))
+try:
+    server._aux_watch(tj2, auxcfg_t)
+    ok(any("rotating" in line for line in tj2["log"]),
+       "a running tournament past the cap is ROTATED, not failed")
+    ok(any("resumed on fresh auxiliary" in line for line in tj2["log"]),
+       "the rotation thaws the tournament on a fresh worker")
+    ok(tj2["state"] == "done" and tj2["error"] is None,
+       f"rotated tournament runs on to completion (state {tj2['state']})")
+    # rotation DISABLED: the watcher applies no age cap at all — a job far
+    # past the cap is left running until it finishes on its own
+    rotf = os.path.join(TMP, "rotation.json")
+    with open(rotf, "w") as fh:
+        json.dump({"rotate_enabled": False}, fh)
+    tj3 = dict(id="twatch3", name="twatch3", mode="series", state="running",
+               games_done=1, games_expected=5, submitted=time.time(),
+               started=time.time() - 100 * 3600, finished=None, error=None,
+               log=[], aux=True)
+    with server.JOBS_LOCK:
+        server.JOBS.append(tj3)
+
+    def _finish_soon():
+        _real_sleep(0.6)
+        tj3["state"] = "done"
+
+    threading.Thread(target=_finish_soon, daemon=True).start()
+    t0 = time.time()
+    server._aux_watch(tj3, auxcfg_t)
+    ok(tj3["state"] == "done" and tj3["error"] is None
+       and time.time() - t0 < 30,
+       "rotation off: a 100h-old job is waited out, never rotated or failed")
+    os.remove(rotf)
+finally:
+    server.time.sleep = _real_sleep
 
 # ---- restart survival: bearers + jobs live through a flagship bounce ----
 with open(os.path.join(TMP, "aux.json"), "w") as fh:

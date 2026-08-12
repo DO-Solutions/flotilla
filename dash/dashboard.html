@@ -434,6 +434,18 @@
   <div class="dim" style="margin-bottom:6px">Worker VMs that run sims off the
     flagship box. Per-run size and the aux toggle stay on Chart a Course.</div>
   <div id="auxlist" class="dim">loading…</div>
+  <div style="margin-top:8px; display:flex; gap:10px; flex-wrap:wrap; align-items:center">
+    <label title="a long run is moved to a fresh worker droplet at the age cap:
+      the run checkpoints, the old droplet is released, and a new one thaws it —
+      nothing is lost. Applies to series AND tournaments.">
+      <input type="checkbox" id="axrot"> ♻ worker rotation</label>
+    <span id="axrothwrap">at age
+      <input class="sname" id="axroth" type="number" min="1" max="168" step="1"
+        style="width:60px" title="hours a worker droplet may run before the job
+        is checkpointed onto a fresh one (1–168)"> h</span>
+    <a class="btn btn-dl" id="axrotsave" href="#">Save</a>
+    <span id="axrotmsg" class="dim"></span>
+  </div>
   <div style="margin-top:8px; display:flex; gap:8px; flex-wrap:wrap; align-items:center; opacity:.5">
     <input class="sname" style="width:130px" placeholder="label" disabled>
     <input class="sname" style="width:200px" placeholder="API token" disabled>
@@ -2409,6 +2421,15 @@ async function renderProviders() {
   COST_MAX = +(lim.max_series_cost || 0);       // keep the launch guard in sync
   applyCostCeiling();
   const ax = d.aux || {};
+  // rotation controls: never clobber an edit in progress (same rule as the
+  // fallback fields above)
+  const rotBusy = ["axrot", "axroth"].some(id => $(id) &&
+    ($(id).dataset.dirty === "1" || document.activeElement === $(id)));
+  if (!rotBusy) {
+    $("axrot").checked = ax.rotate_enabled !== false;
+    $("axroth").value = ax.max_age_h ?? 8;
+    $("axrothwrap").style.opacity = $("axrot").checked ? "" : ".45";
+  }
   $("auxlist").innerHTML = `<table style="width:100%"><thead><tr>
     <th style="text-align:left">#</th><th style="text-align:left">Provider</th>
     <th style="text-align:left">Region</th><th style="text-align:left">Default size</th>
@@ -2477,6 +2498,13 @@ for (const id of FB_IDS) {
   const el = $(id);
   if (el) el.addEventListener("input", () => { el.dataset.dirty = "1"; });
 }
+for (const id of ["axrot", "axroth"]) {
+  const el = $(id);
+  if (el) el.addEventListener("input", () => {
+    el.dataset.dirty = "1";
+    $("axrothwrap").style.opacity = $("axrot").checked ? "" : ".45";
+  });
+}
 document.addEventListener("click", async e => {
   const t = e.target.closest("a");
   if (!t) return;
@@ -2527,6 +2555,24 @@ document.addEventListener("click", async e => {
         body: JSON.stringify({ id: r.id }) })).json();
       if (!r2.ok) window.alert("key added but the check failed: " + r2.error);
     } catch (err) { /* table shows unchecked; ⟳ retries */ }
+    renderProviders();
+    return;
+  }
+  if (t.id === "axrotsave") {
+    e.preventDefault();
+    for (const id of ["axrot", "axroth"]) {
+      if ($(id)) delete $(id).dataset.dirty;
+    }
+    let r;
+    try {
+      r = await (await fetch("api/aux-rotation", { method: "POST",
+        body: JSON.stringify({ rotate_enabled: $("axrot").checked,
+                               max_age_h: +$("axroth").value || 8 }) })).json();
+    } catch (err) { r = { error: "server unreachable" }; }
+    $("axrotmsg").textContent = r && r.ok
+      ? `saved ✓ — rotation ${r.rotate_enabled ? "at " + r.max_age_h + "h" : "off"}`
+      : "save failed: " + ((r || {}).error || "?");
+    setTimeout(() => { $("axrotmsg").textContent = ""; }, 4000);
     renderProviders();
     return;
   }

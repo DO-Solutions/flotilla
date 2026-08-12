@@ -229,12 +229,23 @@ def main():
         if rc == 75:                       # paused: ship the checkpoint home,
             import gzip                    # then the flagship reaps this box
             ckp = os.path.join(outdir, "checkpoint.json")
-            try:
-                with open(ckp, "rb") as fh:
-                    blob = gzip.compress(fh.read(), 6)
-                post("paused", None, raw=blob)
-            except OSError as e:
-                post("fail", {"error": f"paused but checkpoint unreadable: {e}"})
+            # the runner writes the checkpoint atomically BEFORE exiting 75
+            # (and refuses pauses it cannot checkpoint), so a missing file
+            # here is a transient at worst — retry before declaring anything
+            last = None
+            for i in range(4):
+                try:
+                    with open(ckp, "rb") as fh:
+                        blob = gzip.compress(fh.read(), 6)
+                    post("paused", None, raw=blob)
+                    return
+                except OSError as e:
+                    last = e
+                    time.sleep(5 * (i + 1))
+            post("fail", {"error": "paused but checkpoint unreadable after "
+                          f"retries: {last} — completed games are already in "
+                          "the library; reconcile-tournament rebuilds the "
+                          "bracket from them"})
             return
         if rc != 0:
             post("fail", {"error": f"runner exited {rc}: "

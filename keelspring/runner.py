@@ -260,6 +260,33 @@ def make_pause_check(outdir):
     return lambda: os.path.exists(flag)
 
 
+class SeriesPaused(Exception):
+    """A tournament lane froze itself (operator pause or the api-outage
+    breaker). By the time this is raised the lane's checkpoint is already
+    durable in its matchup dir — the tournament catches it, freezes its
+    sibling lanes, and embeds every lane checkpoint in its own."""
+
+    def __init__(self, mdir, game, rows=None):
+        super().__init__(f"lane paused at game {game}")
+        self.mdir, self.game = mdir, game
+        self.rows = rows or []      # completed-game rows: the fallback resume
+                                    # path if the checkpoint itself is lost
+
+
+def _clinched(rows, total):
+    """True once the leader has more wins than anyone else could reach even
+    winning every remaining game (a tie included — same rule as the in-loop
+    check, extracted so a resumed lane can re-derive it from its game rows
+    instead of trusting a counter)."""
+    wins = {}
+    for r in rows:
+        wins[r["winner"]] = wins.get(r["winner"], 0) + 1
+    ranked = sorted(wins.values(), reverse=True) or [0]
+    lead = ranked[0]
+    second = ranked[1] if len(ranked) > 1 else 0
+    return lead > second + (total - len(rows))
+
+
 def write_checkpoint(outdir, payload):
     """Freeze a run mid-game as PLAIN JSON: the engine's mutable state
     (Engine.freeze), the bots (constructor spec from provenance + their
@@ -313,23 +340,51 @@ def debrief_all(named_bots, replay, game_no, total, timeout_s, full_info=False):
 
 
 def run_series(named_bots, seed, scenario, ser, outdir, label="series", prov=None,
-               pause_check=None, resume=None, live=True):
+               pause_check=None, resume=None, live=True, pause_mode="exit"):
     os.makedirs(outdir, exist_ok=True)
     games = list(resume["rows"]) if resume else []
     final_memos = {}
     start_g = resume["game"] if resume else 1
-    for g in range(start_g, ser["games"] + 1):
+    replay = None
+    thaw_eng = resume.get("engine") if resume else None
+    g = start_g
+    # a lane rebuilt from its game rows (worker died with no checkpoint) may
+    # already be decided — recompute clinch from the rows, never a counter,
+    # or a thawed matchup replays a decided series
+    if resume and ser.get("clinch") and games and _clinched(games, ser["games"]):
+        _emit({"clinched": True, "after_game": len(games),
+               "games": ser["games"], "on_resume": True})
+        g = ser["games"] + 1
+    while g <= ser["games"]:
         gseed = seed + (g - 1 if ser["vary_seeds"] else 0)
         gpath = os.path.join(outdir, f"g{g}.json")
         replay, result, row = play_game(
             named_bots, gseed, scenario, gpath, prov=prov,
             pause_check=pause_check,
-            resume_engine=resume.get("engine") if (resume and g == start_g) else None,
+            resume_engine=thaw_eng,
             game_no=g, games_total=ser["games"], live=live)
+        thaw_eng = None
         if replay == "PAUSED":
-            write_checkpoint(outdir, dict(
-                kind="series", engine=result, game=g, rows=games, ser=ser,
-                scenario=scenario, prov=prov, seed=seed))
+            try:
+                write_checkpoint(outdir, dict(
+                    kind="series", engine=result, game=g, rows=games, ser=ser,
+                    scenario=scenario, prov=prov, seed=seed))
+            except OSError as e:
+                # fail-safe, not fail-dead: losing a pause (a rotation, one
+                # breaker trip) is cheap; exiting 75 with nothing on disk
+                # loses the whole run. Refuse the pause and keep playing the
+                # SAME game in-process.
+                _emit({"pause_refused": True, "game": g,
+                       "err": f"{type(e).__name__}: {e}"})
+                try:
+                    os.remove(os.path.join(outdir, "pause.flag"))
+                except OSError:
+                    pass
+                thaw_eng = result
+                continue
+            if pause_mode == "raise":               # tournament lane: the
+                raise SeriesPaused(outdir, g, games)  # caller freezes, never
+                                                      # this process
             print(json.dumps({"paused": True, "game": g, "t": result.t,
                               "reason": getattr(result, "pause_reason",
                                                 None)}), flush=True)
@@ -375,21 +430,14 @@ def run_series(named_bots, seed, scenario, ser, outdir, label="series", prov=Non
         # matchup can no longer be won OR TIED — the leader has more wins than
         # anyone else could reach even winning every remaining game. Standalone
         # series never set `clinch`, so they always play out (memo sample).
-        if ser.get("clinch"):
-            wins = {}
-            for r in games:
-                wins[r["winner"]] = wins.get(r["winner"], 0) + 1
-            remaining = ser["games"] - g
-            ranked = sorted(wins.values(), reverse=True) or [0]
-            lead = ranked[0]
-            second = ranked[1] if len(ranked) > 1 else 0
-            if lead > second + remaining:
-                _emit({"clinched": True, "after_game": g,
-                       "games": ser["games"]})
-                break
+        if ser.get("clinch") and _clinched(games, ser["games"]):
+            _emit({"clinched": True, "after_game": g,
+                   "games": ser["games"]})
+            break
+        g += 1
     # end of series: ask the admirals, as playtesters, how to improve the game
     sim_feedback = {}
-    if ser.get("sim_feedback") and replay != "PAUSED":
+    if ser.get("sim_feedback") and replay is not None:
         for fid, (name, b) in enumerate(named_bots):
             if not isinstance(b, LLMAdmiral):
                 continue
@@ -419,7 +467,7 @@ def matchup_winner(rows, names):
     return max(names, key=lambda n: (wins[n], totals[n]))
 
 
-def run_tournament(cfg, adm, scenario, outdir, prov=None):
+def run_tournament(cfg, adm, scenario, outdir, prov=None, resume_ck=None):
     t = config_schema.section_resolve("tournament", cfg.get("tournament"))
     ser_defaults = {**section_defaults("series"),
                     "games": t["games_per_match"],
@@ -454,9 +502,19 @@ def run_tournament(cfg, adm, scenario, outdir, prov=None):
         rounds = "ELIM"
 
     os.makedirs(outdir, exist_ok=True)
-    matchups = []
-    standings = {n: {"series_wins": 0, "wins": 0, "games": 0, "score": 0}
-                 for n in names}
+    # RESUME: the schedule above is rebuilt deterministically from cfg (the
+    # rng is seeded from cfg.seed), so the checkpoint only needs the RESULTS —
+    # completed matchup records, standings, frozen lanes, carried memos
+    ck = resume_ck or {}
+    matchups = list(ck.get("completed") or [])
+    standings = ck.get("standings") or \
+        {n: {"series_wins": 0, "wins": 0, "games": 0, "score": 0}
+         for n in names}
+    for st in standings.values():
+        st.setdefault("series_wins", 0)
+    for n, notes in (ck.get("bot_notes") or {}).items():
+        if n in bots and isinstance(bots[n], LLMAdmiral):
+            bots[n].notes = notes
     seed0 = int(cfg.get("seed", 42))
     midx = 0
 
@@ -474,6 +532,22 @@ def run_tournament(cfg, adm, scenario, outdir, prov=None):
     _gate = {"next": 0.0}
     _gate_lock = threading.Lock()
 
+    # pause plumbing: pc watches the operator flag (the aux command channel
+    # writes outdir/pause.flag); pause_evt is the internal fan-in signal — the
+    # moment ONE lane freezes, every sibling freezes at its next window
+    pc = make_pause_check(outdir)
+    pause_evt = threading.Event()
+
+    def lane_pc():
+        return pause_evt.is_set() or pc()
+
+    # frozen-lane records for the checkpoint. On a resume this SEEDS with the
+    # prior life's lanes — a re-freeze before they are thawed must carry them
+    # forward, never write a checkpoint that silently drops a frozen lane
+    PAUSED = [dict(L) for L in (ck.get("paused_lanes") or [])]
+    PL_LOCK = threading.Lock()
+    done_dirs = {m["dir"] for m in matchups}
+
     def _stagger():
         # successive parallel STARTS at least stagger_s apart, so concurrent
         # games don't slam the model APIs in the same instant
@@ -484,12 +558,38 @@ def run_tournament(cfg, adm, scenario, outdir, prov=None):
         if wait:
             time.sleep(wait)
 
-    def play_matchup(group, rnd, midx, fresh=False):
+    def _mdir_name(group, midx):
         # group entries are operator-supplied labels — strip anything that
         # could escape outdir (a label of ../../tmp/x otherwise wrote there)
         import re as _re
         tag = _re.sub(r"[^A-Za-z0-9_-]", "", "_v_".join(group))[:60]
-        mdir = os.path.join(outdir, f"m{midx:02d}_" + tag)
+        return f"m{midx:02d}_" + tag
+
+    def _record_matchup(group, rnd, midx, mdir, rows):
+        w = matchup_winner(rows, group)
+        with MU_LOCK:
+            standings[w]["series_wins"] += 1
+            for n in group:
+                standings[n]["games"] += len(rows)
+                standings[n]["wins"] += sum(1 for r in rows if r["winner"] == n)
+                standings[n]["score"] += sum(r["scores"].get(n, 0) for r in rows)
+            matchups.append({"round": rnd, "players": list(group),
+                             "dir": os.path.basename(mdir),
+                             "games": [dict(game=r["game"], seed=r["seed"],
+                                            file=os.path.relpath(r["file"], outdir),
+                                            scores=r["scores"], winner=r["winner"])
+                                       for r in rows],
+                             "winner": w})
+            done_dirs.add(os.path.basename(mdir))
+            # incremental bracket: spectators (and the aux callback stream)
+            # follow the tournament as it runs, not just after the last matchup
+            with open(os.path.join(outdir, "tournament.json"), "w") as fh:
+                json.dump({"config": cfg, "matchups": matchups,
+                           "standings": standings, "partial": True}, fh, indent=1)
+        return w
+
+    def play_matchup(group, rnd, midx, fresh=False):
+        mdir = os.path.join(outdir, _mdir_name(group, midx))
         if fresh:
             mbots = {n: make_bot(spec_of[n], adm) for n in group}
         else:
@@ -502,53 +602,220 @@ def run_tournament(cfg, adm, scenario, outdir, prov=None):
         ser = dict(ser_defaults)
         # run_series now debriefs after EVERY game incl. the last, so persistent
         # memo carry-over needs no extra pass — notes simply survive on the bot
-        rows = run_series(named, seed0 + midx * 1000, scenario, ser, mdir,
-                          prov=dict(prov or {}, matchup=os.path.basename(mdir)),
-                          live=not fresh)
-        w = matchup_winner(rows, group)
-        with MU_LOCK:
-            standings[w]["series_wins"] += 1
-            for n in group:
-                standings[n]["games"] += len(rows)
-                standings[n]["wins"] += sum(1 for r in rows if r["winner"] == n)
-                standings[n]["score"] += sum(r["scores"].get(n, 0) for r in rows)
-            matchups.append({"round": rnd, "players": group,
-                             "dir": os.path.basename(mdir),
-                             "games": [dict(game=r["game"], seed=r["seed"],
-                                            file=os.path.relpath(r["file"], outdir),
-                                            scores=r["scores"], winner=r["winner"])
-                                       for r in rows],
-                             "winner": w})
-            # incremental bracket: spectators (and the aux callback stream)
-            # follow the tournament as it runs, not just after the last matchup
-            with open(os.path.join(outdir, "tournament.json"), "w") as fh:
-                json.dump({"config": cfg, "matchups": matchups,
-                           "standings": standings, "partial": True}, fh, indent=1)
-        return w
+        try:
+            rows = run_series(named, seed0 + midx * 1000, scenario, ser, mdir,
+                              prov=dict(prov or {},
+                                        matchup=os.path.basename(mdir)),
+                              live=not fresh,
+                              pause_check=lane_pc, pause_mode="raise")
+        except SeriesPaused as sp:
+            pause_evt.set()                # siblings freeze at their next window
+            with PL_LOCK:
+                PAUSED.append({"midx": midx, "round": rnd,
+                               "group": list(group),
+                               "dir": os.path.basename(mdir),
+                               "game": sp.game, "fresh": fresh,
+                               "rows": sp.rows})
+            return None
+        return _record_matchup(group, rnd, midx, mdir, rows)
+
+    def resume_matchup(lane):
+        """Thaw one frozen lane: from its embedded checkpoint (mid-game, no
+        loss) or — if the checkpoint didn't survive — from its completed-game
+        rows, dropping the one in-flight game. That bounded loss is the worst
+        case per lane, never the run."""
+        mdir = os.path.join(outdir, lane["dir"])
+        os.makedirs(mdir, exist_ok=True)
+        lck = lane.get("checkpoint")
+        if lck is None:
+            try:
+                with open(os.path.join(mdir, "checkpoint.json")) as fh:
+                    lck = json.load(fh)
+            except (OSError, ValueError):
+                lck = None
+        if lck is not None:
+            named = _thaw_bots(lck, adm)
+            eng = Engine.thaw(lck["engine"], named)
+            ser = lck.get("ser") or dict(ser_defaults)
+            seed_l, scen_l = lck["seed"], lck["scenario"]
+            prov_l = lck.get("prov")
+            resume = {**lck, "engine": eng}
+        else:
+            _emit({"lane_checkpoint_lost": lane["dir"],
+                   "resuming_after_game": len(lane.get("rows") or [])})
+            named = [(n, make_bot(spec_of[n], adm)) for n in lane["group"]]
+            ser = dict(ser_defaults)
+            seed_l, scen_l = seed0 + lane["midx"] * 1000, scenario
+            prov_l = dict(prov or {}, matchup=lane["dir"])
+            resume = {"rows": list(lane.get("rows") or []),
+                      "game": len(lane.get("rows") or []) + 1, "engine": None}
+        try:
+            rows = run_series(named, seed_l, scen_l, ser, mdir, prov=prov_l,
+                              live=not lane.get("fresh"),
+                              pause_check=lane_pc, pause_mode="raise",
+                              resume=resume)
+        except SeriesPaused as sp:
+            pause_evt.set()
+            with PL_LOCK:                  # REPLACE the seeded entry — a
+                if lane in PAUSED:         # re-paused lane must not duplicate
+                    PAUSED.remove(lane)
+                PAUSED.append(dict(lane, game=sp.game, rows=sp.rows,
+                                   checkpoint=None))
+            return None
+        with PL_LOCK:
+            if lane in PAUSED:
+                PAUSED.remove(lane)
+        try:
+            os.remove(os.path.join(mdir, "checkpoint.json"))
+        except OSError:
+            pass
+        if t["memo_policy"] == "persistent":
+            # the thawed bots carried the shared mind — hand it back
+            for n, b in named:
+                if n in bots and isinstance(bots[n], LLMAdmiral) \
+                        and isinstance(b, LLMAdmiral):
+                    bots[n].notes = b.notes
+        return _record_matchup(lane["group"], lane["round"], lane["midx"],
+                               mdir, rows)
+
+    def _freeze():
+        """Write the tournament checkpoint — every frozen lane's own
+        checkpoint embedded, so ONE file ships to the flagship — and exit 75.
+        Ordering rule: this runs only after every live lane has landed its
+        own durable state, so the tournament checkpoint can never point at a
+        lane that isn't on disk."""
+        with PL_LOCK:
+            plist = [dict(L) for L in PAUSED]
+        auto = None
+        for L in plist:
+            if L.get("checkpoint") is None:
+                try:
+                    with open(os.path.join(outdir, L["dir"],
+                                           "checkpoint.json")) as fh:
+                        L["checkpoint"] = json.load(fh)
+                except (OSError, ValueError):
+                    L["checkpoint"] = None   # rows fallback at resume
+            auto = auto or (L.get("checkpoint") or {}).get("auto_pause")
+        data = {"kind": "tournament", "cfg": cfg, "completed": matchups,
+                "standings": standings, "paused_lanes": plist}
+        if t["memo_policy"] == "persistent":
+            data["bot_notes"] = {n: b.notes for n, b in bots.items()
+                                 if isinstance(b, LLMAdmiral) and b.notes}
+        if auto:
+            # a lane's outage-breaker pause promotes to the tournament: the
+            # server's auto-resume prober keys off this field
+            data["auto_pause"] = auto
+        err = None
+        for _ in range(3):
+            try:
+                tmp = os.path.join(outdir, "checkpoint.json.tmp")
+                with open(tmp, "w") as fh:
+                    json.dump(data, fh, separators=(",", ":"))
+                os.replace(tmp, os.path.join(outdir, "checkpoint.json"))
+                err = None
+                break
+            except OSError as e:
+                err = e
+                time.sleep(2)
+        try:
+            os.remove(os.path.join(outdir, "pause.flag"))
+        except OSError:
+            pass
+        if err is not None:
+            # last resort: the lane checkpoints are still durable in their
+            # matchup dirs and every finished game already streamed home —
+            # the library reconcile rebuilds the bracket from there
+            _emit({"error": "tournament checkpoint write failed after "
+                            f"retries ({type(err).__name__}: {err}); lane "
+                            "checkpoints remain in their matchup dirs"})
+        print(json.dumps({"paused": True, "tournament": True,
+                          "matchups_done": len(matchups),
+                          "lanes_frozen": len(plist)}), flush=True)
+        sys.exit(75)
+
+    def _maybe_freeze_between():
+        """Between matchups there is nothing in flight: freeze cheaply — but
+        only if a checkpoint is actually writable. Fail-safe, not fail-dead:
+        a pause we cannot honor is refused (flag consumed, run continues),
+        never answered with rc 75 and an empty disk."""
+        if not (pc() or pause_evt.is_set()):
+            return
+        probe = os.path.join(outdir, ".ckpt-probe")
+        try:
+            with open(probe, "w") as fh:
+                fh.write("1")
+            os.remove(probe)
+        except OSError as e:
+            _emit({"pause_refused": True, "between_matchups": True,
+                   "err": f"{type(e).__name__}: {e}"})
+            pause_evt.clear()
+            try:
+                os.remove(os.path.join(outdir, "pause.flag"))
+            except OSError:
+                pass
+            return
+        _freeze()
 
     def play_round(groups, rnd):
         """One round's matchups — the sequential classic path, or a thread
         pool of `parallel` workers with staggered starts. Returns winners in
-        group order (single_elim pairs the next round off this)."""
+        group order (single_elim pairs the next round off this). Matchups
+        already in the record (a resumed run) are skipped, their recorded
+        winner returned."""
         nonlocal midx
         if par <= 1 or len(groups) <= 1:
             out = []
             for g in groups:
                 midx += 1
+                mname = _mdir_name(g, midx)
+                if mname in done_dirs:
+                    out.append(next(m["winner"] for m in matchups
+                                    if m["dir"] == mname))
+                    continue
+                _maybe_freeze_between()
                 out.append(play_matchup(g, rnd, midx))
+                if pause_evt.is_set() or pc():
+                    _freeze()              # the matchup above just froze
             return out
         import concurrent.futures as _cf
 
         def _task(g, mi):
+            if lane_pc():
+                return None                # pausing: start no new lanes
             _stagger()
+            if lane_pc():
+                return None
             return play_matchup(g, rnd, mi, fresh=True)
 
         with _cf.ThreadPoolExecutor(max_workers=par) as ex:
-            futs = []
-            for g in groups:
+            futs, skipped = [], {}
+            for i, g in enumerate(groups):
                 midx += 1
+                mname = _mdir_name(g, midx)
+                if mname in done_dirs:
+                    skipped[i] = next(m["winner"] for m in matchups
+                                      if m["dir"] == mname)
+                    continue
                 futs.append(ex.submit(_task, g, midx))
-            return [f.result() for f in futs]
+            res = [f.result() for f in futs]
+        out, ri = [], 0
+        for i in range(len(groups)):
+            if i in skipped:
+                out.append(skipped[i])
+            else:
+                out.append(res[ri])
+                ri += 1
+        if pause_evt.is_set() or pc():
+            _freeze()                      # fan-in: every lane has landed
+        return out
+
+    # a resumed run first finishes its frozen lanes (their results feed the
+    # schedule walk below, which then skips them as recorded matchups)
+    for lane in list(PAUSED):
+        _maybe_freeze_between()
+        resume_matchup(lane)
+        if pause_evt.is_set() or pc():
+            _freeze()
 
     if rounds == "ELIM":
         alive = order
@@ -597,20 +864,9 @@ def _pipelined_env(scenario):
         os.environ["FLOTILLA_PIPELINED"] = "1"
 
 
-def resume_run(outdir):
-    """Continue a paused run from its checkpoint.json (spot-instance workflow:
-    pause on interruption, thaw when capacity returns). Bots are REBUILT from
-    the checkpoint's provenance specs on current code, their mutable state
-    overlaid, then Engine.thaw resumes the interrupted game mid-tick-loop; the
-    series loop continues after it. IMPORTANT: a failed resume must leave
-    checkpoint.json on disk — it is only removed after the run COMPLETES."""
-    with open(os.path.join(outdir, "checkpoint.json")) as fh:
-        ck = json.load(fh)
-    # mirror main()'s pipelined flag — a resumed pipelined run must keep the
-    # longer timeout streak (it used to silently drop to the 3-strike default,
-    # exactly in the runs where in-flight timeouts are most common)
-    _pipelined_env(ck.get("scenario"))
-    adm = section_defaults("admirals")
+def _thaw_bots(ck, adm):
+    """Rebuild a checkpoint's bots on CURRENT code: constructor spec from
+    provenance, mutable state overlaid."""
     named = []
     for b in ck["bots"]:
         spec = dict(b["spec"])
@@ -620,6 +876,38 @@ def resume_run(outdir):
         if b.get("state") is not None and isinstance(bot, LLMAdmiral):
             bot.load_state(b["state"])
         named.append((name, bot))
+    return named
+
+
+def resume_run(outdir):
+    """Continue a paused run from its checkpoint.json (spot-instance workflow:
+    pause on interruption, thaw when capacity returns). Bots are REBUILT from
+    the checkpoint's provenance specs on current code, their mutable state
+    overlaid, then Engine.thaw resumes the interrupted game mid-tick-loop; the
+    series loop continues after it. IMPORTANT: a failed resume must leave
+    checkpoint.json on disk — it is only removed after the run COMPLETES."""
+    with open(os.path.join(outdir, "checkpoint.json")) as fh:
+        ck = json.load(fh)
+    if ck.get("kind") == "tournament":
+        # the schedule is rebuilt deterministically from the embedded cfg;
+        # completed matchups + frozen lanes come from the checkpoint
+        cfg = ck["cfg"]
+        _pipelined_env(merged_scenario(cfg))
+        adm = config_schema.section_resolve("admirals", cfg.get("admirals"))
+        prov = dict(mode="tournament", base_seed=int(cfg.get("seed", 42)))
+        run_tournament(cfg, adm, merged_scenario(cfg), outdir, prov=prov,
+                       resume_ck=ck)
+        try:
+            os.remove(os.path.join(outdir, "checkpoint.json"))
+        except OSError:
+            pass
+        return
+    # mirror main()'s pipelined flag — a resumed pipelined run must keep the
+    # longer timeout streak (it used to silently drop to the 3-strike default,
+    # exactly in the runs where in-flight timeouts are most common)
+    _pipelined_env(ck.get("scenario"))
+    adm = section_defaults("admirals")
+    named = _thaw_bots(ck, adm)
     eng = Engine.thaw(ck["engine"], named)
     pc = make_pause_check(outdir)
     if ck["kind"] == "match":

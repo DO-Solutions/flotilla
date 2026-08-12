@@ -781,6 +781,71 @@ if r.get("job"):
     req("/api/cancel", {"id": r["job"]["id"]})
 server._providers_op({"op": "limits", "limits": {"max_series_cost": 0}})
 
+# --- worker-rotation settings: their own endpoint (no DO token re-post),
+# validated, persisted to rotation.json ---
+st, r = req("/api/aux-rotation", {"rotate_enabled": False, "max_age_h": 6})
+ok(st == 200 and r["ok"] and r["max_age_h"] == 6,
+   f"rotation settings accepted ({r})")
+rj = json.load(open(os.path.join(TMP, "rotation.json")))
+ok(rj == {"rotate_enabled": False, "max_age_h": 6},
+   "rotation settings persisted to rotation.json")
+st, r = req("/api/aux-rotation", {"max_age_h": 0.5})
+ok(st == 400, "sub-hour age cap refused")
+st, r = req("/api/aux-rotation", {"max_age_h": "soon"})
+ok(st == 400, "non-numeric age cap refused")
+st, r = req("/api/aux-rotation", {"rotate_enabled": True})
+ok(st == 200 and json.load(open(os.path.join(TMP, "rotation.json")))
+   == {"rotate_enabled": True, "max_age_h": 6},
+   "partial update merges (max_age_h kept)")
+
+# --- reconcile-tournament: rebuild bracket records from on-disk replays
+# (the recovery tool for a worker that died with games shipped but records
+# unlanded) ---
+tdir = os.path.join(TMP, "tournaments", "recon-t")
+mdir = os.path.join(tdir, "m01_A_v_B")
+os.makedirs(mdir, exist_ok=True)
+with open(os.path.join(tdir, "tournament.json"), "w") as fh:
+    json.dump({"config": {"name": "recon-t",
+                          "tournament": {"games_per_match": 3}},
+               "matchups": [], "standings": {}, "partial": True}, fh)
+
+
+def _fake_replay(path, seed, sa, sb, winner):
+    with open(path, "w") as fh:
+        json.dump({"meta": {"seed": seed},
+                   "result": {"names": {"0": "A", "1": "B"},
+                              "scores": {"0": sa, "1": sb},
+                              "winner": winner, "ticks": 10}}, fh)
+
+
+_fake_replay(os.path.join(mdir, "g1.json"), 11, 5, 9, 1)   # B wins
+_fake_replay(os.path.join(mdir, "g2.json"), 12, 8, 3, 0)   # A wins
+st, r = req("/api/reconcile-tournament", {"name": "recon-t"})
+ok(st == 200 and r["changes"] and "m01_A_v_B" in r["changes"][0],
+   f"dry-run reports the rebuild ({r.get('changes')})")
+tj0 = json.load(open(os.path.join(tdir, "tournament.json")))
+ok(tj0["matchups"] == [], "dry-run wrote nothing")
+ok(r["standings"]["A"]["wins"] == 1 and r["standings"]["B"]["wins"] == 1
+   and r["standings"]["A"]["series_wins"] == 0,
+   "1-1 of best-of-3 is UNDECIDED: no series win credited to anyone")
+st, r = req("/api/reconcile-tournament", {"name": "recon-t", "write": True})
+ok(st == 200 and r["written"], "write applies")
+tj1 = json.load(open(os.path.join(tdir, "tournament.json")))
+m01 = tj1["matchups"][0]
+ok(m01["winner"] is None and m01.get("partial") and len(m01["games"]) == 2,
+   "rebuilt undecided matchup: winner null + partial (the m03 lesson)")
+_fake_replay(os.path.join(mdir, "g3.json"), 13, 2, 7, 1)   # B clinches 2-1
+st, r = req("/api/reconcile-tournament", {"name": "recon-t", "write": True})
+tj2 = json.load(open(os.path.join(tdir, "tournament.json")))
+ok(tj2["matchups"][0]["winner"] == "B"
+   and tj2["standings"]["B"]["series_wins"] == 1,
+   "the deciding game flips the rebuilt record to a B series win")
+st, r = req("/api/reconcile-tournament", {"name": "recon-t"})
+ok(st == 200 and not r["changes"], "reconciled bracket is a no-op rerun")
+st, r = req("/api/reconcile-tournament", {"name": "no-such-t"})
+ok(st == 404, "unknown tournament -> 404")
+shutil.rmtree(tdir, ignore_errors=True)
+
 # --- public-mirror redaction: designer feedback + final memos never reach
 # the bucket, everything else passes through byte-identical ---
 _sj = json.dumps({"games": [{"game": 1}], "sim_feedback": {"O": {"feedback":

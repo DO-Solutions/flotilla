@@ -1556,11 +1556,17 @@ def _aux_cfg():
     env.setdefault("size", "s-1vcpu-1gb")
     env.setdefault("region", "nyc3")
     env.setdefault("max_concurrent", 3)
+    # rotation settings live in their OWN file so the Server tab can change
+    # them without re-posting the DO token (and regardless of whether aux came
+    # from the environment or aux.json)
+    try:
+        with open(os.path.join(LIB, "rotation.json")) as fh:
+            env.update({k: v for k, v in json.load(fh).items()
+                        if k in ("rotate_enabled", "max_age_h")})
+    except (OSError, ValueError):
+        pass
+    env.setdefault("rotate_enabled", True)
     env.setdefault("max_age_h", 8)
-    # tournaments have NO checkpoint path, so the pause-rotation cap cannot
-    # apply to them — they run to completion under this hard runaway ceiling
-    # instead (champions-cup-1 died at 8h to the rotation it couldn't answer)
-    env.setdefault("tournament_max_age_h", 72)
     return env
 
 
@@ -2149,34 +2155,20 @@ def _auto_resume_pass():
 
 
 def _aux_watch(job, aux):
-    """Babysit a running aux job to its age cap; also respawned on restart."""
-    if job.get("mode") == "tournament":
-        # a tournament cannot pause (no checkpoint path — the runner has
-        # nothing to freeze into), so the rotate-at-max_age_h machinery below
-        # would only ever fail it: request a pause it can't answer, wait out
-        # the grace, mark it failed. That is exactly how champions-cup-1 died
-        # 6 games in. Tournaments instead run to completion under a HARD
-        # runaway ceiling — generous, because a 4-lane best-of-5 bracket of
-        # thinking models legitimately runs a day or two.
-        cap_h = float(aux.get("tournament_max_age_h", 72))
-        deadline = (job.get("started") or time.time()) + cap_h * 3600
-        job["log"].append(f"tournament worker: rotation cap does not apply "
-                          f"(no checkpoint path) — runaway ceiling {cap_h:g}h")
-        _persist_jobs()
-        while job["state"] == "running" and time.time() < deadline:
-            time.sleep(20)
-        if job["state"] == "running":
-            job["state"] = "failed"
-            job["error"] = (f"tournament exceeded the {cap_h:g}h runaway "
-                            "ceiling (tournament_max_age_h)")
-            job["finished"] = time.time()
-            _persist_jobs()
-            _mark_cancelled(job, error=job["error"])
-        _aux_destroy(job["id"])
-        return
-    deadline = (job.get("started") or time.time()) \
-        + float(aux["max_age_h"]) * 3600
-    while job["state"] == "running" and time.time() < deadline:
+    """Babysit a running aux job to its age cap; also respawned on restart.
+    Tournaments rotate exactly like series now — the runner freezes a
+    two-level checkpoint (tournament state + every in-flight lane) and thaws
+    on the fresh box. The old no-checkpoint exemption (a 72h runaway ceiling)
+    is gone with the gap that forced it."""
+    while job["state"] == "running":
+        # re-read each pass so a Server-tab rotation change applies to LIVE
+        # jobs, not just future launches
+        cur = _aux_cfg() or aux
+        if cur.get("rotate_enabled", True):
+            deadline = (job.get("started") or time.time()) \
+                + float(cur.get("max_age_h", 8)) * 3600
+            if time.time() >= deadline:
+                break
         time.sleep(20)
     if job["state"] == "paused":
         # the droplet is already released; the AUX record (bearer + config)
@@ -2195,7 +2187,8 @@ def _aux_watch(job, aux):
                 rec["command"] = "pause"
                 rec.setdefault("pause_by", "rotation")  # never override a
         _persist_aux()                                  # user's own pause
-        job["log"].append(f"♻ age cap {aux['max_age_h']}h reached — rotating "
+        cap = (_aux_cfg() or aux).get("max_age_h", 8)
+        job["log"].append(f"♻ age cap {cap}h reached — rotating "
                           "worker (pause → fresh droplet)")
         _persist_jobs()
         grace = time.time() + 45 * 60      # a thinking window can run 5+ min;
@@ -2213,7 +2206,7 @@ def _aux_watch(job, aux):
             return
         if job["state"] == "running":      # pause never landed: worker is gone
             job["state"] = "failed"        # or wedged — NOW reap for real
-            job["error"] = (f"auxiliary exceeded max_age_h={aux['max_age_h']} "
+            job["error"] = (f"auxiliary exceeded max_age_h={cap} "
                             "and did not answer a pause request")
             job["finished"] = time.time()
             _persist_jobs()
@@ -2893,6 +2886,66 @@ class H(BaseHTTPRequestHandler):
                 _write_secret_file(os.path.join(LIB, "aux.json"),
                                    json.dumps(d))
                 return self._send(200, {"ok": True, "aux": True})
+            if path == "/api/aux-rotation":
+                # worker-rotation settings, separate from aux-config so the
+                # Server tab can change them without re-posting the DO token.
+                # Applies to LIVE jobs too (_aux_watch re-reads each pass).
+                d = json.loads(body)
+                rot = {}
+                if "rotate_enabled" in d:
+                    rot["rotate_enabled"] = bool(d["rotate_enabled"])
+                if "max_age_h" in d:
+                    try:
+                        h = float(d["max_age_h"])
+                    except (TypeError, ValueError):
+                        return self._send(400, {"error": "max_age_h must be "
+                                                "a number of hours"})
+                    if not 1 <= h <= 168:
+                        return self._send(400, {"error": "max_age_h must be "
+                                                "between 1 and 168"})
+                    rot["max_age_h"] = h
+                if not rot:
+                    return self._send(400, {"error": "give rotate_enabled "
+                                            "and/or max_age_h"})
+                cur = {}
+                try:
+                    with open(os.path.join(LIB, "rotation.json")) as fh:
+                        cur = json.load(fh)
+                except (OSError, ValueError):
+                    pass
+                cur.update(rot)
+                os.makedirs(LIB, exist_ok=True)
+                tmp = os.path.join(LIB, "rotation.json.tmp")
+                with open(tmp, "w") as fh:
+                    json.dump(cur, fh)
+                os.replace(tmp, os.path.join(LIB, "rotation.json"))
+                eff = _aux_cfg() or cur
+                return self._send(200, {"ok": True,
+                                        "rotate_enabled": eff.get(
+                                            "rotate_enabled", True),
+                                        "max_age_h": eff.get("max_age_h", 8)})
+            if path == "/api/reconcile-tournament":
+                # rebuild a bracket's records from the replays on disk — the
+                # recovery tool for a worker that died with games shipped but
+                # records unlanded (cup-2's m03/m08). Dry-run unless write.
+                d = json.loads(body)
+                tname = _san(str(d.get("name", "")))
+                tdir = os.path.join(LIB, "tournaments", tname)
+                if not tname or not os.path.isdir(tdir):
+                    return self._send(404, {"error": "no such tournament"})
+                import reconcile_tournament
+                new, changes = reconcile_tournament.reconcile(tdir)
+                if d.get("write") and changes:
+                    tmp = os.path.join(tdir, "tournament.json.tmp")
+                    with open(tmp, "w") as fh:
+                        json.dump(new, fh, indent=1)
+                    os.replace(tmp, os.path.join(tdir, "tournament.json"))
+                    build_index(LIB)
+                    _showcase_refresh_tournament(tname)
+                return self._send(200, {"ok": True, "changes": changes,
+                                        "written": bool(d.get("write")
+                                                        and changes),
+                                        "standings": new.get("standings")})
             if path == "/api/showcase-config":
                 d = json.loads(body)
                 need = {"access_key", "secret_key", "endpoint", "bucket"}
@@ -3261,6 +3314,10 @@ class H(BaseHTTPRequestHandler):
                                         "aux": {"configured": bool(ax),
                                                 "region": ax.get("region"),
                                                 "size": ax.get("size"),
+                                                "rotate_enabled": ax.get(
+                                                    "rotate_enabled", True),
+                                                "max_age_h": ax.get(
+                                                    "max_age_h", 8),
                                                 "pool": ax.get(
                                                     "max_concurrent")}})
             if path == "/api/providers-op":
