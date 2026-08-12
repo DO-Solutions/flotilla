@@ -919,7 +919,6 @@ document.addEventListener("click", async e => {
   if (t.classList.contains("tab")) {
     for (const b of document.querySelectorAll(".tab")) b.classList.toggle("on", b === t);
     $("seriestab").style.display = t.dataset.tab === "series" ? "" : "none";
-    $("tourntab").style.display = t.dataset.tab === "tourn" ? "" : "none";
     $("configtab").style.display = t.dataset.tab === "config" ? "" : "none";
     $("servertab").style.display = t.dataset.tab === "server" ? "" : "none";
     if (t.dataset.tab === "server") renderProviders();
@@ -1218,6 +1217,7 @@ document.addEventListener("change", e => {
 
 function renderTournDetail() {
   const el = $("tdetail");
+  if (!el) return;                 // the Tournaments tab is gone (2026-08-11)
   const name = TOURN_OPEN;
   if (!name || !TCACHE[name]) { el.innerHTML = ""; return; }
   const tj = TCACHE[name], rev = !!TREV[name];
