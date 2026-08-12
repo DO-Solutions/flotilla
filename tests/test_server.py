@@ -781,6 +781,24 @@ if r.get("job"):
     req("/api/cancel", {"id": r["job"]["id"]})
 server._providers_op({"op": "limits", "limits": {"max_series_cost": 0}})
 
+# --- public-mirror redaction: designer feedback + final memos never reach
+# the bucket, everything else passes through byte-identical ---
+_sj = json.dumps({"games": [{"game": 1}], "sim_feedback": {"O": {"feedback":
+                 "the meta is X"}}, "memos": {"O": {"memo": "keep"}}}).encode()
+red = json.loads(server._public_redact("showcase/s/series.json", _sj))
+ok("sim_feedback" not in red and red.get("memos", {}).get("O", {}).get("memo")
+   == "keep", "public series.json drops sim_feedback, keeps display memos")
+_tj = json.dumps({"standings": {}, "memos_final": {"O": "private"}}).encode()
+red = json.loads(server._public_redact("showcase/t/tournament.json", _tj))
+ok("memos_final" not in red and "standings" in red,
+   "public tournament.json drops memos_final")
+_rp = b'{"sim_feedback": "not really, wrong filename"}'
+ok(server._public_redact("showcase/t/m01_a_v_b/g1.json", _rp) is _rp,
+   "replay files pass through untouched (redaction keys on filename)")
+_clean = json.dumps({"games": []}).encode()
+ok(server._public_redact("x/series.json", _clean) is _clean,
+   "a series.json with nothing to strip is mirrored byte-identical")
+
 srv.shutdown()
 shutil.rmtree(TMP, ignore_errors=True)
 print("FAILURES:", fails)

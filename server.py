@@ -986,10 +986,34 @@ def _showcase_cfg():
     return None
 
 
+_PUBLIC_STRIP = ("sim_feedback", "memos_final")
+
+
+def _public_redact(key, data):
+    """Public mirrors of series.json / tournament.json drop the end-of-series
+    designer interviews (sim_feedback) and the final private memos
+    (memos_final). No page renders either, the admirals themselves never see
+    them, and a public bucket must not hand a future rival team an admiral's
+    own candid read on the meta. The private library keeps both fields."""
+    if os.path.basename(key) not in ("series.json", "tournament.json"):
+        return data
+    try:
+        d = json.loads(data)
+        if not any(k in d for k in _PUBLIC_STRIP):
+            return data
+        for k in _PUBLIC_STRIP:
+            d.pop(k, None)
+        return json.dumps(d, separators=(",", ":")).encode()
+    except Exception:
+        return data                      # unparseable → mirror as-is
+
+
 def _s3_put_public(cfg, key, data, content_type="text/html"):
     """Minimal SigV4 S3 PUT with public-read ACL — stdlib only, no boto.
     Text payloads over 2KB upload gzipped with Content-Encoding: gzip —
-    browsers decompress transparently and a 14MB replay ships as ~2MB."""
+    browsers decompress transparently and a 14MB replay ships as ~2MB.
+    series.json / tournament.json pass through _public_redact on the way."""
+    data = _public_redact(key, data)
     import datetime as _dt
     import gzip as _gz
     import hmac

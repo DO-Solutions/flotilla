@@ -275,19 +275,27 @@ function render() {
   }
   $("bracket").innerHTML = h || `<div class="card">no matchups yet — the ` +
     `first games are still being played</div>`;
-  // standings (spoiler-shielded)
+  // standings (spoiler-shielded). Series wins are counted from decided
+  // matchups here rather than read from standings, so brackets published
+  // before the series_wins field existed still show the right number
+  // (standings.wins is GAME wins — it was mislabeled "series wins" until
+  // 2026-08-12).
+  const swOf = {};
+  for (const m of TJ.matchups || [])
+    if (m.winner) swOf[m.winner] = (swOf[m.winner] || 0) + 1;
   const rows = Object.entries(TJ.standings || {})
-    .sort((a, b) => b[1].wins - a[1].wins || b[1].score - a[1].score);
+    .sort((a, b) => (swOf[b[0]] || 0) - (swOf[a[0]] || 0)
+      || b[1].wins - a[1].wins || b[1].score - a[1].score);
   $("standings").innerHTML = rows.length
     ? `<div class="card"><h3 style="color:var(--accent);font-size:14px;` +
       `margin-bottom:6px">Standings${TJ.partial ? " (so far)" : ""}</h3>` +
       (TJ.champion ? `<div style="margin-bottom:6px">${sh(
         `<span class="champ">🏆 champion: ${esc(TJ.champion)}</span>`)}</div>` : "") +
-      `<table><thead><tr><th>player</th><th>series wins</th><th>games</th>` +
+      `<table><thead><tr><th>player</th><th>series wins</th><th>game wins</th>` +
       `<th>total score</th></tr></thead><tbody>` +
       rows.map(([n, s]) =>
         `<tr><td style="color:${playerColor(names, n)}">${esc(n)}</td>` +
-        `<td>${sh(esc(s.wins))}</td><td>${sh(esc(s.games))}</td>` +
+        `<td>${sh(esc(swOf[n] || 0))}</td><td>${sh(esc(s.wins))}</td>` +
         `<td>${sh(esc(s.score))}</td></tr>`).join("") +
       `</tbody></table></div>` : "";
 }

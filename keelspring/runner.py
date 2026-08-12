@@ -455,7 +455,8 @@ def run_tournament(cfg, adm, scenario, outdir, prov=None):
 
     os.makedirs(outdir, exist_ok=True)
     matchups = []
-    standings = {n: {"wins": 0, "games": 0, "score": 0} for n in names}
+    standings = {n: {"series_wins": 0, "wins": 0, "games": 0, "score": 0}
+                 for n in names}
     seed0 = int(cfg.get("seed", 42))
     midx = 0
 
@@ -506,6 +507,7 @@ def run_tournament(cfg, adm, scenario, outdir, prov=None):
                           live=not fresh)
         w = matchup_winner(rows, group)
         with MU_LOCK:
+            standings[w]["series_wins"] += 1
             for n in group:
                 standings[n]["games"] += len(rows)
                 standings[n]["wins"] += sum(1 for r in rows if r["winner"] == n)
@@ -572,7 +574,10 @@ def run_tournament(cfg, adm, scenario, outdir, prov=None):
             print(json.dumps({"warning": "byes: these participants were never "
                               "scheduled", "benched":
                               sorted(set(names) - set(played))}), flush=True)
-        champion = max(played, key=lambda n: (standings[n]["wins"],
+        # a round-robin is decided by SERIES won; game wins and score only break
+        # ties (12 game wins across 4 lost series must not outrank 4-0)
+        champion = max(played, key=lambda n: (standings[n]["series_wins"],
+                                              standings[n]["wins"],
                                               standings[n]["score"]))
 
     tj = {"config": cfg, "matchups": matchups, "standings": standings,

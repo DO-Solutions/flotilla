@@ -116,6 +116,11 @@ with tempfile.TemporaryDirectory() as td:
        "parallel tournament crowns a champion")
     games = sum(st["games"] for st in tj["standings"].values())
     ok(games == 6, f"standings count every game exactly once ({games})")
+    sw = sum(st["series_wins"] for st in tj["standings"].values())
+    ok(sw == 3, f"every decided matchup credits exactly one series win ({sw})")
+    ok(tj["standings"][tj["champion"]]["series_wins"]
+       == max(st["series_wins"] for st in tj["standings"].values()),
+       "the champion has the most series wins (not just game wins)")
     dirs = sorted(d for d in os.listdir(td) if d.startswith("m"))
     ok(len(dirs) == 3 and all(os.path.isfile(os.path.join(td, d, "g1.json"))
                               for d in dirs),
