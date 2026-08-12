@@ -83,9 +83,9 @@ def main():
         + "\n".join(f"when mem.p == {i}: helm.hold()" for i in range(60, 120)))
     mem2 = big.init_mem()
     # exhaust the budget artificially by shrinking it via many evals.
-    # BUDGET lives in engine.program since the split — patch the OWNING
+    # BUDGET lives in keelspring.program since the split — patch the OWNING
     # module (conn re-exports it by value, which a monkeypatch can't reach)
-    import engine.program as _prog
+    import keelspring.program as _prog
     saved = _prog.BUDGET
     try:
         _prog.BUDGET = 3                      # guarantees mid-walk exhaustion

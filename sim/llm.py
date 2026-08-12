@@ -1,4 +1,4 @@
-"""Compat shim — the module moved to engine/llm.py (split Stage 1d).
+"""Compat shim — the module moved to keelspring/llm.py (split Stage 1d).
 
 The game's contribution is the ADMIRAL DEFAULTS (the schema's admirals
 section) — installed here, at the same import every consumer already uses.
@@ -10,7 +10,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import run_config                                  # noqa: E402,F401 — registers
                                                    # Flotilla's Game (contract)
-from engine import llm as _mod                     # noqa: E402
+from keelspring import llm as _mod                     # noqa: E402
 import config_schema as _cs                        # noqa: E402
 
 _mod.ADMIRAL_DEFAULTS.update(

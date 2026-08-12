@@ -7,7 +7,7 @@ registering ONE object carrying its rules and vocabulary. Registration is
 runtime-validated — a missing piece fails loudly at startup, never as an
 AttributeError three subsystems deep.
 
-    from engine import contract
+    from keelspring import contract
     contract.set_game(contract.Game(
         name="flotilla",
         engine=core.Engine,            # class: (players, seed=, max_ticks=,
@@ -82,7 +82,7 @@ def game():
         raise RuntimeError(
             "no game registered — import the game's entry module first "
             "(Flotilla: `import run_config` or `import llm`), or call "
-            "engine.contract.set_game() with your own Game")
+            "keelspring.contract.set_game() with your own Game")
     return _game
 
 

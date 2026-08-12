@@ -136,3 +136,9 @@ is the engine, and a new game gets it all for free.
 New tools, new features, renames of user-visible anything, changes to the
 replay format or config schema, and the engine's public NAME (chosen after
 the split, per Darian).
+
+## Epilogue (2026-08-12)
+
+All five stages shipped, every one byte-identical. The engine is named
+**Keelspring** (`keelspring/`), its fairness subsystem the **remontoire** —
+see docs/KEELSPRING.md for the build-a-game guide.

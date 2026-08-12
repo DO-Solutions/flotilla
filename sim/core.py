@@ -14,7 +14,7 @@ from concurrent.futures import ThreadPoolExecutor
 
 import conn
 from config_schema import resolve as _resolve_cfg
-from engine.sim import SimBase, one_line   # noqa: E402  (conn bootstraps ROOT)
+from keelspring.sim import SimBase, one_line   # noqa: E402  (conn bootstraps ROOT)
 
 SHIP_STATS = ("speed", "hold", "guns", "armor", "hull", "lookout")
 

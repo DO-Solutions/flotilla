@@ -1,21 +1,23 @@
-# Building a game on the engine
+# Keelspring — building a game on the engine
 
-The `engine/` package is a complete, game-agnostic harness for LLM-driven
-simulation matches. Flotilla is its first game; this guide is everything a
-second game needs — written so an agent can scaffold one from this file
+**Keelspring** is the game-agnostic half of this repository: the keel a game
+is laid down on, and the mainspring that drives it. Flotilla is its first
+game.
+
+This guide is everything a second game needs — written so an agent can scaffold one from this file
 alone, without reading Flotilla's code.
 
 ## What the engine gives you for free
 
 | Subsystem | Module | What it does |
 |---|---|---|
-| Run orchestration | `engine/runner.py` | matches, best-of-N series with between-game memos, round-robin/elimination tournaments (parallel lanes), JSON checkpoints + pause/resume, the run-config CLI |
-| The run loop | `engine/sim.py` (`SimBase`) | decision windows (lockstep or catch-up pipelined), per-window forensics, lost-window visibility, API-outage auto-pause, live streaming flush |
-| LLM admirals | `engine/llm.py` | one fairness-locked decision layer over any OpenAI-compatible API: same prompt shape and token budget per model, cost telemetry, thinking-budget handling |
-| Provider ladder | `engine/providers.py` | multi-provider fallback with automatic demotion (429/timeout/5xx) and canary recovery |
-| Ship programs | `engine/program.py` | a deterministic, instruction-budgeted little language: tokenizer, parser, evaluator, error pedagogy (line numbers, did-you-mean) — your game supplies the vocabulary |
-| Schema machinery | `engine/schema.py` | knob resolution (defaults, bounds clamping, loud unknown-key rejection, rename aliases) and the generated docs (markdown + JSON) |
-| The contract | `engine/contract.py` | the registration point that ties it together, validated at startup |
+| Run orchestration | `keelspring/runner.py` | matches, best-of-N series with between-game memos, round-robin/elimination tournaments (parallel lanes), JSON checkpoints + pause/resume, the run-config CLI |
+| The run loop | `keelspring/sim.py` (`SimBase`) | decision windows (lockstep or catch-up pipelined), per-window forensics, lost-window visibility, API-outage auto-pause, live streaming flush |
+| LLM admirals | `keelspring/llm.py` | one fairness-locked decision layer over any OpenAI-compatible API: same prompt shape and token budget per model, cost telemetry, thinking-budget handling |
+| Provider ladder | `keelspring/providers.py` | multi-provider fallback with automatic demotion (429/timeout/5xx) and canary recovery |
+| Ship programs | `keelspring/program.py` | a deterministic, instruction-budgeted little language: tokenizer, parser, evaluator, error pedagogy (line numbers, did-you-mean) — your game supplies the vocabulary |
+| Schema machinery | `keelspring/schema.py` | knob resolution (defaults, bounds clamping, loud unknown-key rejection, rename aliases) and the generated docs (markdown + JSON) |
+| The contract | `keelspring/contract.py` | the registration point that ties it together, validated at startup |
 
 Plus, one process up the stack, `server.py` gives you the dashboard, replay
 library, showcase publishing, and the disposable cloud-worker fleet — it
@@ -28,7 +30,7 @@ A game touches the engine at exactly two seams:
 ### 1. `contract.Game` — what you provide
 
 ```python
-from engine import contract
+from keelspring import contract
 
 contract.set_game(contract.Game(
     name="yourgame",
@@ -57,7 +59,7 @@ Your schema module is mostly generated: define the knob CONTENT (sections of
 machinery:
 
 ```python
-from engine import schema as _m
+from keelspring import schema as _m
 SCHEMA = {...}          # your knobs — the doc string IS the UI and API reference
 ALIASES = {}            # old-name -> new-name renames you promise to keep accepting
 def resolve(overrides=None): return _m.resolve(SCHEMA, ALIASES, overrides)
@@ -73,7 +75,7 @@ protocol — checked the moment the class is defined, with a list of anything
 missing:
 
 ```python
-from engine.sim import SimBase
+from keelspring.sim import SimBase
 
 class YourEngine(SimBase):
     def __init__(self, players, seed, max_ticks=None, scenario=None): ...
@@ -91,6 +93,17 @@ The base also reads, from `self`: `cfg` (your resolved knobs), `t`,
 `decisions`, `live`). `run()`, the window machinery, forensics, outage
 handling, and the live flush then work unchanged.
 
+## The remontoire
+
+In a precision clock, the *remontoire* is a small secondary spring, rewound
+at fixed intervals, so the escapement receives constant force no matter what
+the mainspring is doing. Keelspring's fairness machinery is named for it:
+the decision windows (`keelspring/sim.py`) and the provider ladder
+(`keelspring/providers.py`) together deliver the same metered force to every
+admiral — identical prompts, budgets, and window cadence — regardless of
+upstream provider weather. When you read "the remontoire" in this codebase,
+it means that subsystem pair and the guarantee it exists to keep.
+
 ## The laws your game inherits
 
 These are engine-wide guarantees; break one and the shared tests break:
@@ -103,7 +116,7 @@ These are engine-wide guarantees; break one and the shared tests break:
   entry; `resolve()` rejects unknown keys loudly and clamps to bounds.
 - **Model text is data, never instructions.** Anything one model writes that
   another model reads must be structurally contained (see `one_line` in
-  `engine/sim.py` for the single-line defense parley uses).
+  `keelspring/sim.py` for the single-line defense parley uses).
 - **Checkpoints are plain versioned JSON**, thawed tolerantly on current
   code, and never deleted on a failed resume.
 - **Agent-first**: any capability your GUI exposes needs a documented JSON
@@ -114,13 +127,13 @@ These are engine-wide guarantees; break one and the shared tests break:
 Give consumers one module that registers your game and aliases to the
 runner (Flotilla's `sim/run_config.py` is the reference — 39 lines):
 build the `Game`, `contract.set_game(...)`, then
-`sys.modules[__name__] = engine.runner` so `import run_config`-style
+`sys.modules[__name__] = keelspring.runner` so `import run_config`-style
 imports keep working and `python3 your_entry.py config.json` runs matches.
 
 ## Proving it works
 
 - `tests/test_contract.py` — the contract + World-protocol guarantees.
-- `tests/test_engine_boundary.py` — `engine/` never imports a game and
+- `tests/test_keelspring_boundary.py` — `keelspring/` never imports a game and
   imports standalone; add your module names to its ban list.
 - Build a golden-replay manifest for YOUR game with
   `tests/golden_harness.py` as the pattern: seeded configs through your

@@ -19,6 +19,10 @@ A provider serves a model when its model_map names it or its models list
 contains it (the check button on the Server tab fills that list). The
 BUILTIN provider always serves everything — it is where the ids come from.
 A model starts on the highest rung that serves it.
+
+The other half of THE REMONTOIRE (docs/KEELSPRING.md): the ladder rewinds
+the delivery spring — demote, fall back, canary home — so the force each
+admiral receives stays constant through provider weather.
 """
 import json
 import os

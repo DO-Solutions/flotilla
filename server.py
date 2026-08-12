@@ -97,8 +97,8 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(HERE, "sim"))
 sys.path.insert(0, os.path.join(HERE, "scripts"))
 import run_config                       # noqa: E402,F401 — registers the
-                                        # game (engine/contract.py) at boot
-from engine import contract             # noqa: E402
+                                        # game (keelspring/contract.py) at boot
+from keelspring import contract             # noqa: E402
 import config_schema                    # noqa: E402
 from libindex import build_index, matches_meta, save_matches_meta  # noqa: E402
 from make_bundle import build_bundle    # noqa: E402
@@ -1593,7 +1593,7 @@ def _app_tarball():
         # ModuleNotFoundError the flagship never sees (engine/ was missing
         # here for three resume attempts after the split — the deploy tarball
         # and THIS one are separate manifests, each needing the smoke test)
-        for item in ("server.py", "VERSION", "engine", "sim", "scripts",
+        for item in ("server.py", "VERSION", "keelspring", "sim", "scripts",
                      "viewer", "dash"):
             p = os.path.join(HERE, item)
             if os.path.exists(p):

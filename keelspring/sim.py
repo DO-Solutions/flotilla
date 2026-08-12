@@ -62,7 +62,7 @@ class SimBase:
         if missing:
             raise TypeError(
                 f"{cls.__name__} does not satisfy the SimBase World protocol "
-                f"— missing: {', '.join(missing)} (see engine/sim.py)")
+                f"— missing: {', '.join(missing)} (see keelspring/sim.py)")
 
     def _ev(self, kind, **kw):
         kw["t"] = self.t
@@ -79,7 +79,13 @@ class SimBase:
         return v if isinstance(v, dict) else {}
 
     def _pipe_window(self, live, t):
-        """Catch-up pipelining: each admiral has at most ONE reply in flight.
+        """One half of THE REMONTOIRE (docs/KEELSPRING.md): like the clock
+        mechanism it is named for, the window machinery delivers constant,
+        metered force to every admiral — same snapshot shape, same budget,
+        same cadence — regardless of upstream conditions. The provider
+        ladder is the other half.
+
+        Catch-up pipelining: each admiral has at most ONE reply in flight.
         A window stays open window_wait_s wall-clock; admirals answering in
         time decide every window, slow ones miss windows until their reply
         lands — then they get ONE fresh snapshot (state.CATCH_UP says how far

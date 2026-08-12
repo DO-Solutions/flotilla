@@ -1,7 +1,7 @@
 """Flotilla's Game registration + the runner's compat surface (split Stage 2).
 
 The orchestration (matches, series, memos, tournaments, checkpoints) moved to
-engine/runner.py; the CLI entry stays HERE because it is a documented
+keelspring/runner.py; the CLI entry stays HERE because it is a documented
 interface — the server and every aux worker invoke `sim/run_config.py`.
 This module's real job is the contract: it assembles Flotilla's Game object
 and registers it, which binds the runner to this game's rules, bots, schema,
@@ -18,7 +18,7 @@ import bots                                # noqa: E402
 import series                              # noqa: E402
 import config_schema                       # noqa: E402
 import conn                                # noqa: E402
-from engine import contract                # noqa: E402
+from keelspring import contract                # noqa: E402
 
 contract.set_game(contract.Game(
     name="flotilla",
@@ -31,7 +31,7 @@ contract.set_game(contract.Game(
     ship_stats=core.SHIP_STATS,            # designer stat names
 ))
 
-from engine import runner as _runner       # noqa: E402
+from keelspring import runner as _runner       # noqa: E402
 
 if __name__ == "__main__":
     _runner.main()

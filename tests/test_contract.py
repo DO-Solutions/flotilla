@@ -12,8 +12,8 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(HERE, "..", "sim"))
 sys.path.insert(0, os.path.join(HERE, ".."))
 
-from engine import contract                    # noqa: E402
-from engine.sim import SimBase                 # noqa: E402
+from keelspring import contract                    # noqa: E402
+from keelspring.sim import SimBase                 # noqa: E402
 import run_config                              # noqa: E402,F401 — Flotilla registers
 
 fails = 0

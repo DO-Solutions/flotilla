@@ -41,7 +41,7 @@ import time
 from .llm import LLMAdmiral                # noqa: E402
 from . import contract                     # noqa: E402
 
-# the GAME's pieces, bound at registration (engine/contract.py): the rules
+# the GAME's pieces, bound at registration (keelspring/contract.py): the rules
 # engine, the scripted bots, the knob schema, the fog digest. Bound as module
 # globals so the orchestration below reads exactly as it always has.
 Engine = BOTS = digest_for = config_schema = SCHEMA = None

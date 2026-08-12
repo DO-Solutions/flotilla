@@ -11,7 +11,7 @@ import os as _os
 import sys as _sys
 
 _sys.path.insert(0, _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))))
-from engine import schema as _schema     # noqa: E402  (machinery; content lives HERE)
+from keelspring import schema as _schema     # noqa: E402  (machinery; content lives HERE)
 
 SCHEMA = {
     "world": {

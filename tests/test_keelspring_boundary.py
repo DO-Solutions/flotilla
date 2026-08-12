@@ -7,7 +7,7 @@ Two guarantees, both mechanical so they can't rot into folklore:
    the game's packages plus the legacy sim/ game modules — so a new engine
    file can't quietly reach for flotilla presets or bot classes.
 2. The engine package imports standalone: a clean interpreter with ONLY
-   engine/ on the path can `import engine`, proving completeness (a game
+   engine/ on the path can `import keelspring`, proving completeness (a game
    author gets a working tool, not a tool with hidden Flotilla tendrils).
 
 Before Stage 1 lands there is no engine/ yet — both checks report SKIPPED
@@ -20,7 +20,7 @@ import sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
-ENGINE = os.path.join(ROOT, "engine")
+ENGINE = os.path.join(ROOT, "keelspring")
 
 # game-side module names the engine must never import
 BANNED = {"flotilla", "core", "bots", "replay_codec", "series",
@@ -62,15 +62,15 @@ def main():
                             f"{os.path.relpath(p, ROOT)}:{node.lineno} "
                             f"imports {m}")
     ok(not offenders,
-       "engine/ never imports the game" + ("" if not offenders else
+       "keelspring/ never imports the game" + ("" if not offenders else
                                            " — " + "; ".join(offenders)))
 
     r = subprocess.run(
-        [sys.executable, "-c", "import engine"],
+        [sys.executable, "-c", "import keelspring"],
         cwd=ROOT, capture_output=True, text=True, timeout=60,
         env={**os.environ, "PYTHONPATH": ROOT})
     ok(r.returncode == 0,
-       "engine imports standalone"
+       "keelspring imports standalone"
        + ("" if r.returncode == 0 else f" — {r.stderr.strip()[-200:]}"))
 
     print("FAILURES:", fails)

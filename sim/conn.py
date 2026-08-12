@@ -93,14 +93,14 @@ import os as _os
 import sys as _sys
 
 _sys.path.insert(0, _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))))
-import engine.program as _prog           # noqa: E402
+import keelspring.program as _prog           # noqa: E402
 
 # install Flotilla's vocabulary into the interpreter (same dict objects, so
 # conn.SENSORS and the machinery's view can never diverge), then re-export
 # the machinery names every consumer already uses
 _prog.SENSORS = SENSORS
 _prog.ACTIONS = ACTIONS
-from engine.program import (                              # noqa: E402,F401
+from keelspring.program import (                              # noqa: E402,F401
     BUDGET, ConnError, FUNCS, MAX_LINES, Program, _fin, compile_program)
 
 
