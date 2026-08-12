@@ -250,7 +250,14 @@ def play_game(named_bots, seed, scenario, outpath, memos_after=None, prov=None,
         fh.write(json.dumps(replay, separators=(",", ":")))
     row = {"seed": seed, "file": outpath,
            "scores": {result["names"][k]: v for k, v in result["scores"].items()},
-           "winner": result["names"][result["winner"]]}
+           # winner None = a DRAW (the game's tie chain ran dry) — kept null
+           # so nobody is credited a game win they didn't earn
+           "winner": (result["names"][result["winner"]]
+                      if result.get("winner") is not None else None)}
+    if result.get("tiebreak"):
+        row["tiebreak"] = (result["tiebreak"].get("decided_by")
+                           or ("draw" if result["tiebreak"].get("draw")
+                               else None))
     _emit(row)
     return replay, result, row
 
@@ -280,7 +287,8 @@ def _clinched(rows, total):
     instead of trusting a counter)."""
     wins = {}
     for r in rows:
-        wins[r["winner"]] = wins.get(r["winner"], 0) + 1
+        if r["winner"] is not None:      # a drawn game credits nobody
+            wins[r["winner"]] = wins.get(r["winner"], 0) + 1
     ranked = sorted(wins.values(), reverse=True) or [0]
     lead = ranked[0]
     second = ranked[1] if len(ranked) > 1 else 0

@@ -141,6 +141,9 @@ class Fleet:
         self.alive = True
         self.died_t = None                 # tick the flagship fell (final ranking)
         self.windows_lost = 0              # decision windows lost to admiral errors
+        self.flag_kills = 0                # enemy flagships destroyed (tiebreak)
+        self.first_flag_kill_t = None      # tick of the first one (tiebreak)
+        self.last_capture_t = None         # latest territory capture (tiebreak)
         self.pending = {}                  # squad -> the admiral's standing orders;
                                            # ships copy them in port or on a signal hoist
         self.pending_reassign = {}         # ship id -> squad (applies as the ship docks)
@@ -235,7 +238,11 @@ class Engine(SimBase):
                     "kills alone win nothing while any rival flag flies. Survive, "
                     "outbuild, and destroy every enemy flagship. FINAL RANKING: "
                     "survivors rank above the fallen — no score outranks staying "
-                    "afloat; among the fallen, falling LATER ranks higher.")
+                    "afloat; among the fallen, falling LATER ranks higher. "
+                    "TIES (2+ admirals afloat at the safety-net cap with equal "
+                    "kill points) break by: most flagship kills, then most "
+                    "ships sunk, then earliest first flagship kill — still "
+                    "tied is a DRAW.")
             elif c["win"] == "territory":
                 c["description"] = (
                     "TERRITORIES match: the sea is split into named territories. Hold a "
@@ -260,14 +267,18 @@ class Engine(SimBase):
                     "point is in. Ship programs can read terr.owner / terr.mine / "
                     "terr.capture for the territory under their keel. FINAL "
                     "RANKING: surviving fleets rank above eliminated ones, then "
-                    "score decides.")
+                    "score decides. TIES break by: most territories held at "
+                    "the bell, then most recent territory capture — still "
+                    "tied is a DRAW.")
             else:
                 c["description"] = (
                     f"SCORE match (timed): score = cargo hauled to port + {c['kill_score']}/enemy "
                     f"ship sunk + {c['flag_kill_score']}/flagship destroyed. Highest "
                     "score at the bell wins; losing your flagship eliminates you. "
                     "FINAL RANKING: surviving fleets rank above eliminated ones, "
-                    "then score decides.")
+                    "then score decides. TIES break by: most cargo hauled, then "
+                    "most ships sunk, then highest fleet net worth (treasury + "
+                    "cargo aboard + ship value) — still tied is a DRAW.")
         self.roles_allowed = set(ROLES)
         if c["roles_allowed"].strip():
             self.roles_allowed = {r.strip() for r in c["roles_allowed"].split(",")
@@ -738,6 +749,7 @@ class Engine(SimBase):
             if took is not None:
                 self._contest.pop(rid, None)
                 self.region_owner[rid] = took
+                self.fleets[took].last_capture_t = self.t
                 self._ev("region", region=rid, name=r["name"], fleet=took,
                          prev=owner)
 
@@ -768,6 +780,7 @@ class Engine(SimBase):
                             took = best[0]
                 if took is not None:
                     self.region_owner[rid] = took
+                    self.fleets[took].last_capture_t = self.t
                     self._ev("region", region=rid, name=r["name"], fleet=took,
                              prev=owner)
             owner = self.region_owner[rid]
@@ -2365,8 +2378,12 @@ class Engine(SimBase):
                         if d < bd:
                             best, bd = s, d
                 if best is not None:
-                    self.fleets[best.fleet].kills += self.cfg['flag_kill_score']
-                    self.fleets[best.fleet].kill_count += 1
+                    bf = self.fleets[best.fleet]
+                    bf.kills += self.cfg['flag_kill_score']
+                    bf.kill_count += 1
+                    bf.flag_kills += 1
+                    if bf.first_flag_kill_t is None:
+                        bf.first_flag_kill_t = self.t
                 for s in [s for s in self.ships.values() if s.fleet == f.id]:
                     del self.ships[s.id]
                 # elimination is ANNOUNCED to every admiral, so ghost contacts
@@ -2538,8 +2555,50 @@ class Engine(SimBase):
             warnings=f.warnings, territory=f.territory,
             recent_hits=f.recent_hits,
             died_t=f.died_t, windows_lost=f.windows_lost,
+            flag_kills=f.flag_kills, first_flag_kill_t=f.first_flag_kill_t,
+            last_capture_t=f.last_capture_t,
             combat=[[list(k), v] for k, v in f.combat.items()],
             bel_v=getattr(f, "_bel_v", 1))
+
+    def tiebreak_rungs(self):
+        """Per-mode tie chains (2026-08-12) — the engine applies these
+        in order to fleets tied on the primary key (alive, score) and records
+        the trail in the result; exhausting the chain is an honest DRAW, never
+        a fleet-id coin flip. Every rung is 'highest value wins', so
+        earlier-is-better ticks are negated. The chains are PUBLISHED in each
+        mode's rules text — a rule the admirals can't see can't shape play."""
+        fs = list(self.fleets.values())
+        win = self.cfg["win"]
+        if win == "domination":
+            return [
+                ("flagship kills", {f.id: f.flag_kills for f in fs}),
+                ("ships sunk", {f.id: f.kill_count for f in fs}),
+                ("first flagship kill",
+                 {f.id: (-f.first_flag_kill_t
+                         if f.first_flag_kill_t is not None else -(10 ** 9))
+                  for f in fs}),
+            ]
+        if win == "territory":
+            held = {f.id: 0 for f in fs}
+            for rid, o in getattr(self, "region_owner", {}).items():
+                # unclaimed territories (owner None) simply count for no one
+                if o is not None and self.fleets[o].alive:
+                    held[o] += 1
+            return [
+                ("territories held", held),
+                ("most recent capture",
+                 {f.id: (f.last_capture_t
+                         if f.last_capture_t is not None else -1)
+                  for f in fs}),
+            ]
+        worth = {f.id: f.cargo for f in fs}
+        for s in self.ships.values():
+            worth[s.fleet] += s.cargo + self.cfg["ship_cost"]
+        return [
+            ("cargo hauled", {f.id: f.bank for f in fs}),
+            ("ships sunk", {f.id: f.kill_count for f in fs}),
+            ("fleet net worth", worth),
+        ]
 
     def freeze(self):
         """The engine's mutable state as one JSON-able dict. Call only while
@@ -2664,6 +2723,7 @@ class Engine(SimBase):
                       "yards", "yard_done_t",
                       "signal_cd", "pending_refits", "designs",
                       "died_t", "windows_lost",
+                      "flag_kills", "first_flag_kill_t", "last_capture_t",
                       "reports_pending", "queued_signal", "warnings",
                       "territory", "recent_hits", "inbox", "parley_log"):
                 if k in fd:

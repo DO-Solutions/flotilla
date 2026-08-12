@@ -243,7 +243,9 @@ try:
                              scenario={"max_ticks": 400, "warmup": False},
                              ser=ser, outdir=e, pause_check=flaky_pause,
                              pause_mode="raise")
-    ok(len(rows) == 1 and rows[0].get("winner"),
+    # completion is the assertion, not who won — this 400-tick scripted game
+    # is a legitimate 0-0 draw under the #126 tie chains (winner None)
+    ok(len(rows) == 1 and "winner" in rows[0],
        "unhonorable pause refused: the game still completed")
     ok('"pause_refused"' in buf.getvalue(),
        "the refusal is announced (pause_refused)")

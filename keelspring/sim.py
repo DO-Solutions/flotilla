@@ -317,6 +317,39 @@ class SimBase:
         self._frame()
         if self.live is not None:
             self._live_flush(final=True)
+        return self._final_result()
+
+    def tiebreak_rungs(self):
+        """OPTIONAL game hook: the ordered tie chain applied to fleets tied on
+        the primary key (alive, score). Each rung is (label, {fleet_id:
+        value}), highest value wins; surviving candidates carry to the next
+        rung. One left = the winner (the result records decided_by + the
+        trail); chain exhausted = an honest DRAW (winner None). Default: no
+        rungs — the engine keeps its legacy lowest-id rule, so a game without
+        a tie policy behaves exactly as before."""
+        return []
+
+    def _apply_tiebreak(self, cands, value_of, out):
+        """Run the game's tie chain over `cands` (ids tied on the primary
+        key). Returns the single winner, or None — a DRAW if rungs existed
+        (out['tiebreak'] says so), a legacy tie otherwise (no 'tiebreak' key;
+        the caller applies the lowest-id rule)."""
+        rungs = self.tiebreak_rungs()
+        if not rungs:
+            return None
+        trail = []
+        for label, vals in rungs:
+            vv = {c: value_of(vals, c) for c in cands}
+            top = max(vv.values())
+            trail.append({"rung": label, "values": vv})
+            cands = [c for c in cands if vv[c] == top]
+            if len(cands) == 1:
+                out["tiebreak"] = {"decided_by": label, "trail": trail}
+                return cands[0]
+        out["tiebreak"] = {"draw": True, "trail": trail}
+        return None
+
+    def _final_result(self):
         scores = {f.id: f.score() for f in self.fleets.values()}
         alive = [f.id for f in self.fleets.values() if f.alive]
         out = dict(ticks=self.t, scores=scores, alive=alive,
@@ -328,22 +361,51 @@ class SimBase:
             for f in self.fleets.values():
                 tscores[f.team] = tscores.get(f.team, 0) + scores[f.id]
                 talive[f.team] = talive.get(f.team, False) or f.alive
-            tw = max(tscores, key=lambda tm: (talive[tm], tscores[tm], -tm))
             out["teams"] = teams
             out["team_scores"] = tscores
-            # winner (a fleet id, for every existing pipeline) = the winning
-            # team's best member
-            out["winner"] = max((f.id for f in self.fleets.values() if f.team == tw),
-                                key=lambda k: (self.fleets[k].alive, scores[k], -k))
+            tprim = lambda tm: (talive[tm], tscores[tm])      # noqa: E731
+            tbest = tprim(max(tscores, key=tprim))
+            tcands = sorted(tm for tm in tscores if tprim(tm) == tbest)
+            tw = tcands[0]
+            if len(tcands) > 1:
+                # team ties: each rung's per-fleet values SUM across the team
+                tw = self._apply_tiebreak(
+                    tcands,
+                    lambda vals, tm: sum(v for fid, v in vals.items()
+                                         if teams[fid] == tm), out)
+                if tw is None and "tiebreak" not in out:
+                    tw = tcands[0]                    # legacy lowest team id
+            if tw is None:
+                out["winner"] = None                  # drawn team match
+            else:
+                # winner (a fleet id, for every existing pipeline) = the
+                # winning team's best member
+                out["winner"] = max(
+                    (f.id for f in self.fleets.values() if f.team == tw),
+                    key=lambda k: (self.fleets[k].alive, scores[k], -k))
         else:
-            out["winner"] = max(scores,
-                                key=lambda k: (self.fleets[k].alive, scores[k], -k))
+            prim = lambda k: (self.fleets[k].alive, scores[k])  # noqa: E731
+            pbest = prim(max(scores, key=prim))
+            cands = sorted(k for k in scores if prim(k) == pbest)
+            w = cands[0]
+            if len(cands) > 1:
+                w = self._apply_tiebreak(cands,
+                                         lambda vals, c: vals.get(c, 0), out)
+                if w is None and "tiebreak" not in out:
+                    w = cands[0]                      # legacy lowest fleet id
+            out["winner"] = w
         # the DISPLAYED order now matches the winner rule (playtest feedback:
         # an eliminated fleet read as rank 1 on banked score while the sole
-        # survivor placed third): survivors first, then later-fallen, then score
+        # survivor placed third): survivors first, then later-fallen, then
+        # score, then the game's tie rungs — the id fallback stays LAST so
+        # rank is always a total order (a drawn game still lists everyone;
+        # winner=None is what marks the draw)
+        rungs = self.tiebreak_rungs()
         out["rank"] = sorted(
             scores, key=lambda k: (self.fleets[k].alive,
                                    self.fleets[k].died_t
                                    if self.fleets[k].died_t is not None else -1,
-                                   scores[k], -k), reverse=True)
+                                   scores[k],
+                                   tuple(vals.get(k, 0) for _l, vals in rungs),
+                                   -k), reverse=True)
         return out

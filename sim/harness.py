@@ -63,8 +63,9 @@ def main():
     for i in range(args.n):
         seed = 100 + i
         eng, result, lead1500_name, names = run_one(seed, i % 4)
-        wname = result["names"][result["winner"]]
-        wins[wname] += 1
+        wname = (result["names"][result["winner"]]
+                 if result["winner"] is not None else "DRAW")
+        wins[wname] = wins.get(wname, 0) + 1
         if len(result["alive"]) < len(names):
             elims += 1
         if lead1500_name == wname:

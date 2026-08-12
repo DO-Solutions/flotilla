@@ -93,6 +93,16 @@ The base also reads, from `self`: `cfg` (your resolved knobs), `t`,
 `decisions`, `live`). `run()`, the window machinery, forensics, outage
 handling, and the live flush then work unchanged.
 
+One optional override: `tiebreak_rungs()` — your game's tie policy. Return
+`[(label, {fleet_id: value}), …]`; when fleets finish tied on the primary
+key (alive, score) the engine applies the rungs in order (highest value
+wins, survivors carry forward), records the trail and `decided_by` in the
+result, and calls a chain that runs dry an honest **draw** (`winner` null)
+rather than picking by fleet id. Team matches sum each rung's values across
+the team. No override = the legacy lowest-id rule, byte-identical to before
+the hook existed. Flotilla's chains (per mode, published to the admirals in
+the rules text) live in `sim/core.py::Engine.tiebreak_rungs`.
+
 ## The remontoire
 
 In a precision clock, the *remontoire* is a small secondary spring, rewound

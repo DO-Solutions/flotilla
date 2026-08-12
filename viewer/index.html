@@ -860,7 +860,14 @@ function updateMetaLine() {
     : `<span class="mdim">seed ${escHtml(rp.meta.seed)} · </span>${names}` +
       (!S.spoiler && rp.result && rp.result.winner != null
         ? `<span class="mdim"> · winner: ` +
-          `${escHtml(rp.result.names[rp.result.winner])}</span>` : "");
+          `${escHtml(rp.result.names[rp.result.winner])}` +
+          (rp.result.tiebreak && rp.result.tiebreak.decided_by
+            ? ` (tiebreak: ${escHtml(rp.result.tiebreak.decided_by)})` : "") +
+          `</span>`
+        : !S.spoiler && rp.result && rp.result.tiebreak
+          && rp.result.tiebreak.draw
+          ? `<span class="mdim"> · ⚖ drawn game — the tie chain ran dry</span>`
+          : "");
   setMetaStatus("");
 }
 // the game info stays put; status notes APPEND after it, never replace it.

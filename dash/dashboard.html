@@ -569,7 +569,8 @@ function gameRows(s, liveJob, byFile) {
       `<td class="dim">${(m.when || "").replace("T", " ").slice(0, 16)}</td>` +
       `<td class="dim">${m.ticks ? Math.round(m.ticks / 600) + "m" : ""}</td>` +
       `<td class="dim">${m.cost ? "$" + m.cost.toFixed(2) : "—"}</td>` +
-      `<td class="res win" style="display:none">${esc(g.winner || m.winner || "")}</td>` +
+      `<td class="res win" style="display:none">${g.winner === null
+        ? "draw" : esc(g.winner || m.winner || "")}</td>` +
       `<td class="res" style="display:none">${m.scores ? fmt(m) : ""}</td>` +
       `<td><div class="rowbtns"><a class="btn btn-dl dlh" href="#" ` +
       `data-file="${esc(g.file)}" data-name="${esc(displayName(s))}-g${g.game}" ` +
