@@ -76,7 +76,7 @@ default_designs) keep their old names as accepted aliases.
 
 | key | default | range | effect |
 |---|---|---|---|
-| `win` | `timed_score` | timed_score / territory / domination | Victory condition. timed_score ("Score"): cargo hauled + kills, highest at the bell. territory ("Territories"): control points from holding named territories. domination ("Conquest"): no clock — last admiral standing wins. The ids stay stable for configs; the labels are what the UI shows. |
+| `win` | `timed_score` | timed_score / territory / domination | Victory condition. timed_score ("Bounty"): cargo hauled + kill bounties, highest at the bell. territory ("Territories"): control points from holding named territories. domination ("Conquest"): no clock — last admiral standing wins. The ids stay stable for configs; the labels are what the UI shows. |
 | `domination_cap` | `18000` | 3000–360000 | Domination mode: safety cap in ticks (18000 = 30 minutes game time). The match has no clock — it ends when one admiral remains; if the cap is somehow reached, highest kill score wins. |
 | `territories` | `16` | 4–48 | Territory mode: number of named control territories (used only when territory_size is 0). |
 | `territory_size` | `0` | 0–800 | Territory mode: AVERAGE territory size in cells — the territory count becomes map area / this (clamped 4-48). 0 = use the explicit `territories` count. ~324 on the default 96x54 map ≈ the classic 16 territories (count = 5184 / territory_size). |

@@ -283,7 +283,7 @@ class Engine(SimBase):
                     "tied is a DRAW.")
             else:
                 c["description"] = (
-                    f"SCORE match (timed): score = cargo hauled to port + {c['kill_score']}/enemy "
+                    f"BOUNTY match (timed): score = cargo hauled to port + {c['kill_score']}/enemy "
                     f"ship sunk + {c['flag_kill_score']}/flagship destroyed. Highest "
                     "score at the bell wins; losing your flagship eliminates you. "
                     "FINAL RANKING: surviving fleets rank above eliminated ones, "

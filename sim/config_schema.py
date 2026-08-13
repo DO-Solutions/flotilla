@@ -67,8 +67,8 @@ SCHEMA = {
     },
     "scenario": {
         "win":         dict(d="timed_score", t="enum", opts=["timed_score", "territory", "domination"],
-                            labels={"timed_score": "Score", "territory": "Territories", "domination": "Conquest"},
-                            doc="Victory condition. timed_score (\"Score\"): cargo hauled + kills, highest at the bell. territory (\"Territories\"): control points from holding named territories. domination (\"Conquest\"): no clock — last admiral standing wins. The ids stay stable for configs; the labels are what the UI shows."),
+                            labels={"timed_score": "Bounty", "territory": "Territories", "domination": "Conquest"},
+                            doc="Victory condition. timed_score (\"Bounty\"): cargo hauled + kill bounties, highest at the bell. territory (\"Territories\"): control points from holding named territories. domination (\"Conquest\"): no clock — last admiral standing wins. The ids stay stable for configs; the labels are what the UI shows."),
         "domination_cap": dict(d=18000, t="int", lo=3000, hi=360000, show_if={"win": "domination"},
                             doc="Domination mode: safety cap in ticks (18000 = 30 minutes game time). The match has no clock — it ends when one admiral remains; if the cap is somehow reached, highest kill score wins."),
         "territories": dict(d=16,   t="int", lo=4,  hi=48,  show_if={"win": "territory"}, doc="Territory mode: number of named control territories (used only when territory_size is 0)."),

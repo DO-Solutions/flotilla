@@ -366,11 +366,11 @@
     "domination"
    ],
    "labels": {
-    "timed_score": "Score",
+    "timed_score": "Bounty",
     "territory": "Territories",
     "domination": "Conquest"
    },
-   "doc": "Victory condition. timed_score (\"Score\"): cargo hauled + kills, highest at the bell. territory (\"Territories\"): control points from holding named territories. domination (\"Conquest\"): no clock \u2014 last admiral standing wins. The ids stay stable for configs; the labels are what the UI shows."
+   "doc": "Victory condition. timed_score (\"Bounty\"): cargo hauled + kill bounties, highest at the bell. territory (\"Territories\"): control points from holding named territories. domination (\"Conquest\"): no clock \u2014 last admiral standing wins. The ids stay stable for configs; the labels are what the UI shows."
   },
   "domination_cap": {
    "d": 18000,

@@ -456,7 +456,90 @@ const LW = 1152, LH = 648;   // the LOGICAL canvas space every draw targets;
 // GLM's old #4dd6b8 read as fish teal; Kimi's old gold read as wreck/laden.
 const COLORS = ["#4da3ff", "#ff5d5d", "#a3e635", "#c084fc",
                 "#f472b6", "#3fe06a", "#6140e6", "#ca40e6"];
-const TAIL = 14;
+let TAIL = 14;
+
+// ---- SKINS: every appearance decision in one data object. A skin changes
+// palette, type, silhouette scale, and motion — NEVER logic: nothing in the
+// sim, POV/fog rules, hit-testing, or the replay/live pipeline reads SKIN.
+// The default reproduces today's look exactly. Apply order: an embedded
+// window.FLOTILLA_SKIN (bundles) > ?skin=<registry name> > ?skinurl=<same-
+// origin JSON> > the saved picker choice. docs/SKINS.md is the token
+// reference. Colors: 6-digit hex keeps the baked-in alpha nuances (other
+// CSS colors work, minus those alphas).
+const SKIN_DEFAULT = {
+  name: "flotilla",
+  ui: { bg: "#0b1220", card: "#111a2e", line: "#1e2a44", ink: "#e6edf7",
+        dim: "#8b9bb8", accent: "#0069ff",
+        font: "" },                     // "" = the stylesheet's own stack
+  fleet: ["#4da3ff", "#ff5d5d", "#a3e635", "#c084fc",
+          "#f472b6", "#3fe06a", "#6140e6", "#ca40e6"],
+  sea: { top: "#0a1b33", bottom: "#081426",
+         gridMinor: "#e6edf70b", gridMajor: "#e6edf71c",
+         label: "#e6edf755" },
+  land: { fill: "#8a774e", halo: "#c9b47f22" },
+  nodes: { fish: "rgba(45,212,191,.5)", wreck: "rgba(251,191,36,.55)",
+           label: "#e6edf7aa" },
+  ships: { hullInk: "#0b1220", detail: "#ffffff", laden: "#ffd76a",
+           ghost: "#9fb0c866", scale: 1 },
+  fx: { fog: "rgba(3,8,18,.62)", tail: 14 },
+  minimap: { bg: "#0a1b33", frame: "#24304d", cursor: "#e6edf7" },
+};
+const SKINS = {
+  flotilla: {},
+  daylight: {                           // the proof skin: a paper chart
+    name: "daylight",
+    ui: { bg: "#eef3f9", card: "#ffffff", line: "#c9d6e8", ink: "#16233a",
+          dim: "#5a6b85" },
+    fleet: ["#1668d8", "#d83a3a", "#5a9e12", "#8a3fd8",
+            "#d0338f", "#0e9e4a", "#4a2fd0", "#a12fd0"],
+    sea: { top: "#bcd6ee", bottom: "#9fc3e4",
+           gridMinor: "#16233a14", gridMajor: "#16233a26",
+           label: "#16233a66" },
+    land: { fill: "#b9a06b", halo: "#8a774e22" },
+    nodes: { fish: "rgba(13,148,136,.55)", wreck: "rgba(180,120,20,.5)",
+             label: "#16233aaa" },
+    ships: { hullInk: "#f5f8fc", detail: "#16233a", laden: "#b8860b",
+             ghost: "#46587266" },
+    fx: { fog: "rgba(190,205,225,.55)" },
+    minimap: { bg: "#bcd6ee", frame: "#8fa8c4", cursor: "#16233a" },
+  },
+};
+let SKIN = JSON.parse(JSON.stringify(SKIN_DEFAULT));
+function withA(color, hexAlpha) {
+  // baked alpha rides only on 6-digit hex; any other color form is used as-is
+  return /^#[0-9a-fA-F]{6}$/.test(color) ? color + hexAlpha : color;
+}
+function applySkin(spec) {
+  const base = JSON.parse(JSON.stringify(SKIN_DEFAULT));
+  try {
+    for (const [sec, vals] of Object.entries(spec || {})) {
+      if (sec === "name") { base.name = String(vals).slice(0, 40); continue; }
+      if (sec === "fleet" && Array.isArray(vals)) {
+        base.fleet = vals.slice(0, 8).map(String);
+        while (base.fleet.length < 8)
+          base.fleet.push(SKIN_DEFAULT.fleet[base.fleet.length]);
+        continue;
+      }
+      if (typeof vals !== "object" || !base[sec]) continue;
+      for (const [k, v] of Object.entries(vals)) {
+        if (!(k in base[sec])) continue;
+        base[sec][k] = typeof base[sec][k] === "number" ? +v || base[sec][k]
+                                                        : String(v);
+      }
+    }
+    base.ships.scale = Math.min(4, Math.max(0.25, base.ships.scale));
+    base.fx.tail = Math.min(60, Math.max(0, Math.round(base.fx.tail)));
+  } catch (e) { /* a malformed skin falls back to the default */ }
+  SKIN = base;
+  TAIL = SKIN.fx.tail;
+  COLORS.length = 0;
+  for (const c of SKIN.fleet) COLORS.push(c);
+  const rt = document.documentElement.style;
+  for (const [k, v] of Object.entries(SKIN.ui)) {
+    if (k !== "font") rt.setProperty("--" + k, v);
+  }
+  document.body.style.fontFamily = SKIN.ui.font || "";
+}
 const S = { rp: null, fi: 0, playing: false, last: 0, acc: 0, sel: null,
             bundle: null, gameIdx: 0, spoiler: true, nodePos: {},
             cat: {}, sinkAt: {}, byShip: {}, frameMaps: [], screenPos: {},
@@ -635,7 +718,16 @@ function renderSettingsPanel() {
     tog("grid", S.showGrid, "Grid &amp; territory outlines",
         "cell grid + dashed territory borders") +
     tog("sharp", S.quality !== "standard", "Sharp rendering",
-        "match display resolution — turn Off on slow machines");
+        "match display resolution — turn Off on slow machines") +
+    `<div style="display:flex;align-items:center;gap:6px;margin-bottom:6px">` +
+    `<label class="dim" for="skinsel">🎨 skin</label>` +
+    `<select id="skinsel">` + Object.keys(SKINS).map(k =>
+      `<option value="${k}"${SKIN.name === k ? " selected" : ""}>${k}</option>`
+    ).join("") + `</select>` +
+    `<span class="info">i<span class="pop">appearance only — palette, ` +
+    `type, silhouettes, motion. Never touches the match, the fog rules, ` +
+    `or the data. ?skin= and ?skinurl= (same-origin JSON) work too — ` +
+    `see docs/SKINS.md</span></span></div>`;
   const sec = (title, body, note) =>
     `<details><summary>${title}` +
     (note ? ` <span class="dim">${note}</span>` : "") +
@@ -1770,7 +1862,7 @@ function plotChart(cnv, cx2, series, pmax, lim, total) {
     }
     cx2.stroke();
   }
-  cx2.strokeStyle = "#e6edf7aa";
+  cx2.strokeStyle = withA(SKIN.minimap.cursor, "aa");
   const px = S.fi / (total - 1) * W2;
   cx2.beginPath(); cx2.moveTo(px, 0); cx2.lineTo(px, H2); cx2.stroke();
   cx2.lineWidth = 1;
@@ -1800,12 +1892,12 @@ function drawTimeline(fr) {
   const Wt = tlc.width / q2, Ht = tlc.height / q2;
   const T = Math.max(1, S.rp.frames.at(-1).t);
   tctx.clearRect(0, 0, Wt, Ht);
-  tctx.fillStyle = "#0a1b33"; tctx.fillRect(0, 0, Wt, Ht);
-  tctx.strokeStyle = "#24304d";
+  tctx.fillStyle = SKIN.minimap.bg; tctx.fillRect(0, 0, Wt, Ht);
+  tctx.strokeStyle = SKIN.minimap.frame;
   tctx.beginPath(); tctx.moveTo(0, Ht - 10); tctx.lineTo(Wt, Ht - 10); tctx.stroke();
   for (let m = 0; m <= T / 600; m++) {              // minute ticks
     const x = m * 600 / T * Wt;
-    tctx.strokeStyle = "#24304d";
+    tctx.strokeStyle = SKIN.minimap.frame;
     tctx.beginPath(); tctx.moveTo(x, Ht - 14); tctx.lineTo(x, Ht - 6); tctx.stroke();
   }
   // code-history marks: while a program/code tile is open, its squadron's
@@ -1841,7 +1933,7 @@ function drawTimeline(fr) {
       tctx.strokeStyle = c;
       tctx.strokeRect(x - 2.5, Ht - 20, 5, 5);
     } else {                                         // flag_sunk: the big one
-      tctx.fillStyle = c; tctx.strokeStyle = "#fff";
+      tctx.fillStyle = c; tctx.strokeStyle = SKIN.minimap.cursor;
       tctx.beginPath();
       tctx.moveTo(x, Ht - 24); tctx.lineTo(x + 6, Ht - 16); tctx.lineTo(x, Ht - 8);
       tctx.lineTo(x - 6, Ht - 16); tctx.closePath();
@@ -1855,7 +1947,7 @@ function drawTimeline(fr) {
     tctx.fillRect(x - 1.5, Ht - 21, 3, 3);
   }
   const cx = fr.t / T * Wt;                          // playhead
-  tctx.strokeStyle = "#e6edf7";
+  tctx.strokeStyle = SKIN.minimap.cursor;
   tctx.beginPath(); tctx.moveTo(cx, 0); tctx.lineTo(cx, Ht); tctx.stroke();
 }
 
@@ -2124,7 +2216,7 @@ function drawShipShape(preset, color, cargo, sel, stats) {
     ctx.lineTo(L - 3.5, B); ctx.lineTo(-L + 1, B);   // straight working deck
     ctx.lineTo(-L + 1, -B); ctx.lineTo(L - 3.5, -B);
     ctx.closePath(); ctx.fill();
-    ctx.fillStyle = "#0b122088";                     // wheelhouse sits aft
+    ctx.fillStyle = withA(SKIN.ships.hullInk, "88");                     // wheelhouse sits aft
     ctx.fillRect(-L + 2, -B * .55, 3.6, B * 1.1);
     return;
   }
@@ -2137,8 +2229,8 @@ function drawShipShape(preset, color, cargo, sel, stats) {
     ctx.lineTo(3, 4.2); ctx.lineTo(-5, 4.2);
     ctx.lineTo(-6.5, 2.6); ctx.lineTo(-6.5, -2.6); ctx.lineTo(-5, -4.2);
     ctx.lineTo(3, -4.2); ctx.closePath(); ctx.fill();
-    ctx.strokeStyle = "#ffffffdd"; ctx.lineWidth = 1.6; ctx.stroke(); ctx.lineWidth = 1;
-    ctx.fillStyle = "#ffffffcc";                    // gun studs port + starboard
+    ctx.strokeStyle = withA(SKIN.ships.detail, "dd"); ctx.lineWidth = 1.6; ctx.stroke(); ctx.lineWidth = 1;
+    ctx.fillStyle = withA(SKIN.ships.detail, "cc");                    // gun studs port + starboard
     for (const sy of [-1, 1]) {
       ctx.fillRect(-3, sy * 4.4 - .9, 2, 1.8);
       ctx.fillRect(0.5, sy * 4.4 - .9, 2, 1.8);
@@ -2171,9 +2263,9 @@ function drawShipShape(preset, color, cargo, sel, stats) {
   ctx.lineTo(-L * 0.8, -B * 0.85); ctx.lineTo(L * 0.3, -B); ctx.closePath();
   ctx.fill();
   if (stats.armor >= 3) {                         // armored: doubled bright outline
-    ctx.strokeStyle = "#ffffffdd"; ctx.lineWidth = 1.6; ctx.stroke(); ctx.lineWidth = 1;
+    ctx.strokeStyle = withA(SKIN.ships.detail, "dd"); ctx.lineWidth = 1.6; ctx.stroke(); ctx.lineWidth = 1;
   } else {
-    ctx.strokeStyle = "#ffffff55"; ctx.stroke();
+    ctx.strokeStyle = withA(SKIN.ships.detail, "55"); ctx.stroke();
   }
   // gun MOUNTS: none at 1 gun (the base state); 2+ guns mount outboard barrels in
   // symmetric pairs from amidships aft, and an odd count adds a BOW CHASER.
@@ -2187,8 +2279,8 @@ function drawShipShape(preset, color, cargo, sel, stats) {
   if (guns >= 2) {
     const pairs = Math.min(5, Math.floor(guns / 2));
     const fore = L * 0.28, aft = -L * 0.68;       // the mountable hull span
-    ctx.fillStyle = "#0b1220dd";
-    ctx.strokeStyle = "#ffffffbb";
+    ctx.fillStyle = withA(SKIN.ships.hullInk, "dd");
+    ctx.strokeStyle = withA(SKIN.ships.detail, "bb");
     ctx.lineWidth = 0.7;
     for (let p2 = 0; p2 < pairs; p2++) {
       const gx = pairs === 1 ? (fore + aft) / 2
@@ -2205,7 +2297,7 @@ function drawShipShape(preset, color, cargo, sel, stats) {
     ctx.lineWidth = 1;
   }
   if (stats.lookout >= 2) {                       // lookout mast amidships
-    ctx.strokeStyle = "#ffffffbb";
+    ctx.strokeStyle = withA(SKIN.ships.detail, "bb");
     ctx.beginPath(); ctx.moveTo(-1, 0); ctx.lineTo(-1, -(B + 2 + stats.lookout));
     ctx.stroke();
   }
@@ -2231,7 +2323,7 @@ function draw(fr, prev, alpha) {
   ctx.translate(S.panX || 0, S.panY || 0);
   ctx.scale(S.zoom || 1, S.zoom || 1);
   const g = ctx.createLinearGradient(0, 0, 0, LH);
-  g.addColorStop(0, "#0a1b33"); g.addColorStop(1, "#081426");
+  g.addColorStop(0, SKIN.sea.top); g.addColorStop(1, SKIN.sea.bottom);
   ctx.fillStyle = g; ctx.fillRect(0, 0, LW, LH);
 
   // optional coordinate grid (off by default — territory outlines carry the
@@ -2253,8 +2345,8 @@ function draw(fr, prev, alpha) {
       S.gridKey = gkey;
     }
     ctx.lineWidth = 0.5;
-    ctx.strokeStyle = "#e6edf70b"; ctx.stroke(S.gridPaths.minor);
-    ctx.strokeStyle = "#e6edf71c"; ctx.stroke(S.gridPaths.major);
+    ctx.strokeStyle = SKIN.sea.gridMinor; ctx.stroke(S.gridPaths.minor);
+    ctx.strokeStyle = SKIN.sea.gridMajor; ctx.stroke(S.gridPaths.major);
     ctx.lineWidth = 1;
   }
 
@@ -2288,7 +2380,7 @@ function draw(fr, prev, alpha) {
         ctx.fillRect(x * cw, y * ch, cw + .5, ch + .5);
       }
     }
-    ctx.font = "10px sans-serif"; ctx.fillStyle = "#e6edf755";
+    ctx.font = "10px sans-serif"; ctx.fillStyle = SKIN.sea.label;
     S.regionPos = {};                    // territory seats are CLICKABLE
     for (const r of rp.meta.regions) {
       ctx.fillText(r.name, (r.x + .5) * cw - 24, (r.y + .5) * ch - 6);
@@ -2318,7 +2410,7 @@ function draw(fr, prev, alpha) {
         S.borderPath = path;
         S.borderKey = bkey;
       }
-      ctx.strokeStyle = "#9fb0c866";
+      ctx.strokeStyle = SKIN.ships.ghost;
       ctx.setLineDash([3, 4]);
       ctx.stroke(S.borderPath);
       ctx.setLineDash([]);
@@ -2332,7 +2424,7 @@ function draw(fr, prev, alpha) {
         if (!reg) continue;
         const cx3 = (reg.x + .5) * cw, cy3 = (reg.y + .5) * ch;
         const rad = Math.min(cw, ch) * 1.7;
-        ctx.beginPath(); ctx.fillStyle = "#0b1220cc";
+        ctx.beginPath(); ctx.fillStyle = withA(SKIN.ships.hullInk, "cc");
         ctx.arc(cx3, cy3, rad + 2, 0, 7); ctx.fill();
         ctx.beginPath(); ctx.fillStyle = COLORS[rr[2] % COLORS.length];
         ctx.moveTo(cx3, cy3);
@@ -2348,9 +2440,9 @@ function draw(fr, prev, alpha) {
   // Sand core + a pale reef fringe so land reads instantly against open sea.
   if (rp.meta.islands) {
     for (const [ix, iy] of rp.meta.islands) {
-      ctx.fillStyle = "#c9b47f22";
+      ctx.fillStyle = SKIN.land.halo;
       ctx.fillRect(ix * cw - 1, iy * ch - 1, cw + 2, ch + 2);
-      ctx.fillStyle = "#8a774e";
+      ctx.fillStyle = SKIN.land.fill;
       ctx.fillRect(ix * cw + .5, iy * ch + .5, cw - 1, ch - 1);
     }
   }
@@ -2367,18 +2459,18 @@ function draw(fr, prev, alpha) {
     const r = 3 + Math.min(9, rem / 6);
     S.nodePos[nd.id] = [x, y, r];
     if (S.sel && S.sel.k === "n" && S.sel.id === nd.id) {
-      ctx.strokeStyle = "#ffffffcc";
+      ctx.strokeStyle = withA(SKIN.ships.detail, "cc");
       ctx.beginPath(); ctx.arc(x, y, r + 5, 0, 7); ctx.stroke();
     }
     if (stale) ctx.globalAlpha = .45;
     ctx.beginPath();
-    if (nd.kind === "fish") { ctx.fillStyle = "rgba(45,212,191,.5)"; ctx.arc(x, y, r, 0, 7); }
-    else { ctx.fillStyle = "rgba(251,191,36,.55)";
+    if (nd.kind === "fish") { ctx.fillStyle = SKIN.nodes.fish; ctx.arc(x, y, r, 0, 7); }
+    else { ctx.fillStyle = SKIN.nodes.wreck;
            ctx.moveTo(x, y - r); ctx.lineTo(x + r, y); ctx.lineTo(x, y + r); ctx.lineTo(x - r, y); }
     ctx.fill();
     if (S.showNames) {
       ctx.font = "9px sans-serif";
-      ctx.fillStyle = "#e6edf7aa";
+      ctx.fillStyle = SKIN.nodes.label;
       ctx.fillText(nodeName(nd), x + r + 3, y + 3);
     }
     ctx.globalAlpha = 1;
@@ -2402,10 +2494,10 @@ function draw(fr, prev, alpha) {
     if (alive) {
       ctx.fillStyle = COLORS[f.id % COLORS.length];
       ctx.fillRect(x - 7, y - 7, 14, 14);
-      ctx.strokeStyle = "#fff3"; ctx.strokeRect(x - 7, y - 7, 14, 14);
+      ctx.strokeStyle = withA(SKIN.ships.detail, "33"); ctx.strokeRect(x - 7, y - 7, 14, 14);
       if (S.showNames) {
         ctx.font = "bold 10px sans-serif";
-        ctx.lineWidth = 3; ctx.strokeStyle = "#0b1220cc";
+        ctx.lineWidth = 3; ctx.strokeStyle = withA(SKIN.ships.hullInk, "cc");
         ctx.strokeText(`⚓ ${f.name}`, x + 11, y - 10);
         ctx.fillStyle = COLORS[f.id % COLORS.length];
         ctx.fillText(`⚓ ${f.name}`, x + 11, y - 10);
@@ -2431,7 +2523,7 @@ function draw(fr, prev, alpha) {
       ctx.font = "8px sans-serif";
       ctx.fillText("?", gx - 2, gy + 2.5);
       if (S.showNames) {
-        ctx.fillStyle = "#e6edf7";
+        ctx.fillStyle = SKIN.ui.ink;
         ctx.fillText(`${Math.round(g.age / 10)}s ago`, gx + 9, gy + 3);
       }
       ctx.globalAlpha = 1;
@@ -2601,15 +2693,16 @@ function draw(fr, prev, alpha) {
       const cls = classAt(s[0], fr.t);
       const sfl = shipFleet(s[0]);
       ctx.save(); ctx.translate(sm.x, sm.y); ctx.rotate(sm.a);
+      if (SKIN.ships.scale !== 1) ctx.scale(SKIN.ships.scale, SKIN.ships.scale);
       ctx.globalAlpha = .4 + .6 * (s[3] / 100);
       drawShipShape(cls, COLORS[sfl % COLORS.length], s[4], false, statsOf(cls, sfl));
       ctx.restore();
       ctx.globalAlpha = 1;
       if (s[4] > 0 && cls !== "trawler" && cls !== "trader") {
-        ctx.fillStyle = "#ffd76a"; ctx.fillRect(sm.x - 1.5, sm.y - 9, 3, 3);
+        ctx.fillStyle = SKIN.ships.laden; ctx.fillRect(sm.x - 1.5, sm.y - 9, 3, 3);
       }
       if (S.sel && S.sel.k === "s" && s[0] === S.sel.id) {
-        ctx.strokeStyle = "#ffffffcc";
+        ctx.strokeStyle = withA(SKIN.ships.detail, "cc");
         ctx.beginPath(); ctx.arc(sm.x, sm.y, 12, 0, 7); ctx.stroke();
       }
     });
@@ -2634,7 +2727,7 @@ function draw(fr, prev, alpha) {
     ctx.beginPath(); ctx.arc(0, 0, 5, 0, 7); ctx.fill();
     ctx.restore();
     if (S.sel && S.sel.k === "s" && (a[0] === S.sel.id || b[0] === S.sel.id)) {
-      ctx.strokeStyle = "#ffffffcc";
+      ctx.strokeStyle = withA(SKIN.ships.detail, "cc");
       ctx.beginPath(); ctx.arc(x, y, 13, 0, 7); ctx.stroke();
     }
   }
@@ -2657,7 +2750,7 @@ function draw(fr, prev, alpha) {
     ctx.font = "9px sans-serif";
     for (const g of sqGroups.values()) {
       const x = g.x / g.n + 9, y = g.y / g.n - 9;
-      ctx.lineWidth = 3; ctx.strokeStyle = "#0b1220bb";
+      ctx.lineWidth = 3; ctx.strokeStyle = withA(SKIN.ships.hullInk, "bb");
       ctx.strokeText(`⚑${g.sq}`, x, y);
       ctx.fillStyle = COLORS[g.fleet % COLORS.length] + "dd";
       ctx.fillText(`⚑${g.sq}`, x, y);
@@ -2680,7 +2773,7 @@ function draw(fr, prev, alpha) {
       // (destination-out is set below and MUST NOT leak into the next frame)
       fx.globalCompositeOperation = "source-over";
       fx.clearRect(0, 0, fog.width, fog.height);
-      fx.fillStyle = "rgba(3,8,18,.62)";
+      fx.fillStyle = SKIN.fx.fog;
       fx.fillRect(0, 0, fog.width, fog.height);
       fx.globalCompositeOperation = "destination-out";
       // Chebyshev range = a SQUARE of side 2r+1 — the fog holes are the actual
@@ -2723,7 +2816,7 @@ function draw(fr, prev, alpha) {
     } else if (he.k === "s" && S.screenPos[he.id]) {
       rings.push([S.screenPos[he.id][0], S.screenPos[he.id][1], 13]);
     }
-    ctx.strokeStyle = "#ffffffcc";
+    ctx.strokeStyle = withA(SKIN.ships.detail, "cc");
     ctx.lineWidth = 1.6;
     ctx.setLineDash([5, 4]);
     for (const [hx3, hy3, hr3] of rings) {
@@ -2734,7 +2827,7 @@ function draw(fr, prev, alpha) {
   }
   ctx.setTransform(RS, 0, 0, RS, 0, 0);
   if ((S.zoom || 1) > 1) {                       // zoom badge: you are navigating
-    ctx.fillStyle = "#e6edf7aa"; ctx.font = "11px sans-serif";
+    ctx.fillStyle = SKIN.nodes.label; ctx.font = "11px sans-serif";
     ctx.fillText(`🔍 ${S.zoom.toFixed(1)}× — double-click to reset`, 10, 16);
   }
 }
@@ -3084,6 +3177,14 @@ document.addEventListener("mouseout", e => {
   if (!e.target.closest || !e.target.closest(".entlink") || !S.hoverEnt) return;
   S.hoverEnt = null;
   if (S.rp && !S.playing) seek(S.fi);
+});
+document.addEventListener("change", e => {
+  if (e.target && e.target.id === "skinsel") {
+    const k = e.target.value;
+    applySkin(SKINS[k] || {});
+    try { localStorage.setItem("flotilla-skin", k); } catch (err) {}
+    renderSettingsPanel();
+  }
 });
 document.addEventListener("click", e => {
   const el = e.target.closest && e.target.closest(".entlink");
@@ -3577,6 +3678,23 @@ if (!location.protocol.startsWith("http")) {   // downloaded bundle: no home to 
   $("homelink").removeAttribute("href");
 }
 const qs = new URLSearchParams(location.search);
+// skin resolution (see the SKIN block up top for the guarantees)
+(function initSkin() {
+  let spec = null;
+  try {
+    if (window.FLOTILLA_SKIN) spec = window.FLOTILLA_SKIN;
+    else if (qs.get("skin")) spec = SKINS[qs.get("skin")] || null;
+    else {
+      const saved = localStorage.getItem("flotilla-skin");
+      if (saved && SKINS[saved] && saved !== "flotilla") spec = SKINS[saved];
+    }
+  } catch (e) { spec = null; }
+  if (spec) applySkin(spec);
+  const su = qs.get("skinurl");
+  if (su && sameOriginPath(su)) {
+    fetch(su).then(r => r.json()).then(applySkin).catch(() => {});
+  }
+})();
 try { S.quality = localStorage.getItem("flotilla-quality") || "auto"; }
 catch (e) { S.quality = "auto"; }
 // ---- LIVE MODE: chase a running match's frame stream ----
