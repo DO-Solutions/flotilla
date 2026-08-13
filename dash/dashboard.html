@@ -2149,7 +2149,11 @@ function estimateCost() {
   const windows = Math.ceil(maxTicks / window);
   const perGame = windows + (warmup ? 1 : 0) + (memos ? 1 : 0);
   const prices = MODELS.prices || {};
-  // per-admiral cost of ONE game, per player
+  // per-admiral cost of ONE game, per player. Tokens/call come from the
+  // server's measured calibration (per-model p75s over the library's real
+  // usage) — the old global constants under-estimated 63% of games
+  const cal = MODELS.calibration || {};
+  const cd = cal.default || {};
   const costs = [];
   let unpriced = 0;
   for (const p of PLAYERS) {
@@ -2158,8 +2162,11 @@ function estimateCost() {
     if (!pr) { unpriced++; costs.push(0); continue; }
     const think = p.think === true ? true
                 : p.think === false ? false : thinkDefault;
-    const tout = think ? EST_TOUT_THINK : EST_TOUT_FLAT;
-    costs.push(perGame * (EST_TIN * pr[0] + tout * pr[1]) / 1e6);
+    const cm = (cal.models || {})[p.model] || {};
+    const tin = cm.tin || cd.tin || EST_TIN;
+    const tout = think ? (cm.tout_think || cd.tout_think || EST_TOUT_THINK)
+                       : (cm.tout_flat || cd.tout_flat || EST_TOUT_FLAT);
+    costs.push(perGame * (tin * pr[0] + tout * pr[1]) / 1e6);
   }
   if (!costs.length) {
     box.textContent = "estimated run cost: free (scripted bots)";
@@ -2180,12 +2187,13 @@ function estimateCost() {
   let txt = `estimated run cost: $${cost.toFixed(2)}`;
   if (unpriced) txt += ` (+${unpriced} model${unpriced > 1 ? "s" : ""} unpriced)`;
   box.textContent = txt;
-  box.title = "Deliberately high. Calls = ceil(ticks ÷ window) + warmup + "
-    + "debrief, per admiral per game, × the games in this run (a tournament "
-    + "counts its whole bracket); each call assumed ~" + EST_TIN + " in / ~"
-    + EST_TOUT_FLAT + "–" + EST_TOUT_THINK + " out tokens at the model's "
-    + "price, rounded up. Real cost is usually lower — a replay's Admirals "
-    + "panel shows the actual figure.";
+  box.title = "High-side. Calls = ceil(ticks ÷ window) + warmup + debrief, "
+    + "per admiral per game, × the games in this run (a tournament counts "
+    + "its whole bracket). Tokens per call are CALIBRATED per model from the "
+    + "library's real usage (75th percentile"
+    + (cal.generated ? ", measured " + cal.generated : "")
+    + "), at the model's price, rounded up. A replay's Admirals panel shows "
+    + "the actual figure.";
   applyCostCeiling();
 }
 let COST_EST = 0, COST_MAX = 0;

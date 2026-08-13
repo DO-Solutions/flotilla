@@ -1,0 +1,37 @@
+{
+ "generated": "2026-08-13",
+ "admiral_games": 400,
+ "percentile": 75,
+ "default": {
+  "tin": 12506,
+  "tout_think": 8470,
+  "tout_flat": 800
+ },
+ "models": {
+  "anthropic-claude-opus-5": {
+   "n": 80,
+   "tin": 18488,
+   "tout_think": 6471
+  },
+  "glm-5.2": {
+   "n": 86,
+   "tin": 11350,
+   "tout_think": 18063
+  },
+  "kimi-k3": {
+   "n": 104,
+   "tin": 10658,
+   "tout_think": 7123
+  },
+  "openai-gpt-5.6-sol": {
+   "n": 80,
+   "tin": 11097,
+   "tout_think": 1569
+  },
+  "qwen3.5-397b-a17b": {
+   "n": 50,
+   "tin": 8724,
+   "tout_think": 1352
+  }
+ }
+}

@@ -882,6 +882,50 @@ ok(st == 404, "an unknown source series -> 404")
 shutil.rmtree(ldir, ignore_errors=True)
 shutil.rmtree(tdir, ignore_errors=True)
 
+# --- cost calibration (#123): the estimator reads measured per-model
+# tokens/call, falls back to calibrated defaults, then the old constants ---
+_keep_cal = server._CALIBRATION
+server._CALIBRATION = {"default": {"tin": 9000, "tout_think": 5000,
+                                   "tout_flat": 700},
+                       "models": {"kimi-k3": {"tin": 10658,
+                                              "tout_think": 7123, "n": 104}}}
+try:
+    ok(server._cal_tokens("kimi-k3", True) == (10658, 7123),
+       "a measured model uses its own p75s")
+    ok(server._cal_tokens("kimi-k3", False) == (10658, 700),
+       "no flat samples for the model -> calibrated default tout_flat")
+    ok(server._cal_tokens("never-seen-model", True) == (9000, 5000),
+       "an unmeasured model uses the calibrated defaults")
+    server._CALIBRATION = {"models": {}, "default": {}}
+    ok(server._cal_tokens("kimi-k3", True) == (4000, 4000),
+       "no calibration file at all -> the old hardcoded fallbacks")
+    # the ceiling estimate scales with the calibration (same config, bigger
+    # measured tokens -> bigger estimate)
+    cfg_est = {"mode": "series", "seed": 1,
+               "bots": ["llm:kimi-k3:K", "corsair"],
+               "scenario": {"max_ticks": 6000}, "series": {"games": 3}}
+    lo = server._estimate_cost(cfg_est)
+    server._CALIBRATION = {"models": {"kimi-k3": {"tin": 12000,
+                                                  "tout_think": 8000}},
+                           "default": {}}
+    hi = server._estimate_cost(cfg_est)
+    ok(0 < lo < hi, f"estimate follows the calibration (${lo} -> ${hi})")
+finally:
+    server._CALIBRATION = _keep_cal
+st, r = req("/api/models")
+ok(st == 200 and "calibration" in r
+   and isinstance(r["calibration"].get("models"), dict),
+   "/api/models ships the calibration to the dash")
+import calibrate_costs                       # noqa: E402
+_cal = calibrate_costs.calibration(
+    [("m1", True, 9000, 5000), ("m1", True, 11000, 7000),
+     ("m1", False, 10000, 600), ("m2", True, 3000, 1000)])
+ok(_cal["models"]["m1"]["tin"] == 10000     # p75 floor-index of 3 samples
+   and _cal["models"]["m1"]["tout_flat"] == 600
+   and _cal["models"]["m2"]["tout_think"] == 1000
+   and _cal["default"]["tin"] >= 9000,
+   "calibrate_costs builds per-model p75s + all-model defaults")
+
 # --- public-mirror redaction: designer feedback + final memos never reach
 # the bucket, everything else passes through byte-identical ---
 _sj = json.dumps({"games": [{"game": 1}], "sim_feedback": {"O": {"feedback":

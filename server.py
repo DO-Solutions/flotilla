@@ -186,9 +186,31 @@ def _cfg_models(cfg):
     return out
 
 
-# high-side per-call token assumptions — must match the dash estimator so the
-# UI preview and the server-side ceiling agree. Deliberately generous.
+# high-side per-call token assumptions — the LAST-RESORT fallbacks when no
+# calibration file ships. The real numbers come from assets/cost-calibration
+# .json (measured per-model p75s over the library's replays — regenerate with
+# scripts/calibrate_costs.py): the old global 4000/800-4000 guesses
+# under-estimated 63% of games (GLM thinks in 15k-token bursts; Opus reads
+# 18k-token summaries) while over-estimating others 2x.
 _EST_TIN, _EST_TOUT_THINK, _EST_TOUT_FLAT = 4000, 4000, 800
+try:
+    with open(os.path.join(HERE, "assets", "cost-calibration.json")) as _fh:
+        _CALIBRATION = json.load(_fh)
+except (OSError, ValueError):
+    _CALIBRATION = {"models": {}, "default": {}}
+
+
+def _cal_tokens(model, think):
+    """(tin, tout) per call for a model: its measured p75s, the all-model
+    calibrated defaults for a model the library has never seen, then the
+    hardcoded fallbacks."""
+    d = _CALIBRATION.get("default") or {}
+    m = (_CALIBRATION.get("models") or {}).get(model) or {}
+    tin = m.get("tin") or d.get("tin") or _EST_TIN
+    key = "tout_think" if think else "tout_flat"
+    tout = m.get(key) or d.get(key) or \
+        (_EST_TOUT_THINK if think else _EST_TOUT_FLAT)
+    return tin, tout
 
 
 def _cfg_players(cfg):
@@ -231,8 +253,8 @@ def _estimate_cost(cfg):
         if not pr:
             continue
         think = think_default if think_ovr is None else bool(think_ovr)
-        tout = _EST_TOUT_THINK if think else _EST_TOUT_FLAT
-        percosts.append(per_game * (_EST_TIN * pr[0] + tout * pr[1]) / 1e6)
+        tin, tout = _cal_tokens(model, think)
+        percosts.append(per_game * (tin * pr[0] + tout * pr[1]) / 1e6)
     if not percosts:
         return 0.0
     if mode == "tournament":
@@ -2355,6 +2377,7 @@ class H(BaseHTTPRequestHandler):
                                     "scripted": SCRIPTED_BOTS,
                                     "prices": {k: list(v) for k, v
                                                in _llm.PRICES.items()},
+                                    "calibration": _CALIBRATION,
                                     "max_series_cost": _keystore().get(
                                         "limits", {}).get("max_series_cost", 0)})
         if path == "/api/prompts":
