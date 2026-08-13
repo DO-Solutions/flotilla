@@ -526,6 +526,13 @@ def run_tournament(cfg, adm, scenario, outdir, prov=None, resume_ck=None):
     seed0 = int(cfg.get("seed", 42))
     midx = 0
 
+    def _matchup_seed(mi):
+        # map_set (default on): every matchup starts from the SAME base seed,
+        # so vary_seeds walks identical maps — game N is the same water in
+        # every lane and no pairing draws luckier islands than its rivals.
+        # Off: each bracket slot derives its own seeds (the old behavior).
+        return seed0 if t["map_set"] else seed0 + mi * 1000
+
     # parallel matchups (tournament.parallel > 1): up to N matchups run in
     # worker threads. Each parallel matchup gets FRESH admiral instances (the
     # shared-bot mind would race), so persistent memos force sequential.
@@ -611,7 +618,7 @@ def run_tournament(cfg, adm, scenario, outdir, prov=None, resume_ck=None):
         # run_series now debriefs after EVERY game incl. the last, so persistent
         # memo carry-over needs no extra pass — notes simply survive on the bot
         try:
-            rows = run_series(named, seed0 + midx * 1000, scenario, ser, mdir,
+            rows = run_series(named, _matchup_seed(midx), scenario, ser, mdir,
                               prov=dict(prov or {},
                                         matchup=os.path.basename(mdir)),
                               live=not fresh,
@@ -653,7 +660,7 @@ def run_tournament(cfg, adm, scenario, outdir, prov=None, resume_ck=None):
                    "resuming_after_game": len(lane.get("rows") or [])})
             named = [(n, make_bot(spec_of[n], adm)) for n in lane["group"]]
             ser = dict(ser_defaults)
-            seed_l, scen_l = seed0 + lane["midx"] * 1000, scenario
+            seed_l, scen_l = _matchup_seed(lane["midx"]), scenario
             prov_l = dict(prov or {}, matchup=lane["dir"])
             resume = {"rows": list(lane.get("rows") or []),
                       "game": len(lane.get("rows") or []) + 1, "engine": None}

@@ -125,6 +125,7 @@ SCHEMA = {
                             doc="Bracket structure. round_robin: every combination plays. random_pairs: seeded random pairings per round. single_elim: knockout bracket (2-player matchups, participants must be a power of 2)."),
         "players_per_match": dict(d=2, t="enum", opts=[2, 4, 8], show_if={"format": {"not": "single_elim"}}, doc="Fleets per matchup (single_elim is always 2)."),
         "games_per_match": dict(d=1, t="int", lo=1, hi=9, doc="Games per matchup; odd numbers avoid ties (winner by wins, then total score)."),
+        "map_set": dict(d=True, t="bool", doc="On (default): every matchup plays the SAME map set — game N uses the same seed (map, islands, shoals, territory seats) in every matchup, so no pairing draws luckier water than its rivals. Off: each matchup derives its own seeds from its bracket slot (the pre-2026-08-13 behavior)."),
         "rounds":      dict(d=1,    t="int", lo=1,  hi=10,  show_if={"format": "random_pairs"}, doc="random_pairs only: how many rounds of fresh pairings."),
         "memo_policy": dict(d="per_series", t="enum", opts=["none", "per_series", "persistent"],
                             doc="none: fresh mind every game. per_series: memos carry within a matchup, reset between. persistent: an admiral keeps its notes across the WHOLE tournament — win a series, carry the lessons into the next bracket."),

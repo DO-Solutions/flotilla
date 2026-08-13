@@ -139,6 +139,7 @@ default_designs) keep their old names as accepted aliases.
 | `format` | `round_robin` | round_robin / random_pairs / single_elim | Bracket structure. round_robin: every combination plays. random_pairs: seeded random pairings per round. single_elim: knockout bracket (2-player matchups, participants must be a power of 2). |
 | `players_per_match` | `2` | 2 / 4 / 8 | Fleets per matchup (single_elim is always 2). |
 | `games_per_match` | `1` | 1–9 | Games per matchup; odd numbers avoid ties (winner by wins, then total score). |
+| `map_set` | `True` | text | On (default): every matchup plays the SAME map set — game N uses the same seed (map, islands, shoals, territory seats) in every matchup, so no pairing draws luckier water than its rivals. Off: each matchup derives its own seeds from its bracket slot (the pre-2026-08-13 behavior). |
 | `rounds` | `1` | 1–10 | random_pairs only: how many rounds of fresh pairings. |
 | `memo_policy` | `per_series` | none / per_series / persistent | none: fresh mind every game. per_series: memos carry within a matchup, reset between. persistent: an admiral keeps its notes across the WHOLE tournament — win a series, carry the lessons into the next bracket. |
 | `full_series` | `False` | text | Off (default): a matchup STOPS once it is mathematically decided — no remaining game could change the winner (can't be won or tied). On: play every game of the matchup out regardless, for a complete sample. |

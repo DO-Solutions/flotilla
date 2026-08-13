@@ -721,6 +721,11 @@
    "hi": 9,
    "doc": "Games per matchup; odd numbers avoid ties (winner by wins, then total score)."
   },
+  "map_set": {
+   "d": true,
+   "t": "bool",
+   "doc": "On (default): every matchup plays the SAME map set \u2014 game N uses the same seed (map, islands, shoals, territory seats) in every matchup, so no pairing draws luckier water than its rivals. Off: each matchup derives its own seeds from its bracket slot (the pre-2026-08-13 behavior)."
+  },
   "rounds": {
    "d": 1,
    "t": "int",

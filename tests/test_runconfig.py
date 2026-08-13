@@ -125,6 +125,52 @@ with tempfile.TemporaryDirectory() as td:
     ok(len(dirs) == 3 and all(os.path.isfile(os.path.join(td, d, "g1.json"))
                               for d in dirs),
        "every matchup dir holds its replay")
+
+# --- tournament map set (#125): with map_set on (the default) game N is the
+# SAME map in every matchup; off restores the per-slot seed derivation ---
+
+
+def _matchup_seeds(td):
+    """{matchup dir: [g1 seed, g2 seed, ...]} from the replays on disk."""
+    out = {}
+    for d in sorted(os.listdir(td)):
+        if not d.startswith("m"):
+            continue
+        seeds = []
+        for g in sorted(os.listdir(os.path.join(td, d))):
+            if g.startswith("g") and g.endswith(".json"):
+                rp = json.load(open(os.path.join(td, d, g)))
+                seeds.append(rp["meta"]["seed"])
+        out[d] = seeds
+    return out
+
+
+MAPSET_CFG = {"mode": "tournament", "seed": 77,
+              "participants": ["merchant", "corsair", "admiralty"],
+              "scenario": {"max_ticks": 300, "warmup": False},
+              "series": {"vary_seeds": True},   # a SET of maps, not one map
+              "tournament": {"format": "round_robin", "players_per_match": 2,
+                             "games_per_match": 2, "memo_policy": "none",
+                             "full_series": True}}
+with tempfile.TemporaryDirectory() as td:
+    rc.run_tournament(MAPSET_CFG, rc.section_defaults("admirals"),
+                      rc.merged_scenario(MAPSET_CFG), td)
+    seeds = _matchup_seeds(td)
+    ok(len(seeds) == 3 and len(set(tuple(v) for v in seeds.values())) == 1,
+       f"map_set on: every matchup plays the identical seed walk ({seeds})")
+    first = next(iter(seeds.values()))
+    ok(first == [77, 78],
+       f"...vary_seeds walks the set from the tournament seed ({first})")
+with tempfile.TemporaryDirectory() as td:
+    cfg = json.loads(json.dumps(MAPSET_CFG))
+    cfg["tournament"]["map_set"] = False
+    rc.run_tournament(cfg, rc.section_defaults("admirals"),
+                      rc.merged_scenario(cfg), td)
+    seeds = _matchup_seeds(td)
+    ok([v[0] for v in seeds.values()] == [1077, 2077, 3077],
+       f"map_set off: each bracket slot derives its own seeds ({seeds})")
+ok("map_set" in rc.config_schema.SCHEMA["tournament"],
+   "map_set rides the schema (dash + agents see it)")
 # persistent memos force sequential (shared mind can't be parallelized)
 with tempfile.TemporaryDirectory() as td:
     cfg = {"mode": "tournament", "seed": 11,
