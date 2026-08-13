@@ -303,8 +303,8 @@ ok(st == 200 and r["name"] == "etcpasswd",
 st, r = req("/skins/nope.json")
 ok(st == 404, "missing skin -> 404")
 st, r = req("/api/skins", {"name": "big",
-                           "skin": {"ui": {"font": "x" * 40_000}}})
-ok(st == 400 and "large" in r["error"], "oversize skin refused (32 KB cap)")
+                           "skin": {"ui": {"font": "x" * 700_000}}})
+ok(st == 400 and "large" in r["error"], "oversize skin refused (600 KB cap)")
 st, r = req("/api/skins", {"name": "arr", "skin": ["not", "an", "object"]})
 ok(st == 400, "non-object skin refused")
 for nm in ("oceanic", "typo", "etcpasswd"):

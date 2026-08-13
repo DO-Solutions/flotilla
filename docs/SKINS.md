@@ -35,16 +35,51 @@ but only hex gets those alphas).
 | `fleet` | `[8 colors]` | the fleet palette — ships, trails, charts, names, everywhere a fleet is colored |
 | `sea` | `top` `bottom` | the water gradient |
 | `sea` | `gridMinor` `gridMajor` `label` | coordinate grid + on-map name labels |
+| `sea` | `texture` | a `data:image` URI tiled over the gradient (put the wash's alpha in the tile itself) |
 | `land` | `fill` `halo` | islands |
+| `land` | `texture` | a `data:image` URI tiling the island fill (the reef halo keeps its color) |
 | `nodes` | `fish` `wreck` `label` | resource shoals, wrecks, their labels |
 | `ships` | `hullInk` | dark interior details (wheelhouses, outlines against bright water) |
 | `ships` | `detail` | bright details (gun studs, armor rings, selection) |
 | `ships` | `laden` | the cargo-aboard marker |
 | `ships` | `ghost` | stale contact silhouettes |
 | `ships` | `scale` | silhouette size multiplier (0.25–4; hit-testing is position-based, so purely visual) |
+| `ships` | `shapes` | custom silhouettes per role — see "Shapes & textures" below |
 | `fx` | `fog` | the POV fog wash |
 | `fx` | `tail` | wake/trail length in frames (0–60) |
 | `minimap` | `bg` `frame` `cursor` | the overview map |
+
+## Shapes & textures
+
+**Ship shapes.** `ships.shapes` maps a role to a polygon that replaces its
+stock silhouette:
+
+```json
+{ "ships": { "shapes": {
+    "trawler": [[9, 0], [-7, 5], [-4, 0], [-7, -5]],
+    "frigate": [[10, 0], [2, 4], [-7, 3], [-7, -3], [2, -4]]
+} } }
+```
+
+- Author with the **front at +x** — the renderer rotates the shape to the
+  ship's heading, so a sideways-authored shape visibly sails sideways.
+- Units are the built-ins' canvas pixels: a stock hull spans roughly ±8–10.
+  3–64 points per shape, coordinates clamped to ±40; `ships.scale` still
+  multiplies on top.
+- Valid role keys: `trawler`, `frigate`, `raider`, `scout`, `cutter`, plus
+  `custom` for any operator-designed class (or that class's own name). A
+  malformed entry is dropped alone; the role keeps its stock look.
+- A custom shape is a plain color-fill silhouette — the stock roles' detail
+  overlays (net booms, gun studs, masts) are drawn only on the shapes they
+  were designed for. Laden/selection markers still apply.
+
+**Textures.** `sea.texture` and `land.texture` take a **`data:image` URI**
+(png/jpeg/webp/gif, base64) that tiles as a repeating pattern — the sea one
+over the gradient, the land one as the island fill. Self-contained by rule:
+a remote URL is ignored, same as `?skinurl=` (nothing in a skin ever
+fetches off-origin). Keep tiles small (a 32–64 px tile reads well; ≤200 KB
+per texture, 600 KB per skin). For the sea, bake the overlay's transparency
+into the tile — it's drawn on top of the gradient.
 
 ## The dashboard importer
 

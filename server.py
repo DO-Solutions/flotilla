@@ -3296,10 +3296,12 @@ class H(BaseHTTPRequestHandler):
                     return self._send(400,
                                       {"error": "skin must be a JSON object "
                                        "(see docs/SKINS.md for the tokens)"})
+                # generous enough for a couple of base64 texture tiles
+                # (land/sea data: URIs), still a hard bound on disk use
                 blob = json.dumps(skin, indent=1, sort_keys=True)
-                if len(blob) > 32_000:
+                if len(blob) > 600_000:
                     return self._send(400, {"error": "skin too large "
-                                            "(32 KB cap)"})
+                                            "(600 KB cap)"})
                 # unknown sections save fine (applySkin ignores them) but a
                 # typo'd section silently painting nothing is the #1 authoring
                 # trap — surface it

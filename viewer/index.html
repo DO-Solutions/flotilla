@@ -475,12 +475,18 @@ const SKIN_DEFAULT = {
           "#f472b6", "#3fe06a", "#6140e6", "#ca40e6"],
   sea: { top: "#0a1b33", bottom: "#081426",
          gridMinor: "#e6edf70b", gridMajor: "#e6edf71c",
-         label: "#e6edf755" },
-  land: { fill: "#8a774e", halo: "#c9b47f22" },
+         label: "#e6edf755",
+         texture: "" },                 // data:image URI, tiled OVER the gradient
+  land: { fill: "#8a774e", halo: "#c9b47f22",
+          texture: "" },                // data:image URI, tiles the island fill
   nodes: { fish: "rgba(45,212,191,.5)", wreck: "rgba(251,191,36,.55)",
            label: "#e6edf7aa" },
   ships: { hullInk: "#0b1220", detail: "#ffffff", laden: "#ffd76a",
-           ghost: "#9fb0c866", scale: 1 },
+           ghost: "#9fb0c866", scale: 1,
+           // shapes: {role: [[x,y],...]} replaces that role's silhouette with
+           // a custom polygon (front at +x, units = the built-ins' canvas px;
+           // key "custom" covers operator-designed classes). null = stock.
+           shapes: null },
   fx: { fog: "rgba(3,8,18,.62)", tail: 14 },
   minimap: { bg: "#0a1b33", frame: "#24304d", cursor: "#e6edf7" },
 };
@@ -532,6 +538,57 @@ function withA(color, hexAlpha) {
   // baked alpha rides only on 6-digit hex; any other color form is used as-is
   return /^#[0-9a-fA-F]{6}$/.test(color) ? color + hexAlpha : color;
 }
+// roles with their own stock silhouette; a skin's "custom" shape only covers
+// operator-designed classes, never these (target them by their own name)
+const SHAPE_BUILTIN = new Set(["trawler", "trader", "frigate", "raider",
+                               "scout", "cutter"]);
+function cleanShapes(v) {
+  // {role: [[x,y],...]} → only well-formed polygons survive: 3-64 points,
+  // every coordinate a number clamped to ±40 (the built-ins span ~±10).
+  // A bad role entry is dropped alone; nothing valid left → null (stock).
+  if (typeof v !== "object" || !v || Array.isArray(v)) return null;
+  const out = {};
+  for (const [k, pts] of Object.entries(v)) {
+    if (!/^[A-Za-z0-9_-]{1,24}$/.test(k) || !Array.isArray(pts)) continue;
+    const cl = [];
+    for (const p of pts.slice(0, 64)) {
+      if (!Array.isArray(p) || !isFinite(+p[0]) || !isFinite(+p[1])) {
+        cl.length = 0; break;
+      }
+      cl.push([Math.max(-40, Math.min(40, +p[0])),
+               Math.max(-40, Math.min(40, +p[1]))]);
+    }
+    if (cl.length >= 3) out[k] = cl;
+  }
+  return Object.keys(out).length ? out : null;
+}
+function cleanTexture(v) {
+  // textures are SELF-CONTAINED images only: a data:image URI, capped. A
+  // remote URL never loads (same rule as ?skinurl= — no external fetches).
+  return (typeof v === "string" && v.length <= 200000 &&
+          /^data:image\/(png|jpe?g|webp|gif);base64,[A-Za-z0-9+/=]+$/.test(v))
+    ? v : "";
+}
+// loaded texture patterns, rebuilt whenever a skin lands. Pattern creation
+// is async (Image decode) — the sea/land fills fall back to their colors
+// until onload repaints.
+const SKIN_PATTERNS = { land: null, sea: null };
+function loadSkinPatterns() {
+  for (const sec of ["land", "sea"]) {
+    SKIN_PATTERNS[sec] = null;
+    const src = SKIN[sec].texture;
+    if (!src || typeof ctx === "undefined" || !ctx) continue;
+    const img = new Image();
+    img.onload = () => {
+      try { SKIN_PATTERNS[sec] = ctx.createPattern(img, "repeat"); }
+      catch (e) { SKIN_PATTERNS[sec] = null; }
+      try {                              // repaint a paused view
+        if (typeof S !== "undefined" && S.rp && !S.playing) seek(S.fi);
+      } catch (e) { }
+    };
+    img.src = src;
+  }
+}
 function applySkin(spec) {
   const base = JSON.parse(JSON.stringify(SKIN_DEFAULT));
   try {
@@ -546,6 +603,8 @@ function applySkin(spec) {
       if (typeof vals !== "object" || !base[sec]) continue;
       for (const [k, v] of Object.entries(vals)) {
         if (!(k in base[sec])) continue;
+        if (k === "shapes") { base.ships.shapes = cleanShapes(v); continue; }
+        if (k === "texture") { base[sec][k] = cleanTexture(v); continue; }
         base[sec][k] = typeof base[sec][k] === "number" ? +v || base[sec][k]
                                                         : String(v);
       }
@@ -554,6 +613,7 @@ function applySkin(spec) {
     base.fx.tail = Math.min(60, Math.max(0, Math.round(base.fx.tail)));
   } catch (e) { /* a malformed skin falls back to the default */ }
   SKIN = base;
+  loadSkinPatterns();
   TAIL = SKIN.fx.tail;
   COLORS.length = 0;
   for (const c of SKIN.fleet) COLORS.push(c);
@@ -2218,6 +2278,21 @@ function drawShipShape(preset, color, cargo, sel, stats) {
   // tangent in port) — a shape that violates this will visibly sail sideways.
   // Silhouettes (P0.2): traders round + swelling with cargo (prow wedge marks the
   // front), frigates angular with bright ring + gun studs, raiders darts, scouts slivers.
+  // A skin can replace any role's silhouette wholesale (ships.shapes): the
+  // custom polygon is drawn as a plain color fill — role detail overlays
+  // (booms, studs, masts) stay with the stock shapes they were drawn for.
+  if (SKIN.ships.shapes) {
+    const shp = SKIN.ships.shapes[preset === "trader" ? "trawler" : preset]
+      || (!SHAPE_BUILTIN.has(preset) ? SKIN.ships.shapes.custom : null);
+    if (shp) {
+      ctx.fillStyle = color;
+      ctx.beginPath(); ctx.moveTo(shp[0][0], shp[0][1]);
+      for (let i2 = 1; i2 < shp.length; i2++)
+        ctx.lineTo(shp[i2][0], shp[i2][1]);
+      ctx.closePath(); ctx.fill();
+      return;
+    }
+  }
   if (preset === "trawler" || preset === "trader") {
     // trawler = a BLOCKY workboat seen from above: parallel sides, short
     // raked bow, flat transom — same hull language as the derived custom
@@ -2350,6 +2425,10 @@ function draw(fr, prev, alpha) {
   const g = ctx.createLinearGradient(0, 0, 0, LH);
   g.addColorStop(0, SKIN.sea.top); g.addColorStop(1, SKIN.sea.bottom);
   ctx.fillStyle = g; ctx.fillRect(0, 0, LW, LH);
+  if (SKIN_PATTERNS.sea) {              // skin water texture, over the gradient
+    ctx.fillStyle = SKIN_PATTERNS.sea;  // (the tile carries its own alpha)
+    ctx.fillRect(0, 0, LW, LH);
+  }
 
   // optional coordinate grid (off by default — territory outlines carry the
   // structure): faint cell lines, slightly brighter every 8th. Static
@@ -2464,10 +2543,11 @@ function draw(fr, prev, alpha) {
   // impassable islands: charted geography — always visible, under everything.
   // Sand core + a pale reef fringe so land reads instantly against open sea.
   if (rp.meta.islands) {
+    const landFill = SKIN_PATTERNS.land || SKIN.land.fill;
     for (const [ix, iy] of rp.meta.islands) {
       ctx.fillStyle = SKIN.land.halo;
       ctx.fillRect(ix * cw - 1, iy * ch - 1, cw + 2, ch + 2);
-      ctx.fillStyle = SKIN.land.fill;
+      ctx.fillStyle = landFill;
       ctx.fillRect(ix * cw + .5, iy * ch + .5, cw - 1, ch - 1);
     }
   }
@@ -3700,7 +3780,8 @@ document.body.addEventListener("drop", e => {
 
 window.__flotilla = { seek, seekFrac, state: () => S, load, loadBundle, setPlay,
                       select, liveInit, liveAppend,
-                      importedSkins: () => IMPORTED_SKINS };
+                      importedSkins: () => IMPORTED_SKINS,
+                      skin: () => SKIN };
 if (!location.protocol.startsWith("http")) {   // downloaded bundle: no home to go to
   $("homelink").removeAttribute("href");
 }
