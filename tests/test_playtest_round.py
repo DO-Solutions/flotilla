@@ -133,17 +133,22 @@ fa.contacts[enemy.id]["t"] = et.t - WINDOW * 10        # stale sighting
 ok(et.summary_for(fa)["you"]["harbor_threat"]["contacts"] == 0,
    "stale sightings age out of the threat picture")
 
-# ---- 5. clock jitter: reproducible, off by default ----
+# ---- 5. clock jitter: reproducible, ON by default (anti-turtle flip,
+# 2026-08-13) ----
 j1 = Engine([("a", Idle()), ("b", Idle())], seed=13, scenario={"clock_jitter": 900})
 j2 = Engine([("a", Idle()), ("b", Idle())], seed=13, scenario={"clock_jitter": 900})
 j3 = Engine([("a", Idle()), ("b", Idle())], seed=14, scenario={"clock_jitter": 900})
-base = Engine([("a", Idle()), ("b", Idle())], seed=13)
+base = Engine([("a", Idle()), ("b", Idle())], seed=13,
+              scenario={"clock_jitter": 0})
 ok(j1.max_ticks == j2.max_ticks, "same seed -> same jittered clock")
 ok(j1.max_ticks >= base.max_ticks, "jitter only ever EXTENDS")
 ok(base.max_ticks == Engine([("a", Idle()), ("b", Idle())], seed=13,
                             scenario={"clock_jitter": 0}).max_ticks,
    "jitter=0 leaves the clock untouched (no rng draw)")
 _ = j3  # a different seed may or may not differ; determinism is the claim
+dflt = Engine([("a", Idle()), ("b", Idle())], seed=13)
+ok(dflt.cfg["clock_jitter"] == 600 and dflt.cfg["score_visibility"] == "banded",
+   "anti-turtle defaults: clock_jitter 600 + banded rival scores")
 
 # ---- 6. score visibility ----
 ev = Engine([("a", Idle()), ("b", Idle())], seed=15,

@@ -2142,7 +2142,9 @@ function estimateCost() {
   const window = effKnob("pacing", "window") || 100;
   const maxTicks = win === "domination"
     ? (effKnob("scenario", "domination_cap") || 18000)
-    : (effKnob("pacing", "max_ticks") || 6000);
+    : (effKnob("pacing", "max_ticks") || 6000)
+      + (parseInt(effKnob("scenario", "clock_jitter")) || 0);   // high side:
+      // assume the anti-turtle extension draws its full length
   const warmup = effKnob("admirals", "warmup") !== false;
   const thinkDefault = effKnob("admirals", "think") !== false;
   const memos = mode !== "match" && effKnob("series", "memos") !== false;

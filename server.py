@@ -237,7 +237,8 @@ def _estimate_cost(cfg):
     win = scen.get("win")
     window = scen.get("window") or 100
     max_ticks = (scen.get("domination_cap") or 18000) if win == "domination" \
-        else (scen.get("max_ticks") or 6000)
+        else (scen.get("max_ticks") or 6000) + int(scen.get("clock_jitter")
+                                                   or 0)
     mode = cfg.get("mode", "match")
     warmup = adm.get("warmup", True)
     think_default = adm.get("think", True)

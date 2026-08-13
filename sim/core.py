@@ -222,12 +222,17 @@ class Engine(SimBase):
         self.max_ticks = max_ticks if max_ticks is not None else c["max_ticks"]
         if c["win"] == "domination" and max_ticks is None:
             self.max_ticks = c["domination_cap"]   # no clock — cap is a safety net
-        if c.get("clock_jitter", 0) > 0 and c["win"] != "domination":
+        if max_ticks is None and c.get("clock_jitter", 0) > 0 \
+                and c["win"] != "domination":
             # anti-turtle (playtest feedback): a leader who can compute the
             # exact bell freezes for the final stretch; an unknowable extension
             # keeps "sail it out" unsafe. Seeded draw — fully reproducible —
             # and taken ONLY when the knob is on, so jitter=0 games are
-            # byte-identical to before the knob existed.
+            # byte-identical to before the knob existed. The max_ticks is None
+            # guard matters: an EXPLICIT max_ticks is a pinned clock — thaw()
+            # passes the already-jittered value back in, and adding a second
+            # draw on top made every resumed game overshoot its own bell
+            # (caught when the knob went default-on, 2026-08-13).
             self.max_ticks += self.rng.randrange(0, int(c["clock_jitter"]) + 1)
         if not c["description"]:
             if c["win"] == "domination":

@@ -280,14 +280,14 @@
    "doc": "Match length in ticks (6000 = 10 minutes)."
   },
   "clock_jitter": {
-   "d": 0,
+   "d": 600,
    "t": "int",
    "lo": 0,
    "hi": 18000,
-   "doc": "Anti-turtle: extend the match by a seeded-random 0..N extra ticks that admirals cannot predict, so a leader can never compute the exact bell and freeze through the final stretch. 0 = off (the classic fixed clock). Ignored in domination (no clock there). Reproducible: the same seed always draws the same extension."
+   "doc": "Anti-turtle: extend the match by a seeded-random 0..N extra ticks that admirals cannot predict, so a leader can never compute the exact bell and freeze through the final stretch. Default 600 (up to a minute on the standard clock) \u2014 ON by default since 2026-08-13; 0 = the classic fixed clock. Ignored in domination (no clock there). Reproducible: the same seed always draws the same extension."
   },
   "score_visibility": {
-   "d": "exact",
+   "d": "banded",
    "t": "enum",
    "opts": [
     "exact",
@@ -299,7 +299,7 @@
     "banded": "Banded (nearest 100)",
     "hidden": "Own score only"
    },
-   "doc": "What admirals see of RIVAL scores. exact = live totals (classic). banded = rivals' scores rounded down to the nearest 100 \u2014 a leader can't compute that no rival can catch them, which keeps the endgame honest. hidden = each admiral sees only its own score. Spectators and the replay always see exact scores."
+   "doc": "What admirals see of RIVAL scores. banded (default since 2026-08-13) = rivals' scores rounded down to the nearest 100 \u2014 a leader can't compute that no rival can catch them, which keeps the endgame honest. exact = live totals (classic). hidden = each admiral sees only its own score. Spectators and the replay always see exact scores."
   },
   "territory_tick": {
    "d": 50,
