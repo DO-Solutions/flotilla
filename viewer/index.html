@@ -505,6 +505,29 @@ const SKINS = {
   },
 };
 let SKIN = JSON.parse(JSON.stringify(SKIN_DEFAULT));
+// skins imported via the dashboard's Server-tab importer live server-side at
+// skins/<name>.json; their names join the 🎨 picker. Bundles (file://) and
+// public showcase mirrors have no importer — the catch keeps them silent.
+let IMPORTED_SKINS = [];
+const SKIN_NAME_RE = /^[A-Za-z0-9_-]{1,24}$/;
+if (location.protocol.startsWith("http")) {
+  fetch("api/skins").then(r => r.ok ? r.json() : null).then(d => {
+    if (d && Array.isArray(d.skins))
+      IMPORTED_SKINS = d.skins.map(s => String(s.name))
+        .filter(n => SKIN_NAME_RE.test(n) && !SKINS[n]);
+  }).catch(() => {});
+}
+function fetchImportedSkin(name) {      // resolve one imported skin by name
+  if (!SKIN_NAME_RE.test(name) || !location.protocol.startsWith("http"))
+    return;
+  fetch("skins/" + name + ".json").then(r => r.ok ? r.json() : null)
+    .then(s => {
+      if (s && typeof s === "object") {
+        s.name = name;
+        applySkin(s);
+      }
+    }).catch(() => {});
+}
 function withA(color, hexAlpha) {
   // baked alpha rides only on 6-digit hex; any other color form is used as-is
   return /^#[0-9a-fA-F]{6}$/.test(color) ? color + hexAlpha : color;
@@ -723,6 +746,8 @@ function renderSettingsPanel() {
     `<label class="dim" for="skinsel">🎨 skin</label>` +
     `<select id="skinsel">` + Object.keys(SKINS).map(k =>
       `<option value="${k}"${SKIN.name === k ? " selected" : ""}>${k}</option>`
+    ).join("") + IMPORTED_SKINS.map(k =>
+      `<option value="${k}"${SKIN.name === k ? " selected" : ""}>${k} ·imported</option>`
     ).join("") + `</select>` +
     `<span class="info">i<span class="pop">appearance only — palette, ` +
     `type, silhouettes, motion. Never touches the match, the fog rules, ` +
@@ -3181,7 +3206,8 @@ document.addEventListener("mouseout", e => {
 document.addEventListener("change", e => {
   if (e.target && e.target.id === "skinsel") {
     const k = e.target.value;
-    applySkin(SKINS[k] || {});
+    if (SKINS[k] || !SKIN_NAME_RE.test(k)) applySkin(SKINS[k] || {});
+    else fetchImportedSkin(k);          // async; repaints when it lands
     try { localStorage.setItem("flotilla-skin", k); } catch (err) {}
     renderSettingsPanel();
   }
@@ -3673,23 +3699,31 @@ document.body.addEventListener("drop", e => {
 });
 
 window.__flotilla = { seek, seekFrac, state: () => S, load, loadBundle, setPlay,
-                      select, liveInit, liveAppend };
+                      select, liveInit, liveAppend,
+                      importedSkins: () => IMPORTED_SKINS };
 if (!location.protocol.startsWith("http")) {   // downloaded bundle: no home to go to
   $("homelink").removeAttribute("href");
 }
 const qs = new URLSearchParams(location.search);
 // skin resolution (see the SKIN block up top for the guarantees)
 (function initSkin() {
-  let spec = null;
+  let spec = null, imported = null;
   try {
     if (window.FLOTILLA_SKIN) spec = window.FLOTILLA_SKIN;
-    else if (qs.get("skin")) spec = SKINS[qs.get("skin")] || null;
-    else {
+    else if (qs.get("skin")) {
+      const k = qs.get("skin");
+      spec = SKINS[k] || null;
+      if (!spec) imported = k;          // not in the registry: ask the server
+    } else {
       const saved = localStorage.getItem("flotilla-skin");
-      if (saved && SKINS[saved] && saved !== "flotilla") spec = SKINS[saved];
+      if (saved && saved !== "flotilla") {
+        spec = SKINS[saved] || null;
+        if (!spec) imported = saved;
+      }
     }
   } catch (e) { spec = null; }
   if (spec) applySkin(spec);
+  else if (imported) fetchImportedSkin(imported);
   const su = qs.get("skinurl");
   if (su && sameOriginPath(su)) {
     fetch(su).then(r => r.json()).then(applySkin).catch(() => {});

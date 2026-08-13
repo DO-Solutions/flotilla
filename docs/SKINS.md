@@ -12,10 +12,12 @@ In priority order:
 
 1. `window.FLOTILLA_SKIN = {...}` — set before the viewer script runs
    (exported bundles: inject a `<script>` above the viewer's).
-2. `player.html?skin=<name>` — a registry name (`flotilla`, `daylight`).
+2. `player.html?skin=<name>` — a built-in name (`flotilla`, `daylight`) or
+   any skin imported on the dashboard (fetched from the server).
 3. `player.html?skinurl=<path>` — same-origin JSON only (a foreign URL is
    ignored, same rule as replay sources).
-4. The 🎨 picker in the viewer's settings tab (persisted per browser).
+4. The 🎨 picker in the viewer's settings tab (persisted per browser) —
+   built-ins plus every imported skin.
 
 Works identically on live views and replays — the skin layer sits above the
 renderer, not inside it.
@@ -44,12 +46,38 @@ but only hex gets those alphas).
 | `fx` | `tail` | wake/trail length in frames (0–60) |
 | `minimap` | `bg` `frame` `cursor` | the overview map |
 
+## The dashboard importer
+
+The Server tab's **🎨 Viewer skins** section is the working surface for a
+design pass — no file drops or code needed:
+
+- **Import**: paste skin JSON (or load a `.json` file), name it, Import.
+  The server stores it under the library's `skins/` directory and serves it
+  at `/skins/<name>.json`; a typo'd section name comes back as a warning
+  instead of silently painting nothing.
+- **Preview**: a side-by-side canvas (stock vs yours) re-renders as you
+  type — a sketch of the scene, for fast iteration. The fidelity check is
+  the **▶ viewer** button, which opens the real renderer on the newest
+  finished replay with your skin applied.
+- **Share / prefer**: *copy link* gives `player.html?skin=<name>` for
+  anyone on the server; *use in my viewer* makes it your own browser's
+  default (the viewer's 🎨 picker lists every imported skin too, so each
+  person keeps their own preference).
+- Skin names are 1–24 letters/digits/`-`/`_`; `flotilla` and `daylight` are
+  reserved for the built-ins. Deleting a skin falls anyone still pointing
+  at it back to the stock look.
+
+API, for scripting: `GET /api/skins` lists, `POST /api/skins`
+`{"name","skin"}` saves (`{"name","delete":true}` removes),
+`GET /skins/<name>.json` serves one.
+
 ## A brand pass, concretely
 
 Start from the `daylight` entry in `viewer/index.html` (the `SKINS`
 registry) — it exercises every token. For an external team: author the JSON
-against this table, drop it next to the page, open
-`player.html?replay=...&skinurl=your-skin.json`, iterate. When it's final it
-can join the registry or ship as a `window.FLOTILLA_SKIN` injection in an
-exported bundle. Fleet colors need clear pairwise contrast against the sea
-and each other — eight admirals can be on screen at once.
+against the table above, iterate in the dashboard importer (or with
+`player.html?replay=...&skinurl=your-skin.json` if you'd rather work from
+files), and when it's final either leave it imported, promote it into the
+registry, or ship it as a `window.FLOTILLA_SKIN` injection in an exported
+bundle. Fleet colors need clear pairwise contrast against the sea and each
+other — eight admirals can be on screen at once.

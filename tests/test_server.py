@@ -275,6 +275,46 @@ ok(st == 400, "sub-1 stats are rejected")
 st, r = req("/api/ships", {"name": "gunboat", "delete": True})
 ok(st == 200 and "gunboat" not in r["saved"], "ship deleted")
 
+# skins: the Server-tab importer — save, list, serve same-origin, validate,
+# delete. The file lands under LIB/skins/ and /skins/<name>.json serves it.
+st, r = req("/api/skins")
+ok(st == 200 and r["skins"] == [] and "flotilla" in r["reserved"],
+   "skins list empty; built-in names advertised as reserved")
+st, r = req("/api/skins", {"name": "oceanic",
+                           "skin": {"sea": {"top": "#9cc8e8"},
+                                    "ships": {"scale": 2}}})
+ok(st == 200 and r["ok"] and r["name"] == "oceanic" and r["warnings"] == [],
+   "skin saved, no warnings for known sections")
+st, r = req("/api/skins")
+ok(st == 200 and [s["name"] for s in r["skins"]] == ["oceanic"],
+   "saved skin listed")
+st, r = req("/skins/oceanic.json")
+ok(st == 200 and r["sea"]["top"] == "#9cc8e8",
+   "saved skin served at /skins/<name>.json for ?skin= resolution")
+st, r = req("/api/skins", {"name": "typo", "skin": {"ocean": {"top": "#fff"},
+                                                    "fx": {"tail": 30}}})
+ok(st == 200 and len(r["warnings"]) == 1 and "'ocean'" in r["warnings"][0],
+   "unknown section saves but warns (the viewer will ignore it)")
+st, r = req("/api/skins", {"name": "daylight", "skin": {}})
+ok(st == 400 and "built-in" in r["error"], "reserved skin names refused")
+st, r = req("/api/skins", {"name": "../../etc/passwd", "skin": {}})
+ok(st == 200 and r["name"] == "etcpasswd",
+   "hostile name sanitized to a safe basename")
+st, r = req("/skins/nope.json")
+ok(st == 404, "missing skin -> 404")
+st, r = req("/api/skins", {"name": "big",
+                           "skin": {"ui": {"font": "x" * 40_000}}})
+ok(st == 400 and "large" in r["error"], "oversize skin refused (32 KB cap)")
+st, r = req("/api/skins", {"name": "arr", "skin": ["not", "an", "object"]})
+ok(st == 400, "non-object skin refused")
+for nm in ("oceanic", "typo", "etcpasswd"):
+    st, r = req("/api/skins", {"name": nm, "delete": True})
+    ok(st == 200 and r.get("deleted") == nm, f"skin {nm} deleted")
+st, r = req("/api/skins", {"name": "oceanic", "delete": True})
+ok(st == 404, "deleting a missing skin -> 404")
+st, r = req("/api/skins")
+ok(st == 200 and r["skins"] == [], "skins list empty again")
+
 # showcase: unconfigured 400 -> config roundtrip -> graceful upload failure
 st, r = req("/api/showcase", {"series": "test-series"})
 ok(st == 400 and "not configured" in r["error"], "showcase unconfigured -> 400")

@@ -453,6 +453,38 @@
     <span class="dim">multi-cloud aux workers are on the backlog — DigitalOcean
       is the only wired provider today</span>
   </div>
+  <h3 style="color:var(--accent);font-size:13px;margin:16px 0 6px">🎨 Viewer skins</h3>
+  <div class="dim" style="margin-bottom:6px">Import a skin JSON (the token table
+    is <code>docs/SKINS.md</code>) and every viewer on this server can use it:
+    share <code>player.html?skin=&lt;name&gt;</code>, or pick it in the viewer's
+    🎨 settings. Appearance only — a skin never touches the match or the data.</div>
+  <div id="sklist" class="dim">loading…</div>
+  <div style="margin-top:10px; display:flex; gap:16px; flex-wrap:wrap; align-items:flex-start">
+    <div style="display:flex; flex-direction:column; gap:6px">
+      <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap">
+        <input class="sname" id="skname" style="width:150px" maxlength="24"
+               placeholder="skin name" title="1-24 letters/digits/-/_">
+        <label class="dim" style="font-size:11px">or load a file
+          <input type="file" id="skfile" accept=".json,application/json"
+                 style="font-size:11px; max-width:180px"></label>
+      </div>
+      <textarea id="skjson" spellcheck="false" rows="11"
+        style="width:360px; max-width:100%; font-family:ui-monospace,monospace; font-size:11px;
+               background:var(--card); color:var(--ink); border:1px solid var(--line);
+               border-radius:6px; padding:6px"
+        placeholder='paste skin JSON — e.g. {"sea": {"top": "#9cc8e8", "bottom": "#7fb3dd"}}'></textarea>
+      <div style="display:flex; gap:10px; align-items:center">
+        <a class="btn btn-dl" id="sksave" href="#">Import</a>
+        <span id="skmsg" class="dim"></span>
+      </div>
+    </div>
+    <div>
+      <div class="dim" style="margin-bottom:4px">instant preview, stock vs yours —
+        approximate; the real check is ▶ viewer on a saved skin</div>
+      <canvas id="skprev" width="420" height="250"
+        style="border:1px solid var(--line); border-radius:6px; max-width:100%"></canvas>
+    </div>
+  </div>
   <div id="jobscard" style="margin-top:14px;display:none">
     <h3 style="color:var(--accent);font-size:13px;margin-bottom:6px">Run log — every launch (flagship + fleet auxiliaries, series and single games)</h3>
     <div id="jobs"></div>
@@ -937,7 +969,7 @@ document.addEventListener("click", async e => {
     $("seriestab").style.display = t.dataset.tab === "series" ? "" : "none";
     $("configtab").style.display = t.dataset.tab === "config" ? "" : "none";
     $("servertab").style.display = t.dataset.tab === "server" ? "" : "none";
-    if (t.dataset.tab === "server") renderProviders();
+    if (t.dataset.tab === "server") { renderProviders(); skRefresh(); }
     $("helptab").style.display = t.dataset.tab === "help" ? "" : "none";
     // the form renders while hidden (width 0 -> one column): pack it for
     // real the moment its tab is shown
@@ -2654,6 +2686,262 @@ async function pollJobs() {
     }
   } catch (e) { /* server went away */ }
 }
+
+// ---- 🎨 Skin importer (Server tab). SK_DEFAULT and skMerge mirror the
+// viewer's SKIN_DEFAULT/applySkin (viewer/index.html) so the canvas panes
+// paint the same merged values — but the scene itself is a sketch, not the
+// renderer. ▶ viewer opens the real thing on the newest finished replay.
+const SK_DEFAULT = {
+  ui: { bg: "#0b1220", card: "#111a2e", line: "#1e2a44", ink: "#e6edf7",
+        dim: "#8b9bb8", accent: "#0069ff", font: "" },
+  fleet: ["#4da3ff", "#ff5d5d", "#a3e635", "#c084fc",
+          "#f472b6", "#3fe06a", "#6140e6", "#ca40e6"],
+  sea: { top: "#0a1b33", bottom: "#081426", gridMinor: "#e6edf70b",
+         gridMajor: "#e6edf71c", label: "#e6edf755" },
+  land: { fill: "#8a774e", halo: "#c9b47f22" },
+  nodes: { fish: "rgba(45,212,191,.5)", wreck: "rgba(251,191,36,.55)",
+           label: "#e6edf7aa" },
+  ships: { hullInk: "#0b1220", detail: "#ffffff", laden: "#ffd76a",
+           ghost: "#9fb0c866", scale: 1 },
+  fx: { fog: "rgba(3,8,18,.62)", tail: 14 },
+  minimap: { bg: "#0a1b33", frame: "#24304d", cursor: "#e6edf7" },
+};
+
+function skMerge(spec) {
+  const base = JSON.parse(JSON.stringify(SK_DEFAULT));
+  try {
+    for (const [sec, vals] of Object.entries(spec || {})) {
+      if (sec === "name") continue;
+      if (sec === "fleet" && Array.isArray(vals)) {
+        base.fleet = vals.slice(0, 8).map(String);
+        while (base.fleet.length < 8)
+          base.fleet.push(SK_DEFAULT.fleet[base.fleet.length]);
+        continue;
+      }
+      if (typeof vals !== "object" || !base[sec]) continue;
+      for (const [k, v] of Object.entries(vals)) {
+        if (!(k in base[sec])) continue;
+        base[sec][k] = typeof base[sec][k] === "number" ? +v || base[sec][k]
+                                                        : String(v);
+      }
+    }
+    base.ships.scale = Math.min(4, Math.max(0.25, base.ships.scale));
+    base.fx.tail = Math.min(60, Math.max(0, Math.round(base.fx.tail)));
+  } catch (e) { /* malformed spec previews as stock */ }
+  return base;
+}
+
+function skPane(ctx, x0, w, h, sk, label) {
+  ctx.fillStyle = sk.ui.bg; ctx.fillRect(x0, 0, w, h);
+  ctx.fillStyle = sk.ui.card; ctx.fillRect(x0 + 6, 6, w - 12, 22);
+  ctx.fillStyle = sk.ui.accent; ctx.fillRect(x0 + w - 40, 10, 28, 14);
+  ctx.font = "10px sans-serif";
+  ctx.fillStyle = sk.ui.ink; ctx.fillText(label, x0 + 12, 20);
+  ctx.fillStyle = sk.ui.dim; ctx.fillText("panel · text", x0 + 64, 20);
+  const sy = 32, sh = h - sy;
+  const g = ctx.createLinearGradient(0, sy, 0, h);
+  g.addColorStop(0, sk.sea.top); g.addColorStop(1, sk.sea.bottom);
+  ctx.fillStyle = g; ctx.fillRect(x0, sy, w, sh);
+  for (let i = 1; i < 6; i++) {
+    ctx.strokeStyle = i === 3 ? sk.sea.gridMajor : sk.sea.gridMinor;
+    ctx.beginPath(); ctx.moveTo(x0, sy + i * sh / 6);
+    ctx.lineTo(x0 + w, sy + i * sh / 6); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(x0 + i * w / 6, sy);
+    ctx.lineTo(x0 + i * w / 6, h); ctx.stroke();
+  }
+  ctx.fillStyle = sk.land.fill;
+  ctx.beginPath(); ctx.ellipse(x0 + w * .26, sy + sh * .3, 24, 13, .4, 0, 7);
+  ctx.fill();
+  ctx.strokeStyle = sk.land.halo; ctx.lineWidth = 4; ctx.stroke();
+  ctx.lineWidth = 1;
+  ctx.fillStyle = sk.sea.label;
+  ctx.fillText("Isla", x0 + w * .26 - 8, sy + sh * .3 + 3);
+  ctx.fillStyle = sk.nodes.fish;
+  ctx.beginPath(); ctx.arc(x0 + w * .68, sy + sh * .22, 5, 0, 7); ctx.fill();
+  ctx.fillStyle = sk.nodes.wreck;
+  ctx.beginPath(); ctx.arc(x0 + w * .12, sy + sh * .78, 4, 0, 7); ctx.fill();
+  ctx.fillStyle = sk.nodes.label;
+  ctx.fillText("shoal", x0 + w * .68 - 12, sy + sh * .22 - 9);
+  const ship = (fx, fy, col, ang, opts = {}) => {
+    const s = 7 * sk.ships.scale;
+    ctx.save(); ctx.translate(x0 + fx * w, sy + fy * sh); ctx.rotate(ang);
+    if (!opts.ghost) {
+      ctx.strokeStyle = col; ctx.globalAlpha = .35;
+      ctx.beginPath(); ctx.moveTo(-s, 0);
+      ctx.lineTo(-s - sk.fx.tail * 1.5, 0); ctx.stroke();
+      ctx.globalAlpha = 1;
+    }
+    ctx.fillStyle = opts.ghost ? sk.ships.ghost : col;
+    ctx.beginPath(); ctx.moveTo(s, 0); ctx.lineTo(-s, s * .7);
+    ctx.lineTo(-s, -s * .7); ctx.closePath(); ctx.fill();
+    if (!opts.ghost) {
+      ctx.fillStyle = sk.ships.hullInk;
+      ctx.fillRect(-s * .4, -s * .25, s * .6, s * .5);
+      ctx.fillStyle = sk.ships.detail;
+      ctx.fillRect(s * .2, -s * .15, s * .25, s * .3);
+      if (opts.laden) {
+        ctx.fillStyle = sk.ships.laden;
+        ctx.beginPath(); ctx.arc(0, 0, s * .22, 0, 7); ctx.fill();
+      }
+    }
+    ctx.restore();
+  };
+  ship(.45, .55, sk.fleet[0], -.5, { laden: true });
+  ship(.62, .72, sk.fleet[1], 2.5);
+  ship(.3, .82, sk.fleet[2], .9);
+  ship(.82, .48, null, 1.8, { ghost: true });
+  ctx.fillStyle = sk.fx.fog; ctx.fillRect(x0 + w * .86, sy, w * .14, sh);
+  ctx.fillStyle = sk.minimap.bg; ctx.fillRect(x0 + w - 52, h - 34, 44, 26);
+  ctx.strokeStyle = sk.minimap.frame;
+  ctx.strokeRect(x0 + w - 52, h - 34, 44, 26);
+  ctx.fillStyle = sk.minimap.cursor; ctx.fillRect(x0 + w - 38, h - 26, 8, 6);
+}
+
+function skPreview() {
+  const cv = $("skprev");
+  let ctx = null;
+  try { ctx = cv && cv.getContext && cv.getContext("2d"); } catch (e) { }
+  if (!ctx) return;                    // headless DOM: markup-only
+  let spec = null, bad = false;
+  const txt = $("skjson").value.trim();
+  if (txt) {
+    try { spec = JSON.parse(txt); } catch (e) { bad = true; }
+  }
+  const W = cv.width, H = cv.height, half = (W - 8) / 2;
+  ctx.clearRect(0, 0, W, H);
+  skPane(ctx, 0, half, H, SK_DEFAULT, "stock");
+  skPane(ctx, half + 8, half, H, skMerge(spec),
+         bad ? "yours — bad JSON, showing stock" : "yours");
+}
+
+function skMsg(m, sticky) {
+  $("skmsg").textContent = m;
+  if (!sticky) setTimeout(() => {
+    if ($("skmsg").textContent === m) $("skmsg").textContent = "";
+  }, 6000);
+}
+
+async function skRefresh() {
+  const el = $("sklist");
+  if (!el) return;
+  let d = null;
+  try { d = await (await fetch("api/skins")).json(); } catch (e) { }
+  if (!d || !Array.isArray(d.skins)) {
+    el.textContent = "skins unavailable";
+    return;
+  }
+  if (!d.skins.length) {
+    el.innerHTML = "no imported skins yet — the built-ins " +
+      "<code>flotilla</code> and <code>daylight</code> are always available";
+  } else {
+    el.innerHTML = d.skins.map(s => {
+      const n = String(s.name || "").replace(/[^A-Za-z0-9_-]/g, "");
+      const when = s.updated ? new Date(s.updated * 1000).toISOString()
+        .slice(0, 16).replace("T", " ") + " UTC" : "";
+      return `<div style="display:flex;gap:10px;align-items:center;` +
+        `flex-wrap:wrap;margin:3px 0"><code>${n}</code>` +
+        `<span>${(s.bytes / 1024).toFixed(1)} KB · ${when}</span>` +
+        `<a class="btn btn-dl" data-skview="${n}" href="#" title="open the ` +
+        `real viewer on the newest finished replay with this skin">▶ viewer</a>` +
+        `<a class="btn btn-dl" data-sklink="${n}" href="#" title="copy a ` +
+        `shareable player.html?skin= link">copy link</a>` +
+        `<a class="btn btn-dl" data-skuse="${n}" href="#" title="make this ` +
+        `skin the default for every viewer page in THIS browser">use in my ` +
+        `viewer</a>` +
+        `<a class="btn btn-dl" data-skload="${n}" href="#">edit</a>` +
+        `<a class="btn btn-dl" data-skdel="${n}" href="#" ` +
+        `style="color:#ff5d5d">✕</a></div>`;
+    }).join("");
+  }
+  skPreview();
+}
+
+document.addEventListener("click", async e => {
+  const t = e.target.closest && e.target.closest(
+    "#sksave,[data-skview],[data-sklink],[data-skuse],[data-skload],[data-skdel]");
+  if (!t) return;
+  e.preventDefault();
+  if (t.id === "sksave") {
+    const nm = $("skname").value.trim();
+    let spec = null;
+    try { spec = JSON.parse($("skjson").value); } catch (err) { }
+    if (!spec || typeof spec !== "object") {
+      return skMsg("not valid JSON — nothing imported");
+    }
+    let r;
+    try {
+      r = await (await fetch("api/skins", { method: "POST",
+        body: JSON.stringify({ name: nm, skin: spec }) })).json();
+    } catch (err) { r = { error: "server unreachable" }; }
+    if (r && r.ok) {
+      skMsg(`imported ✓ as ${r.name}` +
+            (r.warnings && r.warnings.length ? " — " + r.warnings.join("; ")
+                                             : ""), r.warnings && r.warnings.length);
+      skRefresh();
+    } else {
+      skMsg("import failed: " + ((r || {}).error || "?"), true);
+    }
+    return;
+  }
+  const ds = t.dataset;
+  if (ds.skview !== undefined) {
+    const rp = ((IDX || {}).matches || [])[0];
+    if (!rp || !rp.file) return skMsg("no finished replay to preview against yet");
+    window.open(`player.html?replay=${encodeURIComponent(rp.file)}` +
+                `&skin=${encodeURIComponent(ds.skview)}`, "_blank");
+  } else if (ds.sklink !== undefined) {
+    const url = location.origin + "/player.html?skin=" +
+                encodeURIComponent(ds.sklink);
+    try {
+      await navigator.clipboard.writeText(url);
+      skMsg("link copied ✓ (append &replay=… or open any game and pick " +
+            "the skin in 🎨 settings)");
+    } catch (err) { skMsg(url, true); }
+  } else if (ds.skuse !== undefined) {
+    try { localStorage.setItem("flotilla-skin", ds.skuse); } catch (err) { }
+    skMsg(`✓ ${ds.skuse} is now the default in this browser — the viewer's ` +
+          "🎨 picker shows it selected");
+  } else if (ds.skload !== undefined) {
+    try {
+      const s = await (await fetch("skins/" + ds.skload + ".json")).json();
+      $("skname").value = ds.skload;
+      $("skjson").value = JSON.stringify(s, null, 1);
+      skPreview();
+    } catch (err) { skMsg("could not load " + ds.skload); }
+  } else if (ds.skdel !== undefined) {
+    if (!window.confirm(`delete imported skin "${ds.skdel}"? Links and ` +
+                        "browser defaults pointing at it fall back to stock."))
+      return;
+    try {
+      await fetch("api/skins", { method: "POST",
+        body: JSON.stringify({ name: ds.skdel, delete: true }) });
+    } catch (err) { }
+    skRefresh();
+  }
+});
+
+let skDebounce = null;
+document.addEventListener("input", e => {
+  if (e.target && e.target.id === "skjson") {
+    clearTimeout(skDebounce);
+    skDebounce = setTimeout(skPreview, 250);
+  }
+});
+document.addEventListener("change", e => {
+  if (e.target && e.target.id === "skfile" && e.target.files[0]) {
+    const f = e.target.files[0];
+    const rd = new FileReader();
+    rd.onload = () => {
+      $("skjson").value = String(rd.result || "");
+      if (!$("skname").value.trim()) {
+        $("skname").value = f.name.replace(/\.json$/i, "")
+          .replace(/[^A-Za-z0-9_-]/g, "").slice(0, 24);
+      }
+      skPreview();
+    };
+    rd.readAsText(f);
+  }
+});
 
 $("showarch").addEventListener("change", renderSeriesTable);
 fetch("index.json").then(r => r.json()).then(idx => {

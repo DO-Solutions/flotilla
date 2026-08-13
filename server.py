@@ -66,6 +66,10 @@ Public showcase (see docs/FLEET_AUXILIARIES.md):
   POST /api/showcase-delete  {"series"|"match"} -> retire that public link
   GET/POST /api/ships        operator ship classes for the Configure designer
                              (POST {"name","stats"} saves, {"name","delete"} removes)
+  GET/POST /api/skins        imported viewer skins (the Server-tab importer;
+                             POST {"name","skin"} saves, {"name","delete"} removes)
+  GET  /skins/<name>.json    one imported skin — same-origin, so the viewer's
+                             ?skin=<name> / ?skinurl= resolution can fetch it
   The public spectator player is player.html?livejsonl=<prefix> / ?replay=<path>
   / ?live=<job> / ?series=<name> (URL params are same-origin-only).
 
@@ -1093,6 +1097,25 @@ def _s3_put_public(cfg, key, data, content_type="text/html"):
 # ---------------- saved ship classes (the Configure page's designer) ---------
 SHIPS_LOCK = threading.Lock()
 SHIP_STATS = tuple(contract.game().ship_stats)   # the game's designer stats
+
+SKINS_LOCK = threading.Lock()
+# the viewer resolves these from its own built-in registry BEFORE asking the
+# server, so an import under either name could never be reached — refuse it
+SKIN_RESERVED = ("flotilla", "daylight")
+# the token sections docs/SKINS.md defines; anything else is saved but flagged
+# (the viewer's applySkin silently ignores unknown sections)
+SKIN_SECTIONS = ("name", "ui", "fleet", "sea", "land", "nodes", "ships",
+                 "fx", "minimap")
+
+
+def _skins_dir():
+    d = os.path.join(LIB, "skins")
+    os.makedirs(d, exist_ok=True)
+    return d
+
+
+def _clean_skin_name(name):
+    return re.sub(r"[^A-Za-z0-9_-]", "", str(name))[:24]
 
 
 def _ships_path():
@@ -2405,6 +2428,18 @@ class H(BaseHTTPRequestHandler):
                                                 in contract.game().presets.items()},
                                     "saved": _load_ships(),
                                     "stats": list(SHIP_STATS)})
+        if path == "/api/skins":
+            rows = []
+            with SKINS_LOCK:
+                sd = _skins_dir()
+                for fn in sorted(os.listdir(sd)):
+                    if fn.endswith(".json"):
+                        p = os.path.join(sd, fn)
+                        rows.append({"name": fn[:-len(".json")],
+                                     "bytes": os.path.getsize(p),
+                                     "updated": os.path.getmtime(p)})
+            return self._send(200, {"skins": rows,
+                                    "reserved": list(SKIN_RESERVED)})
         if path == "/api/runs":
             with JOBS_LOCK:
                 out = [dict(j, log=j["log"][-8:]) for j in JOBS[-20:]][::-1]
@@ -2563,6 +2598,13 @@ class H(BaseHTTPRequestHandler):
             try:
                 return self._file(_safe_path(os.path.join(LIB, "series"),
                                              m.group(1), m.group(2)))
+            except ValueError:
+                return self._send(404, {"error": "not found"})
+        m = re.match(r"^/skins/([^/]+)\.json$", path)
+        if m:
+            try:
+                return self._file(_safe_path(_skins_dir(),
+                                             m.group(1) + ".json"))
             except ValueError:
                 return self._send(404, {"error": "not found"})
         m = re.match(r"^/(tournaments|bundles)/(.+)$", path)
@@ -3228,6 +3270,49 @@ class H(BaseHTTPRequestHandler):
                                                     in contract.game().presets.items()},
                                         "saved": ships,
                                         "stats": list(SHIP_STATS)})
+            if path == "/api/skins":
+                # import/remove a viewer skin (the Server-tab importer). The
+                # saved file is served at /skins/<name>.json — same-origin, so
+                # player.html?skin=<name> works for every viewer on this box.
+                d = json.loads(body)
+                nm = _clean_skin_name(d.get("name", ""))
+                if not nm:
+                    return self._send(400, {"error": "skin name must be 1-24 "
+                                            "letters/digits/-/_"})
+                if d.get("delete"):
+                    with SKINS_LOCK:
+                        try:
+                            os.remove(os.path.join(_skins_dir(),
+                                                   nm + ".json"))
+                        except OSError:
+                            return self._send(404,
+                                              {"error": "no such skin"})
+                    return self._send(200, {"ok": True, "deleted": nm})
+                if nm in SKIN_RESERVED:
+                    return self._send(400, {"error": f'"{nm}" is a built-in '
+                                            "skin name — pick another"})
+                skin = d.get("skin")
+                if not isinstance(skin, dict):
+                    return self._send(400,
+                                      {"error": "skin must be a JSON object "
+                                       "(see docs/SKINS.md for the tokens)"})
+                blob = json.dumps(skin, indent=1, sort_keys=True)
+                if len(blob) > 32_000:
+                    return self._send(400, {"error": "skin too large "
+                                            "(32 KB cap)"})
+                # unknown sections save fine (applySkin ignores them) but a
+                # typo'd section silently painting nothing is the #1 authoring
+                # trap — surface it
+                warn = [f"section {k!r} is not in docs/SKINS.md — the viewer "
+                        "will ignore it" for k in skin if k not in SKIN_SECTIONS]
+                with SKINS_LOCK:
+                    fp = os.path.join(_skins_dir(), nm + ".json")
+                    tmp = fp + ".tmp"
+                    with open(tmp, "w") as fh:
+                        fh.write(blob)
+                    os.replace(tmp, fp)
+                return self._send(200, {"ok": True, "name": nm,
+                                        "warnings": warn})
             if path == "/api/rename":
                 d = json.loads(body)
                 disp = str(d.get("display_name", "")).strip()[:120]
