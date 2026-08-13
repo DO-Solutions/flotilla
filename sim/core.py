@@ -47,6 +47,10 @@ PRESETS = {  # 12 points each: speed, hold, guns, armor, hull, lookout
     "frigate": dict(speed=2, hold=1, guns=4, armor=3, hull=1, lookout=1),
     "scout":   dict(speed=5, hold=1, guns=1, armor=1, hull=1, lookout=3),
 }
+# the dispatch cutter (#129, Opus5's playtest ask): not buildable, not in the
+# 12-point system — a fast unarmed mail boat the `dispatch` action launches.
+# hull=0 -> 20 hull total: one good volley sinks the mail.
+CUTTER = dict(speed=6, hold=0, guns=0, armor=0, hull=0, lookout=2)
 ROLES = ("forage", "scout", "escort", "raid", "guard", "blockade", "assault")
 ISLANDS = [  # small tropical islands — every resource node gets one (seed-shuffled)
     "Aitutaki", "Bora Bora", "Rarotonga", "Moorea", "Huahine", "Tahaa", "Maupiti",
@@ -76,7 +80,7 @@ class Ship:
                  "program", "pmem",
                  "trip_start", "trip_gathered", "trip_hits", "trip_far",
                  "refit_to", "refit_at", "repair_at", "nav_prev", "moved_t",
-                 "gained_t", "assault_flag")
+                 "gained_t", "assault_flag", "courier")
 
     def __init__(self, sid, fleet, squad, x, y, preset, stats=None):
         self.id = sid
@@ -106,6 +110,8 @@ class Ship:
         self.program = None                 # compiled conn program (has the conn)
         self.pmem = {}                      # the program's per-ship memory
         self.orders = dict(DEFAULT_ORDER)   # per-ship copy; refreshed in port / by signal
+        self.courier = None                 # dispatch cutter: the mail bag
+                                            # {squad, orders, program, state}
         self.intent = ""                    # human/agent-readable "what am I doing"
         self.node_id = None                 # committed forage target (stops flip-flopping)
         self.haul_home = False              # threatened while laden -> commit to delivery
@@ -340,6 +346,21 @@ class Engine(SimBase):
         sig_rules += ("; an UNAFFORDABLE hoist is QUEUED and raises itself the moment "
                       "funds allow — you.warnings tells you every window; cancel with "
                       '{"signal": {"cancel": true}}')
+        if c["couriers"]:
+            sig_rules += (
+                f". DISPATCH CUTTER (cost {c['courier_cost']} cargo): "
+                '{"dispatch": "B"} (or ["B","C"]) launches a fast unarmed '
+                "one-volley-hull cutter from your harbor carrying squad B's "
+                "CURRENT standing orders + pending conn program — write the "
+                "new orders in the SAME reply; they apply before the cutter "
+                "sails. It sails to the squad, delivers AT SEA (the squad "
+                "adopts the orders without docking), and returns. The mail is "
+                "a snapshot: it can arrive stale, and a sunk cutter loses it "
+                "(you.warnings will say so) — screen the mail route or accept "
+                "the risk"
+                + (". This is your ONLY way to re-task a distant squad "
+                   "mid-voyage without recalling it"
+                   if c["signal_mode"] == "return_only" else ""))
         if c["shipyard_slots"] > 0:
             repair_rules = (
                 f"SHIPYARD: your harbor opens with {c['shipyard_slots']} yard "
@@ -366,9 +387,21 @@ class Engine(SimBase):
         else:
             repair_rules = f"docked repair 2 hull/{c['repair_period']} ticks"
             build_note = ""
+        # clock jitter must not leak the drawn bell to the admirals — the
+        # whole knob is that a leader cannot compute the exact end. The rules
+        # advertise the RANGE; spectators + the replay keep the real value.
+        # (A caller-pinned max_ticks with jitter configured still prints the
+        # range — only scripted harness runs do that, and the text is prose.)
+        _jit = int(c.get("clock_jitter") or 0) if c["win"] != "domination" \
+            else 0
+        _ends = (f"between t={c['max_ticks']} and "
+                 f"t={c['max_ticks'] + _jit} — the exact bell was drawn "
+                 "secretly (clock jitter); a lead you cannot verify is not "
+                 "a lead you can sit on"
+                 if _jit > 0 else f"t={self.max_ticks}")
         c["rules"] = (
             f"map {self.W}x{self.H}; decision window every {c['window'] / 10:g}s; match "
-            f"ends t={self.max_ticks}; ships cost {c['ship_cost']} cargo, build in "
+            f"ends {_ends}; ships cost {c['ship_cost']} cargo, build in "
             f"{c['build_ticks'] / 10:g}s (queue max 3{build_note}); {sig_rules}; gather 1 "
             f"cargo/{c['gather_period']} ticks; fish shoals regen 1 cargo/"
             f"{c['fish_regen_period'] / 10:g}s; {repair_rules}; flagship hull "
@@ -450,7 +483,10 @@ class Engine(SimBase):
             + ".")
         self.scenario = dict(win=c["win"], description=c["description"],
                              rules=c["rules"], regions=c["territories"],
-                             max_ticks=self.max_ticks,
+                             # admiral-facing: the NOMINAL bell when jitter is
+                             # on (the drawn value would leak the secret)
+                             max_ticks=c["max_ticks"] if _jit > 0
+                             else self.max_ticks,
                              signal_mode=c["signal_mode"],
                              signal_flags=sorted(self.signal_presets)
                              if c["signal_mode"] == "preset" else [],
@@ -705,6 +741,8 @@ class Engine(SimBase):
     def _presence(self):
         present = {r["id"]: {} for r in self.regions}
         for s in self.ships.values():
+            if s.courier is not None:      # the mail boat holds no ground
+                continue
             rid = self._cellregion[s.x][s.y]
             present[rid][s.fleet] = present[rid].get(s.fleet, 0) + 1
         return present
@@ -1170,7 +1208,7 @@ class Engine(SimBase):
 
     ACTION_FIELDS = ("orders", "programs", "designs", "refit", "reassign",
                      "relocate", "build", "build_yard", "parley", "scuttle",
-                     "signal")
+                     "signal", "dispatch")
     META_FIELDS = frozenset(("thoughts", "scratchpad", "_usage"))
 
     def _apply_actions(self, fleet, actions):
@@ -1410,6 +1448,7 @@ class Engine(SimBase):
                 if s.cargo > 0:            # her cargo goes down with her
                     self._add_node(s.x, s.y, "wreck", s.cargo, s.cargo,
                                    name=f"{fleet.name} {s.preset} wreck")
+                self._courier_lost(s)
                 self._ev("sink", fleet=s.fleet, ship=s.id, x=s.x, y=s.y,
                          preset=s.preset, by=None, cause="scuttle")
                 for f2 in self.fleets.values():
@@ -1427,6 +1466,116 @@ class Engine(SimBase):
                 fleet.queued_signal = sig      # raises itself the moment funds exist
             else:
                 self._exec_signal(fleet, sig)
+        dsp = actions.get("dispatch")
+        if dsp is not None:
+            if not self.cfg["couriers"]:
+                fleet.warnings.append("dispatch IGNORED — couriers are "
+                                      "disabled in this scenario")
+            else:
+                sqs = [dsp] if isinstance(dsp, str) else \
+                    list(dsp) if isinstance(dsp, (list, tuple)) else []
+                if not sqs:
+                    fleet.warnings.append(
+                        'dispatch must be a squad letter ("B") or a list of '
+                        "them")
+                for sq in sqs[:4]:            # a windowful of cutters, capped
+                    self._dispatch_courier(fleet, str(sq)[:1].upper())
+
+    def _dispatch_courier(self, fleet, sq):
+        """Launch a dispatch cutter (#129): a fast, unarmed, one-volley-hull
+        mail boat carrying a SNAPSHOT of squad sq's pending orders + pending
+        program. Orders in the same reply apply first (ACTION_FIELDS order),
+        so 'write new orders + dispatch them' works in one window. The mail
+        can arrive stale — it was written when the cutter sailed — and a sunk
+        cutter loses it: that is the whole trade."""
+        cost = self.cfg["courier_cost"]
+        targets = [s for s in self.ships.values()
+                   if s.fleet == fleet.id and s.squad == sq
+                   and s.courier is None]
+        if not targets:
+            fleet.warnings.append(
+                f"dispatch to '{sq}' NOT sent — that squad has no ships")
+            return
+        od = fleet.pending.get(sq)
+        prog = fleet.pending_programs.get(sq)
+        if od is None and prog is None:
+            fleet.warnings.append(
+                f"dispatch to '{sq}' NOT sent — no standing orders or program "
+                "pending for that squad (set them in the SAME reply; orders "
+                "apply before dispatch)")
+            return
+        if fleet.cargo < cost:
+            fleet.warnings.append(
+                f"dispatch to '{sq}' NOT sent — costs {cost} cargo, you have "
+                f"{fleet.cargo}")
+            return
+        fleet.cargo -= cost
+        s = Ship(self.next_ship_id, fleet.id, sq, fleet.hx, fleet.hy,
+                 "cutter", stats=dict(CUTTER))
+        s.moved_t = s.gained_t = self.t
+        s.courier = {"squad": sq, "state": "out",
+                     "orders": dict(od) if od is not None else None,
+                     "program": prog.text if prog is not None else None}
+        self.next_ship_id += 1
+        self.ships[s.id] = s
+        self._ev("courier", fleet=fleet.id, ship=s.id, squad=sq, what="sent")
+        self._intent(s, f"cutter: carrying dispatches to squad {sq}")
+
+    def _courier_lost(self, s):
+        """A cutter died with the mail aboard — tell its admiral."""
+        c = s.courier
+        if c and c.get("state") == "out":
+            self.fleets[s.fleet].warnings.append(
+                f"your dispatch cutter to squad {c['squad']} was SUNK — the "
+                "orders never arrived; the squad sails on its old ones")
+            self._ev("courier", fleet=s.fleet, ship=s.id, squad=c["squad"],
+                     what="lost")
+
+    def _courier_target(self, ship):
+        """The cutter's whole mind: sail to the squad, hand over the mail,
+        sail home. No orders, no program, no combat — it cannot even shoot."""
+        f = self.fleets[ship.fleet]
+        c = ship.courier
+        if c["state"] == "out":
+            targets = [s for s in self.ships.values()
+                       if s.fleet == ship.fleet and s.squad == c["squad"]
+                       and s.courier is None]
+            if not targets:
+                c["state"] = "home"
+                f.warnings.append(
+                    f"your dispatch cutter found no ships left in squad "
+                    f"{c['squad']} — returning with the mail undelivered")
+                self._intent(ship, "cutter: squad gone — returning home")
+                return (f.hx, f.hy)
+            near = min(targets, key=lambda s: (cheb(ship.x, ship.y, s.x, s.y),
+                                               s.id))
+            if cheb(ship.x, ship.y, near.x, near.y) <= 2:
+                for s in targets:
+                    if c["orders"] is not None:
+                        s.orders = dict(c["orders"])
+                        self._ev("orders", ship=s.id, fleet=f.id,
+                                 via="courier", od=self._od_compact(s.orders))
+                    if c["program"] is not None:
+                        try:
+                            p = conn.compile_program(c["program"])
+                            s.program = p
+                            s.pmem = p.init_mem()
+                            self._ev("orders", ship=s.id, fleet=f.id,
+                                     via="courier-program",
+                                     od=dict(program=True))
+                        except Exception:
+                            pass           # a program the grammar now rejects
+                c["state"] = "home"
+                self._ev("courier", fleet=f.id, ship=ship.id,
+                         squad=c["squad"], what="delivered")
+                self._intent(ship, "cutter: dispatches delivered — "
+                                   "returning home")
+                return (f.hx, f.hy)
+            self._intent(ship, f"cutter: carrying dispatches to squad "
+                               f"{c['squad']}")
+            return (near.x, near.y)
+        self._intent(ship, "cutter: returning home")
+        return (f.hx, f.hy)
 
     def _exec_signal(self, fleet, sig):
         """Execute a hoist (funds + cooldown already cleared by the caller)."""
@@ -1756,6 +1905,8 @@ class Engine(SimBase):
         'what am I doing and why' that replay review (human or agent) reads."""
         ship.assault_flag = False          # _run_program re-sets it this tick if
         f = self.fleets[ship.fleet]        # helm.assault() fires; else it stays off
+        if ship.courier is not None:        # a cutter has exactly one job
+            return self._courier_target(ship)
         if ship.repair_at:                  # in the yard: hold until repaired
             self._intent(ship, "in drydock: under repair")
             return None
@@ -2123,7 +2274,16 @@ class Engine(SimBase):
         for s in list(self.ships.values()):
             f = self.fleets[s.fleet]
             docked = cheb(s.x, s.y, f.hx, f.hy) <= self.hr
-            if docked:
+            if s.courier is not None:
+                # a cutter never does harbor business — no pickup, no repair,
+                # no reassignment. Home with the mail delivered (or the squad
+                # gone) = mission over, boat absorbed
+                if docked and s.courier["state"] == "home":
+                    self._ev("courier", fleet=f.id, ship=s.id,
+                             squad=s.courier["squad"], what="home")
+                    del self.ships[s.id]
+                    continue
+            elif docked:
                 s.recall = s.recall_safe = False
                 nsq = f.pending_reassign.pop(s.id, None)
                 if nsq is not None and nsq != s.squad:   # transfer applies in port;
@@ -2355,6 +2515,7 @@ class Engine(SimBase):
                         self.fleets[fid].kill_count += 1
                         by = fid
                         break
+            self._courier_lost(s)
             self._ev("sink", fleet=s.fleet, ship=s.id, x=s.x, y=s.y, preset=s.preset,
                      by=by)
             for f in self.fleets.values():           # witnessed sinks clear the plot;
@@ -2528,7 +2689,7 @@ class Engine(SimBase):
             flag_attackers=sorted(s.flag_attackers), wp_i=s.wp_i,
             orders=s.orders, intent=s.intent, node_id=s.node_id,
             haul_home=s.haul_home, recall=s.recall,
-            recall_safe=s.recall_safe,
+            recall_safe=s.recall_safe, courier=s.courier,
             program=s.program.text if s.program else None, pmem=s.pmem,
             trip_start=s.trip_start, trip_gathered=s.trip_gathered,
             trip_hits=s.trip_hits, trip_far=s.trip_far,
@@ -2598,6 +2759,8 @@ class Engine(SimBase):
             ]
         worth = {f.id: f.cargo for f in fs}
         for s in self.ships.values():
+            if s.courier is not None:      # a 10-cargo mail boat must not be
+                continue                   # a 15-point tiebreak exploit
             worth[s.fleet] += s.cargo + self.cfg["ship_cost"]
         return [
             ("cargo hauled", {f.id: f.bank for f in fs}),
@@ -2762,7 +2925,7 @@ class Engine(SimBase):
                      stats=sd.get("stats"))
             for k in ("hull", "hull_max", "cargo", "move_acc", "volley_cd",
                       "wp_i", "intent", "node_id", "haul_home", "recall",
-                      "recall_safe",
+                      "recall_safe", "courier",
                       "trip_start", "trip_gathered", "trip_hits", "trip_far",
                       "refit_to", "refit_at", "repair_at", "moved_t",
                       "gained_t", "assault_flag", "pmem"):

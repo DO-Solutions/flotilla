@@ -107,6 +107,21 @@
    "hi": 20,
    "doc": "Cooldown between signal hoists, in decision windows."
   },
+  "couriers": {
+   "d": true,
+   "t": "bool",
+   "doc": "Dispatch cutters (playtest feedback): {\"dispatch\": \"B\"} launches a fast unarmed one-volley-hull cutter from your harbor carrying squad B's CURRENT standing orders + pending program. It sails to the squad, delivers at sea (no docking), and returns. The mid-course option for signal_mode=return_only \u2014 travel takes real time and the cutter can be sunk, losing the mail."
+  },
+  "courier_cost": {
+   "d": 10,
+   "t": "int",
+   "lo": 0,
+   "hi": 200,
+   "show_if": {
+    "couriers": true
+   },
+   "doc": "Cargo cost to launch one dispatch cutter. Launch is instant (no yard slot, no build time) \u2014 the price and the sailing time are the whole cost."
+  },
   "signal_mode": {
    "d": "return_only",
    "t": "enum",

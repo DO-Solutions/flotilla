@@ -149,6 +149,21 @@ _ = j3  # a different seed may or may not differ; determinism is the claim
 dflt = Engine([("a", Idle()), ("b", Idle())], seed=13)
 ok(dflt.cfg["clock_jitter"] == 600 and dflt.cfg["score_visibility"] == "banded",
    "anti-turtle defaults: clock_jitter 600 + banded rival scores")
+# the drawn bell must NOT leak to the admirals (caught 2026-08-13: the rules
+# printed the post-jitter max_ticks, making the whole knob decorative)
+ok(str(dflt.max_ticks) not in dflt.cfg["rules"]
+   or dflt.max_ticks == dflt.cfg["max_ticks"],
+   "the rules never print the drawn bell")
+ok("drawn secretly" in dflt.cfg["rules"]
+   and f"between t={dflt.cfg['max_ticks']}" in dflt.cfg["rules"],
+   "jittered rules advertise the RANGE, not the value")
+ok(dflt.scenario["max_ticks"] == dflt.cfg["max_ticks"],
+   "the admiral-facing scenario reports the NOMINAL bell")
+nj = Engine([("a", Idle()), ("b", Idle())], seed=13,
+            scenario={"clock_jitter": 0})
+ok(f"ends t={nj.max_ticks}" in nj.cfg["rules"]
+   and nj.scenario["max_ticks"] == nj.max_ticks,
+   "jitter off: the exact bell is public again")
 
 # ---- 6. score visibility ----
 ev = Engine([("a", Idle()), ("b", Idle())], seed=15,
