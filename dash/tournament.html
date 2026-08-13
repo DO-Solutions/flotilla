@@ -82,11 +82,26 @@ let TJ = null, IDX = null;
 // spoiler-shielded value: blurred until the Reveal toggle
 const sh = (v) => `<span class="res${REVEAL ? "" : " shield"}">${v}</span>`;
 
+let LIVEJOB = null, LIVELANES = [];      // per-lane tick streams (#127)
 async function loadAll() {
   const base = TNAME ? `tournaments/${encodeURIComponent(TNAME)}/` : "./";
   TJ = await (await fetch(base + "tournament.json")).json();
   if (TNAME) {                    // flagship: the library index adds live
     try { IDX = await (await fetch("index.json")).json(); } catch (e) {}
+    // a RUNNING job for this tournament: its parallel lanes each stream
+    // their own live-<matchup>.jsonl — offer a tick-by-tick view per lane
+    try {
+      const runs = await (await fetch("api/runs")).json();
+      const jb = (runs.jobs || runs || []).find(x => x.name === TNAME &&
+        x.mode === "tournament" && x.state === "running");
+      if (jb) {
+        const lv = await (await fetch(`api/live/${jb.id}?ofs=0`)).json();
+        LIVEJOB = jb.id;
+        LIVELANES = lv.lanes || [];
+      } else {
+        LIVEJOB = null; LIVELANES = [];
+      }
+    } catch (e) { LIVEJOB = null; LIVELANES = []; }
   } else {
     // public copy: the publish mirrors the matchup slice of the index, so
     // in-flight lanes and their landed games show here too
@@ -151,7 +166,11 @@ function matchupCards() {
           const key = [roster[i], roster[k]].map(x =>
             String(x).replace(/[^A-Za-z0-9_-]/g, "")).join("|");
           if (sofar.has(key)) continue;
-          mus.push({ round: 9e9, players: [roster[i], roster[k]], dir: null,
+          // a scheduled lane may already be STREAMING its first game (no
+          // replay landed yet) — match it to its live-<matchup> stream by tag
+          const ldir = (LIVELANES || []).find(L =>
+            L.replace(/^m\d+_/, "") === key.replace("|", "_v_")) || null;
+          mus.push({ round: 9e9, players: [roster[i], roster[k]], dir: ldir,
                      games: [], winner: null, live: false, pendingLane: true });
         }
       }
@@ -206,7 +225,14 @@ function render() {
     if (st === "sched") {                  // nothing landed yet, nothing to watch
       return `<div class="mu" style="opacity:.6">` +
         `<div class="hd"><span class="stat">⛵ at sea — no games reported ` +
-        `yet</span></div>` +
+        `yet</span>` +
+        (LIVEJOB && LIVELANES.includes(m.dir)
+          ? `<a class="btn btn-watch" style="background:#c22432" target="_blank" ` +
+            `href="player.html?live=${encodeURIComponent(LIVEJOB)}` +
+            `&lane=${encodeURIComponent(m.dir)}"` +
+            ` title="follow this lane's first game tick by tick">📡 Lane</a>`
+          : "") +
+        `</div>` +
         m.players.map(p => `<div class="p"><span style="color:` +
           `${playerColor(names, p)}">${esc(p)}</span></div>`).join("") +
         `</div>`;
@@ -224,7 +250,13 @@ function render() {
         ? '<span class="live">🔴 series live</span>'
         : (m.winner ? "✓ decided" : "✓ complete") + rlab}</span>` +
       (st === "live"
-        ? `<a class="btn btn-watch" style="background:#c22432" target="_blank" ` +
+        ? (LIVEJOB && LIVELANES.includes(m.dir)
+            ? `<a class="btn btn-watch" style="background:#c22432" target="_blank" ` +
+              `href="player.html?live=${encodeURIComponent(LIVEJOB)}` +
+              `&lane=${encodeURIComponent(m.dir)}"` +
+              ` title="follow this lane's game tick by tick">📡 Lane</a>`
+            : "") +
+          `<a class="btn btn-watch" style="background:#c22432" target="_blank" ` +
           `href="${gameHref(m, g1, "last")}"` +
           ` title="jump to the newest game of this live series">🔴 Live</a>`
         : `<a class="btn btn-watch" target="_blank" href="${gameHref(m, g1, 1)}"` +

@@ -85,6 +85,14 @@ box holding infrastructure credentials, so scope it hard:
 5. **Live watch is transparent**: aux `live` callbacks append to the same
    live.jsonl the local executor writes; `/api/live/<job>` cannot tell the
    difference. Games file into the library per-game via the `game` callback.
+   **Per-lane streams (2026-08-13):** a parallel tournament's matchup lanes
+   each write their own `live-<matchup>.jsonl` (they used to run dark — one
+   shared file would interleave). The worker tails them all and posts each
+   with its `lane`; `/api/live/<job>?lane=mNN_…` follows one lane, and the
+   base response's `lanes` field lists which are streaming. The flagship
+   tournament page shows a 📡 Lane button per live lane. The PUBLIC showcase
+   still mirrors only the base stream — one public live view, never
+   interleaved.
 6. Reaper: every 5 min, any `flotilla-aux`-tagged droplet not attached to a live
    job is destroyed; per-job watchdog enforces `max_age_h`. Flagship restart
    mid-aux-run orphans the job (in-memory bearer) — the reaper still collects the

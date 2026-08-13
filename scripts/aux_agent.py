@@ -92,41 +92,63 @@ def post_game(fn, path, row):
     return post("game", None, raw=body)
 
 
+def _drain(path, ofs):
+    """New complete lines from path past ofs -> (lines, new_ofs). BYTES
+    throughout: the old text-mode tail fed CHARACTER offsets to seek() — the
+    first em dash in an admiral's thoughts desynchronized the cursor and the
+    live stream silently died for the rest of the match. A NEW GAME truncates
+    the file — reset the cursor or the tail sticks past EOF forever and games
+    2+ never stream home."""
+    try:
+        if os.path.getsize(path) < ofs:
+            ofs = 0
+        with open(path, "rb") as fh:
+            fh.seek(ofs)
+            chunk = fh.read()
+        nl = chunk.rfind(b"\n")
+        if nl >= 0:
+            return [json.loads(x) for x in chunk[:nl].split(b"\n") if x], \
+                ofs + nl + 1
+    except (FileNotFoundError, ValueError):
+        pass
+    return [], ofs
+
+
 def tail_live(path, stop, outdir):
+    """Tail the base live.jsonl home — plus every live-<lane>.jsonl a
+    parallel tournament's matchup lanes write (each posts with its lane name,
+    so the flagship keeps one stream per lane). Commands ride EVERY response;
+    planting pause.flag twice is harmless."""
     ofs = 0
+    lanes = {}                             # lane file path -> offset
     quiet = 0
     while not stop.is_set() or os.path.exists(path):
-        lines = []
-        try:
-            # a NEW GAME truncates the file — reset the cursor or the tail
-            # sticks past EOF forever and games 2+ never stream home
-            # (field bug: game 1 was relabeled as game 2 in the live stream)
-            if os.path.getsize(path) < ofs:
-                ofs = 0
-            # BYTES throughout: the old text-mode tail fed CHARACTER offsets
-            # to seek() — the first em dash in an admiral's thoughts
-            # desynchronized the cursor and the live stream silently died
-            # for the rest of the match
-            with open(path, "rb") as fh:
-                fh.seek(ofs)
-                chunk = fh.read()
-            nl = chunk.rfind(b"\n")
-            if nl >= 0:
-                lines = [json.loads(x) for x in chunk[:nl].split(b"\n") if x]
-                ofs += nl + 1
-        except FileNotFoundError:
-            pass
-        except ValueError:
-            pass
+        sent = False
+        lines, ofs = _drain(path, ofs)
         resp = {}
         if lines:
-            quiet = 0
+            sent = True
             _, resp = post("live", {"lines": lines})
-        else:
+        try:
+            for fn in os.listdir(outdir):
+                if fn.startswith("live-") and fn.endswith(".jsonl"):
+                    lanes.setdefault(os.path.join(outdir, fn), 0)
+        except OSError:
+            pass
+        for lp, lofs in list(lanes.items()):
+            llines, lanes[lp] = _drain(lp, lofs)
+            if llines:
+                sent = True
+                lane = os.path.basename(lp)[len("live-"):-len(".jsonl")]
+                _, r2 = post("live", {"lines": llines, "lane": lane})
+                resp = r2 or resp
+        if not sent:
             quiet += 1
             if quiet >= 5:                # heartbeat: poll for commands anyway
                 quiet = 0
                 _, resp = post("live", {"lines": []})
+        else:
+            quiet = 0
         if resp.get("command") == "pause":
             # the runner freezes at its next window boundary + exits 75
             with open(os.path.join(outdir, "pause.flag"), "w") as fh:

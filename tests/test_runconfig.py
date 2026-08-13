@@ -171,6 +171,45 @@ with tempfile.TemporaryDirectory() as td:
        f"map_set off: each bracket slot derives its own seeds ({seeds})")
 ok("map_set" in rc.config_schema.SCHEMA["tournament"],
    "map_set rides the schema (dash + agents see it)")
+
+# --- per-lane live streams (#127): parallel matchup lanes each write their
+# own live-<matchup>.jsonl (the old behavior was dark — sharing the one
+# live.jsonl corrupted it); sequential keeps the classic base stream ---
+PARL = {"mode": "tournament", "seed": 31,
+        "participants": ["merchant", "corsair", "admiralty"],
+        "scenario": {"max_ticks": 300, "warmup": False, "clock_jitter": 0},
+        "series": {},
+        "tournament": {"format": "round_robin", "players_per_match": 2,
+                       "games_per_match": 1, "memo_policy": "none",
+                       "parallel": 3, "stagger_s": 0}}
+with tempfile.TemporaryDirectory() as td:
+    os.environ["FLOTILLA_LIVE"] = os.path.join(td, "live.jsonl")
+    try:
+        rc.run_tournament(PARL, rc.section_defaults("admirals"),
+                          rc.merged_scenario(PARL), td)
+    finally:
+        os.environ.pop("FLOTILLA_LIVE", None)
+    lanes = sorted(f for f in os.listdir(td)
+                   if f.startswith("live-") and f.endswith(".jsonl"))
+    ok(len(lanes) == 3,
+       f"every parallel lane streams to its own file ({lanes})")
+    hdr = json.loads(open(os.path.join(td, lanes[0])).readline())
+    ok(hdr.get("header") and hdr.get("lane") == lanes[0][5:-6],
+       f"the lane stream's header names its matchup ({hdr.get('lane')})")
+    ok(not os.path.exists(os.path.join(td, "live.jsonl")),
+       "parallel lanes never touch the base stream")
+with tempfile.TemporaryDirectory() as td:
+    cfg = json.loads(json.dumps(PARL))
+    cfg["tournament"]["parallel"] = 1
+    os.environ["FLOTILLA_LIVE"] = os.path.join(td, "live.jsonl")
+    try:
+        rc.run_tournament(cfg, rc.section_defaults("admirals"),
+                          rc.merged_scenario(cfg), td)
+    finally:
+        os.environ.pop("FLOTILLA_LIVE", None)
+    ok(os.path.exists(os.path.join(td, "live.jsonl"))
+       and not any(f.startswith("live-") for f in os.listdir(td)),
+       "a sequential tournament keeps the classic base stream only")
 # persistent memos force sequential (shared mind can't be parallelized)
 with tempfile.TemporaryDirectory() as td:
     cfg = {"mode": "tournament", "seed": 11,

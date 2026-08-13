@@ -122,6 +122,27 @@ st, lv = req(f"/api/live/{jid}?ofs=0")
 ok(len(lv["lines"]) == 3 and lv["lines"][0].get("game") == 2,
    f"stream truncated at the LAST header ({[l for l in lv['lines']]})")
 
+# per-lane streams (#127): a "lane" post keeps its own live-<lane>.jsonl —
+# one stream per parallel tournament matchup, never interleaved with the base
+st, r = req(f"/api/aux/{jid}/live",
+            {"lines": [{"header": True, "lane": "m03_A_v_B", "meta": {}},
+                       {"t": 5}], "lane": "m03_A_v_B"},
+            headers={"X-Aux-Token": bearer})
+ok(st == 200, "lane live callback accepted")
+st, lv = req(f"/api/live/{jid}?ofs=0&lane=m03_A_v_B")
+ok(st == 200 and len(lv["lines"]) == 2
+   and lv["lines"][0].get("lane") == "m03_A_v_B" and lv.get("lane") == "m03_A_v_B",
+   "the lane stream serves through /api/live?lane=")
+st, lv = req(f"/api/live/{jid}?ofs=0")
+ok(len(lv["lines"]) == 3 and "m03_A_v_B" in (lv.get("lanes") or []),
+   "the base stream is untouched and advertises the live lanes")
+st, r = req(f"/api/aux/{jid}/live",
+            {"lines": [{"t": 6}], "lane": "../evil"},
+            headers={"X-Aux-Token": bearer})
+ok(st == 400, "a lane outside mNN_ form is refused on write")
+st, lv = req(f"/api/live/{jid}?ofs=0&lane=..%2Fevil")
+ok(st == 400, "…and on read")
+
 # game callback files the replay + partial series
 rp = {"meta": {"seed": 1}, "frames": [{"t": 0}], "decisions": [],
       "result": {"names": {"0": "A", "1": "B"}, "scores": {"0": 1, "1": 2},

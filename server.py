@@ -2472,12 +2472,29 @@ class H(BaseHTTPRequestHandler):
                 ofs = max(0, int((qs.get("ofs") or ["0"])[0]))
             except ValueError:
                 ofs = 0
-            livef = os.path.join(LIB, "_work", jid, "live.jsonl")
+            # ?lane=mNN_... follows one parallel tournament matchup's own
+            # stream instead of the base one
+            lane = _san((qs.get("lane") or [""])[0])
+            if lane and not re.match(r"m\d+_[A-Za-z0-9_-]+$", lane):
+                return self._send(400, {"error": "bad lane"})
+            wd = os.path.join(LIB, "_work", jid)
+            livef = os.path.join(wd, f"live-{lane}.jsonl" if lane
+                                 else "live.jsonl")
             out = {"ofs": ofs, "lines": [], "state": j["state"],
                    "name": j["name"], "mode": j["mode"],
                    "games_expected": j.get("games_expected"),
                    "game": min(j["games_done"] + (0 if j["state"] != "running" else 1),
                                j.get("games_expected", 1))}
+            if lane:
+                out["lane"] = lane
+            try:                          # which lanes have live streams NOW
+                out["lanes"] = sorted(
+                    fn[len("live-"):-len(".jsonl")]
+                    for fn in os.listdir(wd)
+                    if fn.startswith("live-") and fn.endswith(".jsonl")
+                    and os.path.getsize(os.path.join(wd, fn)) > 0)
+            except OSError:
+                pass
             try:                          # renamed series show their real title
                 with open(os.path.join(LIB, "series", j["name"],
                                        "series.json")) as fh:
@@ -2749,9 +2766,15 @@ class H(BaseHTTPRequestHandler):
                     # a header line = a NEW game: truncate first, matching the
                     # local runner's per-game file semantics. The old blind
                     # append accumulated every game — a cold Live click then
-                    # replayed the whole series mislabeled as the current game
+                    # replayed the whole series mislabeled as the current game.
+                    # A "lane" names a parallel tournament matchup: its lines
+                    # keep their own live-<lane>.jsonl, one stream per lane
                     lines = d.get("lines", [])
-                    lp = os.path.join(wd, "live.jsonl")
+                    lane = _san(str(d.get("lane") or ""))
+                    if lane and not re.match(r"m\d+_[A-Za-z0-9_-]+$", lane):
+                        return self._send(400, {"error": "bad lane"})
+                    lp = os.path.join(wd, f"live-{lane}.jsonl" if lane
+                                      else "live.jsonl")
                     # truncate at the LAST header in the batch: one chunk can
                     # carry two game boundaries (a short game ending fast),
                     # and breaking at the first re-created exactly the
@@ -2771,7 +2794,10 @@ class H(BaseHTTPRequestHandler):
                             for line in lines:
                                 fh.write(json.dumps(
                                     line, separators=(",", ":")) + "\n")
-                    _showcase_job_live(j, rec, d.get("lines") or [])
+                    if not lane:
+                        # the public showcase carries ONE live stream (the
+                        # base); mirroring every lane would interleave them
+                        _showcase_job_live(j, rec, d.get("lines") or [])
                     cmd = None
                     with AUX_LOCK:
                         if rec.get("command"):

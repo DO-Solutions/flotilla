@@ -181,9 +181,16 @@ def play_game(named_bots, seed, scenario, outpath, memos_after=None, prov=None,
                                            for n, b in named_bots])
     else:
         eng = resume_engine                # a thawed checkpoint mid-game
-    # parallel tournament matchups pass live=False: they'd otherwise all
-    # truncate + interleave the ONE live.jsonl and corrupt the stream
-    live_path = os.environ.get("FLOTILLA_LIVE") if live else None
+    # live is a bool (the base stream) or a LANE NAME string: a parallel
+    # tournament matchup gets its own live-<lane>.jsonl beside the base
+    # file — the old behavior was live=False for parallel lanes, because
+    # sharing the ONE live.jsonl truncated + interleaved the stream
+    base_live = os.environ.get("FLOTILLA_LIVE")
+    if isinstance(live, str) and base_live:
+        live_path = os.path.join(os.path.dirname(base_live),
+                                 f"live-{live}.jsonl")
+    else:
+        live_path = base_live if live else None
     lfh = None
     if live_path:
         # live stream: header + one JSON line per window ("w" truncates = new game;
@@ -198,6 +205,8 @@ def play_game(named_bots, seed, scenario, outpath, memos_after=None, prov=None,
         if game_no:                        # viewers title 'game X of Y' off the
             hdr["game"] = game_no          # header itself — the poller's guess
             hdr["total"] = games_total     # mislabeled the between-games gap
+        if isinstance(live, str):
+            hdr["lane"] = live             # which matchup this stream watches
         lfh.write(json.dumps(hdr, separators=(",", ":")) + "\n")
         lfh.flush()
         if resume_engine is not None:
@@ -621,7 +630,10 @@ def run_tournament(cfg, adm, scenario, outdir, prov=None, resume_ck=None):
             rows = run_series(named, _matchup_seed(midx), scenario, ser, mdir,
                               prov=dict(prov or {},
                                         matchup=os.path.basename(mdir)),
-                              live=not fresh,
+                              # parallel lanes stream to their OWN
+                              # live-<matchup>.jsonl; sequential keeps the
+                              # base stream (the classic Live view)
+                              live=os.path.basename(mdir) if fresh else True,
                               pause_check=lane_pc, pause_mode="raise")
         except SeriesPaused as sp:
             pause_evt.set()                # siblings freeze at their next window
@@ -666,7 +678,7 @@ def run_tournament(cfg, adm, scenario, outdir, prov=None, resume_ck=None):
                       "game": len(lane.get("rows") or []) + 1, "engine": None}
         try:
             rows = run_series(named, seed_l, scen_l, ser, mdir, prov=prov_l,
-                              live=not lane.get("fresh"),
+                              live=lane["dir"] if lane.get("fresh") else True,
                               pause_check=lane_pc, pause_mode="raise",
                               resume=resume)
         except SeriesPaused as sp:

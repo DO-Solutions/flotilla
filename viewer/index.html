@@ -3691,12 +3691,13 @@ function liveAppend(p) {
   $("scrub").max = Math.max(0, rp.frames.length - 1);
   updateRealRate();
 }
-async function livePoll(jid) {
+async function livePoll(jid, lane) {
   let ofs = 0, game = 0;
+  const laneQ = lane ? "&lane=" + encodeURIComponent(lane) : "";
   while (true) {
     let d = null;
     try {
-      d = await (await fetch(`api/live/${jid}?ofs=${ofs}`)).json();
+      d = await (await fetch(`api/live/${jid}?ofs=${ofs}${laneQ}`)).json();
     } catch (e) { /* transient */ }
     if (d) {
       if (d.ofs < ofs) { ofs = 0; continue; }        // truncated: fresh game
@@ -3886,7 +3887,9 @@ if (qs.get("livejsonl")) {
   }
 } else if (qs.get("live")) {
   $("meta").textContent = "⛵ LIVE — waiting for the match to raise sail…";
-  livePoll(qs.get("live"));            // a job id, not a URL — regex-gated server-side
+  // ids, not URLs — both regex-gated server-side. &lane= follows one
+  // parallel tournament matchup's own stream
+  livePoll(qs.get("live"), qs.get("lane"));
 } else if (qs.get("replay") && !sameOriginPath(qs.get("replay"))) {
   $("meta").textContent = "refusing an off-site replay source";
 } else if (qs.get("replay")) {
