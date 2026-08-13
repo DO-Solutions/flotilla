@@ -2597,7 +2597,8 @@ class Engine(SimBase):
         return dict(header=True, meta=dict(
             seed=self.seed, w=self.W, h=self.H, tick_hz=TICKS_PER_SEC,
             frame_every=FRAME_EVERY, window=self.cfg["window"],
-            presets={**PRESETS, **self.shared_designs}, harbor_r=self.hr,
+            presets={**PRESETS, "cutter": dict(CUTTER),
+                               **self.shared_designs}, harbor_r=self.hr,
             ship_cost=self.cfg["ship_cost"], scenario=self.scenario,
             config={k: v for k, v in self.cfg.items() if k != "rules"},
             islands=sorted(self.blocked) or None,
@@ -2644,7 +2645,8 @@ class Engine(SimBase):
                       # live_header already stamped it correctly
                       replay_version=3, intern=intern,
                       frame_every=FRAME_EVERY, window=self.cfg["window"],
-                      presets={**PRESETS, **self.shared_designs}, harbor_r=self.hr,
+                      presets={**PRESETS, "cutter": dict(CUTTER),
+                               **self.shared_designs}, harbor_r=self.hr,
                       ship_cost=self.cfg["ship_cost"], scenario=self.scenario,
                       config={k: v for k, v in self.cfg.items() if k != "rules"},
                       islands=sorted(self.blocked) or None,

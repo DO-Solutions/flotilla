@@ -22,8 +22,12 @@ import time
 import urllib.request
 
 HERE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-JOB = json.load(open("/etc/flotilla-aux/job.json"))
-BASE = JOB["callback_base"].rstrip("/")
+try:
+    JOB = json.load(open("/etc/flotilla-aux/job.json"))
+    BASE = JOB["callback_base"].rstrip("/")
+except OSError:                            # tests import this module on boxes
+    JOB, BASE = None, ""                   # that are not workers; main() needs
+                                           # the real job.json and says so
 
 
 def _headers(ctype="application/json"):
@@ -159,6 +163,9 @@ def tail_live(path, stop, outdir):
 
 
 def main():
+    if JOB is None:
+        raise SystemExit("no /etc/flotilla-aux/job.json — this is the worker "
+                         "entrypoint; it only runs on a provisioned auxiliary")
     outdir = "/tmp/flotilla-aux-out"
     os.makedirs(outdir, exist_ok=True)
     cfg = dict(JOB["config"])

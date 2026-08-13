@@ -36,12 +36,21 @@ index. Agent-first API (all JSON; same schema as the GUI):
   POST /api/import           raw replay JSON in the body (?name=...) -> library
 
 Run lifecycle:
-  POST /api/pause            {"id"} -> checkpoint + freeze a match/series (not
-                             tournaments); the run resumes exactly where it froze
+  POST /api/pause            {"id"} -> checkpoint + freeze a match/series/
+                             tournament; the run resumes exactly where it froze
   POST /api/resume           {"id"[, "where":"local"]} -> thaw a paused run
   GET  /api/live/<job>       tail the live stream: {lines, ofs, state, game,
-                             games_expected, stream_game, more}. Poll with the
-                             returned ofs; `more`=true means drain again now
+                             games_expected, stream_game, lanes, more}. Poll
+                             with the returned ofs; `more`=true means drain
+                             again now; ?lane=mNN_... follows one parallel
+                             tournament matchup's own stream
+  POST /api/aux-rotation     {"rotate_enabled"?, "max_age_h"?} -> worker
+                             rotation settings (library/rotation.json; applies
+                             to LIVE jobs)
+  POST /api/reconcile-tournament  {"name"[, "write", "import":[{"from_series",
+                             "to"}]]} -> rebuild a bracket's records from the
+                             replays on disk; import folds a re-run series
+                             back into its matchup slot first
   A model-API OUTAGE auto-pauses a run and a background prober resumes it every
   FLOTILLA_AUTORESUME_S (default 600) once the API recovers — local runs too.
 

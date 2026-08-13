@@ -11,7 +11,7 @@ alone, without reading Flotilla's code.
 
 | Subsystem | Module | What it does |
 |---|---|---|
-| Run orchestration | `keelspring/runner.py` | matches, best-of-N series with between-game memos, round-robin/elimination tournaments (parallel lanes), JSON checkpoints + pause/resume, the run-config CLI |
+| Run orchestration | `keelspring/runner.py` | matches, best-of-N series with between-game memos, round-robin/elimination tournaments (parallel lanes, shared map sets, per-lane live streams), two-level JSON checkpoints + pause/resume (fail-safe: an unhonorable pause is refused, never a dead run), the run-config CLI |
 | The run loop | `keelspring/sim.py` (`SimBase`) | decision windows (lockstep or catch-up pipelined), per-window forensics, lost-window visibility, API-outage auto-pause, live streaming flush |
 | LLM admirals | `keelspring/llm.py` | one fairness-locked decision layer over any OpenAI-compatible API: same prompt shape and token budget per model, cost telemetry, thinking-budget handling |
 | Provider ladder | `keelspring/providers.py` | multi-provider fallback with automatic demotion (429/timeout/5xx) and canary recovery |

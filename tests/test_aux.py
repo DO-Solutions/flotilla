@@ -461,6 +461,32 @@ with server.AUX_LOCK:
                              "config": {}, "command": None}
 
 
+# ---- the worker's tail machinery is import-safe and byte-correct (wringer
+# 2026-08-13: aux_agent loaded job.json at import, so none of this had tests)
+import aux_agent                             # noqa: E402
+ok(aux_agent.JOB is None,
+   "aux_agent imports without a worker job.json (JOB None, main() refuses)")
+_td = os.path.join(TMP, "tail")
+os.makedirs(_td, exist_ok=True)
+_lp = os.path.join(_td, "live-m01_A_v_B.jsonl")
+with open(_lp, "w") as fh:
+    fh.write('{"a":1}\n{"b":2}\n{"part')
+lines, ofs = aux_agent._drain(_lp, 0)
+ok(lines == [{"a": 1}, {"b": 2}] and ofs == len('{"a":1}\n{"b":2}\n'),
+   "_drain returns complete lines only, cursor parked at the last newline")
+with open(_lp, "a") as fh:
+    fh.write('":3}\n')
+lines, ofs = aux_agent._drain(_lp, ofs)
+ok(lines == [{"part": 3}],
+   "the finished partial line arrives whole on the next drain")
+with open(_lp, "w") as fh:                   # truncation = a NEW game
+    fh.write('{"header":true}\n')
+lines, ofs = aux_agent._drain(_lp, ofs)
+ok(lines == [{"header": True}],
+   "a truncated (new-game) file resets the cursor instead of sticking at EOF")
+ok(os.path.basename(_lp)[len("live-"):-len(".jsonl")] == "m01_A_v_B",
+   "the lane name round-trips through the stream filename")
+
 _real_sleep = time.sleep
 
 
