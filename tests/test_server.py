@@ -844,6 +844,42 @@ st, r = req("/api/reconcile-tournament", {"name": "recon-t"})
 ok(st == 200 and not r["changes"], "reconciled bracket is a no-op rerun")
 st, r = req("/api/reconcile-tournament", {"name": "no-such-t"})
 ok(st == 404, "unknown tournament -> 404")
+
+# --- import: fold an externally re-run series back into its matchup slot
+# (replacing stale partials), then reconcile — the cup-2 m03/m10 stitch ---
+ldir = os.path.join(TMP, "series", "relane")
+os.makedirs(ldir, exist_ok=True)
+m2 = os.path.join(tdir, "m02_A_v_C")
+os.makedirs(m2, exist_ok=True)
+_fake_replay(os.path.join(m2, "g1.json"), 90, 9, 1, 0)     # stale dead-lane
+_fake_replay(os.path.join(ldir, "g1.json"), 21, 1, 7, 1)   # the re-run: B(=C
+_fake_replay(os.path.join(ldir, "g2.json"), 22, 2, 8, 1)   # here) sweeps 2-0
+st, r = req("/api/reconcile-tournament",
+            {"name": "recon-t",
+             "import": [{"from_series": "relane", "to": "m02_A_v_C"}]})
+ok(st == 200 and any("would import 2 games" in c for c in r["changes"]),
+   "import dry-run announces itself and copies nothing")
+ok(os.path.getsize(os.path.join(m2, "g1.json"))
+   and json.load(open(os.path.join(m2, "g1.json")))["meta"]["seed"] == 90,
+   "dry-run left the stale partial in place")
+st, r = req("/api/reconcile-tournament",
+            {"name": "recon-t", "write": True,
+             "import": [{"from_series": "relane", "to": "m02_A_v_C"}]})
+ok(st == 200 and r["written"], "import + write applies")
+tj3 = json.load(open(os.path.join(tdir, "tournament.json")))
+m02 = next(m for m in tj3["matchups"] if m["dir"] == "m02_A_v_C")
+ok(len(m02["games"]) == 2 and m02["games"][0]["seed"] == 21
+   and m02["winner"] == "B",
+   "the re-run lane replaced the stale partial and decided the matchup")
+st, r = req("/api/reconcile-tournament",
+            {"name": "recon-t", "write": True,
+             "import": [{"from_series": "relane", "to": "../evil"}]})
+ok(st == 400, "an import target outside mNN_ form is refused")
+st, r = req("/api/reconcile-tournament",
+            {"name": "recon-t",
+             "import": [{"from_series": "no-such-lane", "to": "m02_A_v_C"}]})
+ok(st == 404, "an unknown source series -> 404")
+shutil.rmtree(ldir, ignore_errors=True)
 shutil.rmtree(tdir, ignore_errors=True)
 
 # --- public-mirror redaction: designer feedback + final memos never reach

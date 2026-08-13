@@ -2928,13 +2928,48 @@ class H(BaseHTTPRequestHandler):
                 # rebuild a bracket's records from the replays on disk — the
                 # recovery tool for a worker that died with games shipped but
                 # records unlanded (cup-2's m03/m08). Dry-run unless write.
+                # "import" folds an externally re-run SERIES back into its
+                # matchup slot first (replacing any stale partial games), so a
+                # lane finished outside the tournament still reaches the
+                # bracket — cup-2's m03/m10 were re-run exactly that way.
                 d = json.loads(body)
                 tname = _san(str(d.get("name", "")))
                 tdir = os.path.join(LIB, "tournaments", tname)
                 if not tname or not os.path.isdir(tdir):
                     return self._send(404, {"error": "no such tournament"})
+                imported = []
+                for imp in d.get("import") or []:
+                    src = _san(str(imp.get("from_series", "")))
+                    dst = _san(str(imp.get("to", "")))
+                    sdir = os.path.join(LIB, "series", src)
+                    if not (src and os.path.isdir(sdir)):
+                        return self._send(404, {"error": f"no such series: "
+                                                f"{src}"})
+                    if not re.match(r"m\d+_[A-Za-z0-9_-]+$", dst):
+                        return self._send(400, {"error": "import target must "
+                                                "be a matchup dir (mNN_...)"})
+                    games = sorted(g for g in os.listdir(sdir)
+                                   if re.match(r"g\d+\.json$", g))
+                    if not games:
+                        return self._send(400, {"error": f"{src} has no "
+                                                "games to import"})
+                    if not d.get("write"):
+                        imported.append(f"{dst}: would import {len(games)} "
+                                        f"games from series {src}")
+                        continue
+                    mdir = os.path.join(tdir, dst)
+                    os.makedirs(mdir, exist_ok=True)
+                    for stale in os.listdir(mdir):   # the re-run REPLACES the
+                        if re.match(r"g\d+\.json$", stale):  # dead lane's
+                            os.remove(os.path.join(mdir, stale))  # partials
+                    for g in games:
+                        shutil.copy2(os.path.join(sdir, g),
+                                     os.path.join(mdir, g))
+                    imported.append(f"{dst}: imported {len(games)} games "
+                                    f"from series {src}")
                 import reconcile_tournament
                 new, changes = reconcile_tournament.reconcile(tdir)
+                changes = imported + changes
                 if d.get("write") and changes:
                     tmp = os.path.join(tdir, "tournament.json.tmp")
                     with open(tmp, "w") as fh:

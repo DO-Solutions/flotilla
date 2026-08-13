@@ -733,6 +733,9 @@ function renderSeriesTable() {
                  name: ("🏆 " + t.name).toLowerCase(),
                  games: subs.reduce((a, s) => a + s.games.length, 0),
                  players,
+                 // a tournament STARTS with its earliest matchup
+                 started: subs.map(s => s.started_utc).filter(Boolean)
+                   .sort()[0] || "",
                  latest: subs.map(s => seriesLatest(s)).sort().at(-1) || "" });
   }
   for (const m of solo) {
@@ -812,7 +815,7 @@ function renderSeriesTable() {
         `<td>${it.games}${t.cancelled ? ' <span class="warn">✖ ended early</span>'
           : t.partial ? ' <span class="warn">⏳ live</span>' : ""}</td>` +
         `<td class="dim">${esc(it.players)}</td>` +
-        `<td class="dim"></td>` +
+        `<td class="dim">${esc(it.started)}</td>` +
         `<td class="dim">${esc(it.latest)}</td>` +
         `<td><div class="rowbtns">` +
         pubBtns({ tournament: t.name }, `data-tournament="${esc(t.name)}"`) +
