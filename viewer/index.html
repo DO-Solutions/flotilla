@@ -486,7 +486,11 @@ const SKIN_DEFAULT = {
            // shapes: {role: [[x,y],...]} replaces that role's silhouette with
            // a custom polygon (front at +x, units = the built-ins' canvas px;
            // key "custom" covers operator-designed classes). null = stock.
-           shapes: null },
+           shapes: null,
+           // sprites: {role: "data:image..."} draws an actual image as the
+           // ship (front at +x, aspect-fit to the stock footprint; extra key
+           // "flagship" replaces the anchor square). Wins over shapes.
+           sprites: null },
   fx: { fog: "rgba(3,8,18,.62)", tail: 14 },
   minimap: { bg: "#0a1b33", frame: "#24304d", cursor: "#e6edf7" },
 };
@@ -569,10 +573,28 @@ function cleanTexture(v) {
           /^data:image\/(png|jpe?g|webp|gif);base64,[A-Za-z0-9+/=]+$/.test(v))
     ? v : "";
 }
+function cleanSprites(v) {
+  // {role: dataURI} — every value passes the texture rule; a bad entry is
+  // dropped alone, an empty result means stock rendering (null)
+  if (typeof v !== "object" || !v || Array.isArray(v)) return null;
+  const out = {};
+  for (const [k, uri] of Object.entries(v)) {
+    if (!/^[A-Za-z0-9_-]{1,24}$/.test(k)) continue;
+    const c = cleanTexture(uri);
+    if (c) out[k] = c;
+  }
+  return Object.keys(out).length ? out : null;
+}
 // loaded texture patterns, rebuilt whenever a skin lands. Pattern creation
 // is async (Image decode) — the sea/land fills fall back to their colors
 // until onload repaints.
 const SKIN_PATTERNS = { land: null, sea: null };
+const SKIN_SPRITES = {};                 // role -> loaded Image
+function _skinRepaint() {
+  try {                                  // repaint a paused view
+    if (typeof S !== "undefined" && S.rp && !S.playing) seek(S.fi);
+  } catch (e) { }
+}
 function loadSkinPatterns() {
   for (const sec of ["land", "sea"]) {
     SKIN_PATTERNS[sec] = null;
@@ -582,11 +604,17 @@ function loadSkinPatterns() {
     img.onload = () => {
       try { SKIN_PATTERNS[sec] = ctx.createPattern(img, "repeat"); }
       catch (e) { SKIN_PATTERNS[sec] = null; }
-      try {                              // repaint a paused view
-        if (typeof S !== "undefined" && S.rp && !S.playing) seek(S.fi);
-      } catch (e) { }
+      _skinRepaint();
     };
     img.src = src;
+  }
+  for (const k of Object.keys(SKIN_SPRITES)) delete SKIN_SPRITES[k];
+  for (const [role, uri] of Object.entries(SKIN.ships.sprites || {})) {
+    const img = new Image();
+    img.onload = () => {
+      if (img.naturalWidth) { SKIN_SPRITES[role] = img; _skinRepaint(); }
+    };
+    img.src = uri;
   }
 }
 function applySkin(spec) {
@@ -604,6 +632,7 @@ function applySkin(spec) {
       for (const [k, v] of Object.entries(vals)) {
         if (!(k in base[sec])) continue;
         if (k === "shapes") { base.ships.shapes = cleanShapes(v); continue; }
+        if (k === "sprites") { base.ships.sprites = cleanSprites(v); continue; }
         if (k === "texture") { base[sec][k] = cleanTexture(v); continue; }
         base[sec][k] = typeof base[sec][k] === "number" ? +v || base[sec][k]
                                                         : String(v);
@@ -2278,6 +2307,22 @@ function drawShipShape(preset, color, cargo, sel, stats) {
   // tangent in port) — a shape that violates this will visibly sail sideways.
   // Silhouettes (P0.2): traders round + swelling with cargo (prow wedge marks the
   // front), frigates angular with bright ring + gun studs, raiders darts, scouts slivers.
+  // A skin can hand a role an actual IMAGE (ships.sprites): drawn front at
+  // +x, aspect-fit to the stock hull footprint, in the caller's rotated +
+  // scaled frame. Until the image decodes (or if it never does) the shape/
+  // stock silhouette below keeps rendering — never a blank ship.
+  if (SKIN.ships.sprites) {
+    const key = preset === "trader" ? "trawler" : preset;
+    const img = SKIN_SPRITES[key]
+      || (!SHAPE_BUILTIN.has(preset) ? SKIN_SPRITES.custom : null);
+    if (img) {
+      const w2 = 20;
+      const h2 = Math.max(4, Math.min(24,
+        w2 * img.naturalHeight / img.naturalWidth));
+      ctx.drawImage(img, -w2 / 2, -h2 / 2, w2, h2);
+      return;
+    }
+  }
   // A skin can replace any role's silhouette wholesale (ships.shapes): the
   // custom polygon is drawn as a plain color fill — role detail overlays
   // (booms, studs, masts) stay with the stock shapes they were drawn for.
@@ -2597,9 +2642,18 @@ function draw(fr, prev, alpha) {
     ctx.beginPath(); ctx.arc(x, y, (hr + .5) * Math.min(cw, ch), 0, 7); ctx.stroke();
     ctx.setLineDash([]);
     if (alive) {
-      ctx.fillStyle = COLORS[f.id % COLORS.length];
-      ctx.fillRect(x - 7, y - 7, 14, 14);
-      ctx.strokeStyle = withA(SKIN.ships.detail, "33"); ctx.strokeRect(x - 7, y - 7, 14, 14);
+      const fimg = SKIN_SPRITES.flagship;
+      if (fimg) {                        // skin flagship image, unrotated
+        const fw = 22;
+        const fh = Math.max(6, Math.min(26,
+          fw * fimg.naturalHeight / fimg.naturalWidth));
+        ctx.drawImage(fimg, x - fw / 2, y - fh / 2, fw, fh);
+      } else {
+        ctx.fillStyle = COLORS[f.id % COLORS.length];
+        ctx.fillRect(x - 7, y - 7, 14, 14);
+        ctx.strokeStyle = withA(SKIN.ships.detail, "33");
+        ctx.strokeRect(x - 7, y - 7, 14, 14);
+      }
       if (S.showNames) {
         ctx.font = "bold 10px sans-serif";
         ctx.lineWidth = 3; ctx.strokeStyle = withA(SKIN.ships.hullInk, "cc");

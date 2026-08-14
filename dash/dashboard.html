@@ -2702,7 +2702,7 @@ const SK_DEFAULT = {
   nodes: { fish: "rgba(45,212,191,.5)", wreck: "rgba(251,191,36,.55)",
            label: "#e6edf7aa" },
   ships: { hullInk: "#0b1220", detail: "#ffffff", laden: "#ffd76a",
-           ghost: "#9fb0c866", scale: 1, shapes: null },
+           ghost: "#9fb0c866", scale: 1, shapes: null, sprites: null },
   fx: { fog: "rgba(3,8,18,.62)", tail: 14 },
   minimap: { bg: "#0a1b33", frame: "#24304d", cursor: "#e6edf7" },
 };
@@ -2729,6 +2729,16 @@ function skCleanTexture(v) {            // mirrors the viewer's cleanTexture
           /^data:image\/(png|jpe?g|webp|gif);base64,[A-Za-z0-9+/=]+$/.test(v))
     ? v : "";
 }
+function skCleanSprites(v) {            // mirrors the viewer's cleanSprites
+  if (typeof v !== "object" || !v || Array.isArray(v)) return null;
+  const out = {};
+  for (const [k, uri] of Object.entries(v)) {
+    if (!/^[A-Za-z0-9_-]{1,24}$/.test(k)) continue;
+    const c = skCleanTexture(uri);
+    if (c) out[k] = c;
+  }
+  return Object.keys(out).length ? out : null;
+}
 
 function skMerge(spec) {
   const base = JSON.parse(JSON.stringify(SK_DEFAULT));
@@ -2745,6 +2755,7 @@ function skMerge(spec) {
       for (const [k, v] of Object.entries(vals)) {
         if (!(k in base[sec])) continue;
         if (k === "shapes") { base.ships.shapes = skCleanShapes(v); continue; }
+        if (k === "sprites") { base.ships.sprites = skCleanSprites(v); continue; }
         if (k === "texture") { base[sec][k] = skCleanTexture(v); continue; }
         base[sec][k] = typeof base[sec][k] === "number" ? +v || base[sec][k]
                                                         : String(v);
@@ -2756,10 +2767,10 @@ function skMerge(spec) {
   return base;
 }
 
-// texture tiles for the preview panes: data URIs decode async, so cache the
-// images and repaint when one lands
+// texture tiles + sprites for the preview panes: data URIs decode async, so
+// cache the images and repaint when one lands
 const skTexCache = {};
-function skPattern(ctx, src) {
+function skImage(src) {
   if (!src) return null;
   let img = skTexCache[src];
   if (!img) {
@@ -2767,7 +2778,11 @@ function skPattern(ctx, src) {
     img.onload = skPreview;
     img.src = src;
   }
-  if (!img.complete || !img.naturalWidth) return null;
+  return (img.complete && img.naturalWidth) ? img : null;
+}
+function skPattern(ctx, src) {
+  const img = skImage(src);
+  if (!img) return null;
   try { return ctx.createPattern(img, "repeat"); } catch (e) { return null; }
 }
 
@@ -2812,6 +2827,19 @@ function skPane(ctx, x0, w, h, sk, label) {
       ctx.beginPath(); ctx.moveTo(-s, 0);
       ctx.lineTo(-s - sk.fx.tail * 1.5, 0); ctx.stroke();
       ctx.globalAlpha = 1;
+    }
+    const uri = opts.role && sk.ships.sprites && sk.ships.sprites[opts.role];
+    if (uri) {                          // sprite image (stock until it decodes)
+      const img = skImage(uri);
+      if (img) {
+        const w2 = 2.6 * s;
+        const h2 = Math.max(4, Math.min(3 * s,
+          w2 * img.naturalHeight / img.naturalWidth));
+        if (opts.ghost) ctx.globalAlpha = .45;
+        ctx.drawImage(img, -w2 / 2, -h2 / 2, w2, h2);
+        ctx.globalAlpha = 1;
+        ctx.restore(); return;
+      }
     }
     ctx.fillStyle = opts.ghost ? sk.ships.ghost : col;
     const shp = opts.role && sk.ships.shapes && sk.ships.shapes[opts.role];

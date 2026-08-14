@@ -45,6 +45,7 @@ but only hex gets those alphas).
 | `ships` | `ghost` | stale contact silhouettes |
 | `ships` | `scale` | silhouette size multiplier (0.25–4; hit-testing is position-based, so purely visual) |
 | `ships` | `shapes` | custom silhouettes per role — see "Shapes & textures" below |
+| `ships` | `sprites` | actual images per role (+ `flagship`) — see "Shapes & textures" below |
 | `fx` | `fog` | the POV fog wash |
 | `fx` | `tail` | wake/trail length in frames (0–60) |
 | `minimap` | `bg` `frame` `cursor` | the overview map |
@@ -72,6 +73,29 @@ stock silhouette:
 - A custom shape is a plain color-fill silhouette — the stock roles' detail
   overlays (net booms, gun studs, masts) are drawn only on the shapes they
   were designed for. Laden/selection markers still apply.
+
+**Ship sprites.** `ships.sprites` maps a role to an actual **image** drawn
+as the ship — a photo crop, pixel art, a logo boat:
+
+```json
+{ "ships": { "sprites": {
+    "trawler": "data:image/png;base64,....",
+    "flagship": "data:image/png;base64,...."
+} } }
+```
+
+- Same role keys as `shapes`, plus **`flagship`** (replaces the anchored
+  command square; drawn unrotated) and `custom` for operator classes. A
+  sprite wins over a shape for the same role.
+- Author the image **pointing right** (front at +x) with a transparent
+  background; it's aspect-fit to the stock hull footprint (~20 px long,
+  height capped) and `ships.scale` multiplies on top. Roughly 2:1
+  landscape crops look best; the source can be any size.
+- Same self-contained rule as textures: `data:image` URIs only, ≤200 KB
+  each. Until an image decodes — or if it's malformed — the role keeps its
+  shape/stock silhouette, so ships are never invisible. Note fleet COLOR no
+  longer marks a sprited role's ships — pick imagery that stays readable
+  with up to eight fleets on screen (wakes and charts stay fleet-colored).
 
 **Textures.** `sea.texture` and `land.texture` take a **`data:image` URI**
 (png/jpeg/webp/gif, base64) that tiles as a repeating pattern — the sea one
