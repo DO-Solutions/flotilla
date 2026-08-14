@@ -491,9 +491,10 @@ fetch("api/site-skin").then(r => r.ok ? r.json() : null).then(d => {
     🎨 settings. Appearance only — a skin never touches the match or the data.</div>
   <div style="margin-bottom:8px; display:flex; gap:8px; flex-wrap:wrap; align-items:center">
     <label title="Paints THIS SERVER's dashboard and tournament pages from the
-      chosen skin's ui block — one JSON rebrands the whole site. Viewers are
-      unaffected (they still resolve ?skin= / their own picker). Stock = the
-      built-in palette.">🖌 site chrome</label>
+      chosen skin's ui block — one JSON rebrands the whole site. Viewers with
+      no skin of their own adopt it too, so the whole install matches; a
+      ?skin= link or a viewer's own 🎨 pick still wins. Stock = the built-in
+      palette.">🖌 site chrome</label>
     <select class="sname" id="siteskin" style="width:170px"></select>
     <a class="btn btn-dl" id="siteskinsave" href="#">Apply</a>
     <span id="siteskinmsg" class="dim"></span>

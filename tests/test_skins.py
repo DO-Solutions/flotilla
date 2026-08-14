@@ -108,6 +108,62 @@ else:
     ok(all(r == stock for r in radii[6:]),
        "cleanRadius refuses junk and CSS payloads, falling back to the default")
 
+    # ---- initSkin's resolution chain, including the site-skin fallback ----
+    # The fallback must be LAST: a branded install's viewer should match its
+    # dashboard, but it may never override a shared ?skin= link or a viewer's
+    # own picker choice — including an explicit choice of stock.
+    INIT_JS = extract(src, "initSkin") or ""
+    if not INIT_JS:                              # extract() handles `function
+        at = src.find("(function initSkin()")    # name(` / `const name` — this
+        end = src.find("\n})();", at)            # one is an IIFE
+        INIT_JS = src[at:end + len("\n})();")] if at >= 0 else ""
+    ok(bool(INIT_JS), "initSkin is still extractable from the viewer")
+
+    # NB: initSkin is an IIFE — it must only ever run INSIDE run(), where the
+    # stubs exist. Prepending it at top level executes it against nothing.
+    CHAIN = r"""
+function run(sc) {
+  let applied = null;
+  const qs = { get: k => (sc.qs || {})[k] ?? null };
+  const SKINS = { flotilla: {}, daylight: {name:"daylight"},
+                  kraken: {name:"kraken"} };
+  const SKIN_NAME_RE = /^[A-Za-z0-9_-]{1,24}$/;
+  const localStorage = { getItem: () => sc.saved };
+  const applySkin = s => { applied = s.name || "flotilla"; };
+  const fetchImportedSkin = n => { applied = "imported:" + n; };
+  const sameOriginPath = () => false;
+  const location = { protocol: "https:" };
+  const window = {};
+  const fetch = () => Promise.resolve(
+    { ok: true, json: () => Promise.resolve({ name: sc.server }) });
+  eval(INIT_SRC);
+  return new Promise(r => setImmediate(() => r(applied)));
+}
+"""
+    cases = [
+        ({"saved": None, "server": "kraken"}, "kraken",
+         "no choice anywhere -> the viewer adopts the server's site skin"),
+        ({"saved": None, "server": ""}, None,
+         "no site skin set -> the viewer stays stock"),
+        ({"saved": "flotilla", "server": "kraken"}, None,
+         "an EXPLICIT pick of stock is not overridden by the site skin"),
+        ({"saved": "daylight", "server": "kraken"}, "daylight",
+         "a viewer's own picker choice beats the site skin"),
+        ({"saved": None, "server": "kraken", "qs": {"skin": "daylight"}},
+         "daylight", "a shared ?skin= link beats the site skin"),
+        ({"saved": None, "server": "brandy"}, "imported:brandy",
+         "a site skin naming an IMPORTED skin resolves through the server"),
+        ({"saved": None, "server": "../evil"}, None,
+         "a malformed site-skin name is refused, not fetched"),
+    ]
+    js = ("const INIT_SRC = " + json.dumps(INIT_JS) + ";\n" + CHAIN
+          + "(async () => { const out = []; for (const sc of "
+          + json.dumps([c[0] for c in cases])
+          + ") out.push(await run(sc)); console.log(JSON.stringify(out)); })();")
+    got = node_json(js)
+    for (sc, want, msg), g in zip(cases, got):
+        ok(g == want, msg + f" (got {g!r})")
+
 # ---- resolution rules the dash pages depend on ----
 ok(server._site_skin_name() == "",
    "no site skin configured -> empty name (pages keep their own stylesheet)")

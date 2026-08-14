@@ -4333,7 +4333,7 @@ const qs = new URLSearchParams(location.search);
 const BROADCAST = document.documentElement.classList.contains("broadcast");
 // skin resolution (see the SKIN block up top for the guarantees)
 (function initSkin() {
-  let spec = null, imported = null;
+  let spec = null, imported = null, siteDefault = false;
   try {
     if (window.FLOTILLA_SKIN) spec = window.FLOTILLA_SKIN;
     else if (qs.get("skin")) {
@@ -4345,11 +4345,27 @@ const BROADCAST = document.documentElement.classList.contains("broadcast");
       if (saved && saved !== "flotilla") {
         spec = SKINS[saved] || null;
         if (!spec) imported = saved;
+      } else if (saved === null) {
+        // No explicit choice anywhere: adopt the SERVER's default skin, so a
+        // branded install's viewer matches its dashboard instead of sitting
+        // stock. Deliberately last in the chain — ?skin=, an embedded bundle
+        // skin, and a viewer's OWN saved picker choice all still win, so
+        // shared links and personal preferences are never overridden.
+        // `saved === null` (never chose) not `!saved`: someone who explicitly
+        // picked stock has "flotilla" saved and keeps it.
+        siteDefault = true;
       }
     }
   } catch (e) { spec = null; }
   if (spec) applySkin(spec);
   else if (imported) fetchImportedSkin(imported);
+  else if (siteDefault && location.protocol.startsWith("http")) {
+    fetch("api/site-skin").then(r => r.ok ? r.json() : null).then(d => {
+      const n = d && d.name;
+      if (!n || !SKIN_NAME_RE.test(n)) return;
+      if (SKINS[n]) applySkin(SKINS[n]); else fetchImportedSkin(n);
+    }).catch(() => {});                 // bundles / file:// have no server
+  }
   const su = qs.get("skinurl");
   if (su && sameOriginPath(su)) {
     fetch(su).then(r => r.json()).then(applySkin).catch(() => {});

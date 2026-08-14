@@ -18,6 +18,12 @@ In priority order:
    ignored, same rule as replay sources).
 4. The 🎨 picker in the viewer's settings tab (persisted per browser) —
    built-ins plus every imported skin.
+5. **The server's site skin** (`/api/site-skin`, see "Skinning the site
+   chrome") — last resort, so a branded install's viewer matches its dashboard
+   instead of sitting stock. Only applies when the viewer has NO choice of its
+   own: a `?skin=`, a bundle's embedded skin, or any saved picker choice wins,
+   including an explicit pick of stock. Off origin (bundles, `file://`) there
+   is no server to ask and the default stands.
 
 Works identically on live views and replays — the skin layer sits above the
 renderer, not inside it.
