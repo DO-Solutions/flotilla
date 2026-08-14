@@ -6,11 +6,23 @@
 <title>Flotilla — tournament</title>
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns=%27http://www.w3.org/2000/svg%27 viewBox=%270 0 100 100%27%3E%3Ctext y=%27.9em%27 font-size=%2790%27%3E%F0%9F%8F%86%3C/text%3E%3C/svg%3E">
 <style>
+  /* see viewer/index.html for the why — SIL OFL 1.1, assets/fonts/OFL.txt */
+  @font-face {
+    font-family: "Special Gothic";
+    src: url("fonts/SpecialGothic-400.woff2") format("woff2");
+    font-weight: 400; font-display: swap;
+  }
+  @font-face {
+    font-family: "Special Gothic";
+    src: url("fonts/SpecialGothic-500.woff2") format("woff2");
+    font-weight: 500 700; font-display: swap;
+  }
   :root { --bg:#0b1220; --card:#111a2e; --line:#1e2a44; --ink:#e6edf7;
-          --dim:#8b9bb8; --accent:#0069ff; }
+          --dim:#8b9bb8; --accent:#0069ff; --radius:10px; }
   * { box-sizing:border-box; margin:0; }
   body { background:var(--bg); color:var(--ink);
-         font:14px/1.5 "Segoe UI",system-ui,sans-serif; padding:18px; }
+         font:14px/1.5 "Segoe UI",system-ui,sans-serif; padding:18px;
+         font-family:var(--font,"Segoe UI",system-ui,sans-serif); }
   header { display:flex; align-items:baseline; gap:14px; margin-bottom:6px;
            flex-wrap:wrap; }
   h1 { font-size:22px; letter-spacing:3px; } h1 span { color:var(--accent); }
@@ -32,7 +44,7 @@
          justify-content:space-around; min-width:280px; }
   .rlabel { color:var(--dim); font-size:11px; text-transform:uppercase;
             letter-spacing:2px; text-align:center; }
-  .mu { background:var(--card); border:1px solid var(--line); border-radius:10px;
+  .mu { background:var(--card); border:1px solid var(--line); border-radius:var(--radius);
         padding:10px 12px; }
   .mu.liv { border-color:#c2243288; }
   .mu .hd { display:flex; justify-content:space-between; align-items:center;
@@ -45,13 +57,29 @@
   .gchips { display:flex; flex-wrap:wrap; gap:5px; margin-top:8px; }
   .gchips .btn { padding:1px 9px; }
   .mu .foot { margin-top:8px; }
-  .card { background:var(--card); border:1px solid var(--line); border-radius:10px;
+  .card { background:var(--card); border:1px solid var(--line); border-radius:var(--radius);
           padding:12px 14px; margin-bottom:14px; max-width:560px; }
   table { width:100%; border-collapse:collapse; font-size:13px; }
   th,td { text-align:left; padding:5px 10px 5px 0; border-bottom:1px solid var(--line); }
   th { color:var(--dim); font-weight:500; font-size:12px; }
   .shield { filter:blur(6px); user-select:none; pointer-events:none; }
 </style>
+<script>
+// Site chrome follows the operator's default skin (Server tab -> Viewer skins).
+// These pages have no skin registry and no canvas, so the server hands back ONE
+// fully-resolved ui block and we paint the same vars the viewer chrome uses.
+// No default skin set => we touch nothing and the stylesheet above stands, so
+// the stock look is byte-identical to before this existed. Palette only: a skin
+// never reaches match data (see docs/SKINS.md).
+fetch("api/site-skin").then(r => r.ok ? r.json() : null).then(d => {
+  if (!d || !d.name || !d.ui) return;
+  const rt = document.documentElement.style;
+  for (const [k, v] of Object.entries(d.ui)) {
+    if (typeof v === "string" && v) rt.setProperty("--" + k, v);
+  }
+}).catch(() => {});
+</script>
+
 </head>
 <body>
 <header>

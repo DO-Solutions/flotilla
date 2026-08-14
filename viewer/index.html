@@ -5,10 +5,45 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Flotilla — replay</title>
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns=%27http://www.w3.org/2000/svg%27 viewBox=%270 0 100 100%27%3E%3Ctext y=%27.9em%27 font-size=%2790%27%3E%E2%9B%B5%3C/text%3E%3C/svg%3E">
+<script>
+// ---- broadcast mode: player.html?broadcast=1 ----
+// A clean feed to point a capture tool at: map only, full-bleed 16:9, zero
+// chrome. Composes with every other param (?replay=, ?livejsonl=, ?skin=…) —
+// the feed is a VIEW of a normal session, not a separate player, so keyboard
+// transport keeps working and an operator can pause/seek invisibly.
+// This runs in <head>, before <body> exists and before the first paint: the
+// class goes on <html> so no frame of scrubber can ever reach the recording.
+(function () {
+  var v = new URLSearchParams(location.search).get("broadcast");
+  if (v === "1" || v === "") document.documentElement.classList.add("broadcast");
+})();
+</script>
 <style>
+  /* Bundled webfaces. A skin's ui.font can only name what the page already
+     loads, so anything shipped here becomes nameable by every skin; anything
+     else falls through the stack. Served from /fonts (ROUTES_STATIC) — off
+     origin (a bundle, a showcase mirror) these 404 and font-display:swap just
+     keeps the fallback, which is why a ui.font should always end in a real
+     stack. Special Gothic: SIL OFL 1.1, see assets/fonts/OFL.txt. */
+  @font-face {
+    font-family: "Special Gothic";
+    src: url("fonts/SpecialGothic-400.woff2") format("woff2");
+    font-weight: 400;
+    font-display: swap;
+  }
+  @font-face {
+    font-family: "Special Gothic";
+    src: url("fonts/SpecialGothic-500.woff2") format("woff2");
+    font-weight: 500 700;               /* 500 covers bold: no synthetic bold */
+    font-display: swap;
+  }
   :root {
     --bg: #0b1220; --card: #111a2e; --line: #1e2a44; --ink: #e6edf7;
-    --dim: #8b9bb8; --accent: #0069ff;
+    --dim: #8b9bb8; --accent: #0069ff; --radius: 10px;
+    /* the sea gradient, mirrored out of the skin so CSS letterboxing (theater
+       + broadcast) can paint open water in the skin's own colors instead of a
+       hardcoded blue that a rebrand would leave behind */
+    --sea-top: #0a1b33; --sea-bottom: #081426;
   }
   * { box-sizing: border-box; margin: 0; }
   body { background: var(--bg); color: var(--ink);
@@ -22,7 +57,7 @@
   #meta .mdim { color: var(--dim); font-weight: 400; }
   #layout { display: flex; gap: 12px; flex-wrap: wrap; }
   #seawrap { flex: 1 1 640px; min-width: 320px; background: var(--card);
-             border: 1px solid var(--line); border-radius: 10px; padding: 8px; }
+             border: 1px solid var(--line); border-radius: var(--radius); padding: 8px; }
   canvas#sea { width: 100%; display: block; border-radius: 6px; background: #0a1b33;
                cursor: crosshair; }
   #legend { display: flex; gap: 14px; flex-wrap: wrap; margin-top: 6px;
@@ -36,12 +71,34 @@
   /* the chart is FIXED 16:9; on wider/taller displays the spill-over is
      painted as open sea (the map's own gradient), not dead black bars — the
      water reaches the screen edges even where the chart can't */
-  body.fsmode #seawrap { position: fixed; inset: 0; height: 100dvh; z-index: 5;
+  body.fsmode #seawrap, .broadcast #seawrap {
+    position: fixed; inset: 0; height: 100dvh; z-index: 5;
     margin: 0; border: 0; border-radius: 0; padding: 0;
-    background: linear-gradient(#0a1b33, #081426);
+    background: linear-gradient(var(--sea-top), var(--sea-bottom));
     display: flex; align-items: center; justify-content: center; }
-  body.fsmode canvas#sea { width: min(100vw, calc(100dvh * 16 / 9));
+  body.fsmode canvas#sea, .broadcast canvas#sea {
+    width: min(100vw, calc(100dvh * 16 / 9));
     max-height: 100dvh; border-radius: 0; }
+  /* ---- broadcast: a clean feed for OBS (player.html?broadcast=1) ----
+     Every driver control is GONE, not faded — a screen recording bakes UI
+     into every frame and no editor can remove it in post. Nothing here wakes
+     on hover either, so a stray mouse can't appear mid-take, and the scrubber
+     stays hidden so the capture never spoils how long the match has left.
+     Keyboard shortcuts keep working (the handlers are on document), so an
+     operator can pause and seek invisibly. */
+  /* the class rides <html>, set by a tiny head script BEFORE first paint —
+     on <body> the browser can paint one frame of chrome first, and a single
+     frame of scrubber is exactly what a recording bakes in forever */
+  html.broadcast, .broadcast body { overflow: hidden; cursor: none; }
+  .broadcast header, .broadcast #legend, .broadcast #bar,
+  .broadcast #side, .broadcast #drop, .broadcast #fsmap,
+  .broadcast #fsexit, .broadcast #intro, .broadcast #statspanel,
+  .broadcast #seriespage,
+  /* #becalmed lives ON the map ("waiting for the admirals"); it is operator
+     telemetry, not part of the match, so it stays out of the feed */
+  .broadcast #becalmed { display: none !important; }
+  .broadcast #layout { display: block; }
+  .broadcast body { padding: 0; }
   body.fsmode #side { position: fixed; right: 0; top: 0; bottom: 0; z-index: 7;
     width: 330px; overflow-y: auto; background: #0b1220e6; padding: 10px;
     backdrop-filter: blur(4px);
@@ -85,7 +142,7 @@
   ::-webkit-scrollbar-thumb { background: #2c3c5f; border-radius: 5px;
                               border: 2px solid #0a1424; }
   ::-webkit-scrollbar-thumb:hover { background: #3d5680; }
-  .fleet { background: var(--card); border: 1px solid var(--line); border-radius: 10px;
+  .fleet { background: var(--card); border: 1px solid var(--line); border-radius: var(--radius);
            padding: 8px 10px; border-left: 4px solid var(--fc, var(--accent));
            cursor: pointer; }
   .fleet.xp { border-color: var(--fc, var(--accent)); }
@@ -135,7 +192,7 @@
   .hull { height: 4px; background: #24304d; border-radius: 2px; margin-top: 6px; }
   .hull i { display: block; height: 100%; border-radius: 2px; background: var(--fc); }
   .dead { opacity: .45; }
-  #inspector { background: var(--card); border: 1px solid var(--accent); border-radius: 10px;
+  #inspector { background: var(--card); border: 1px solid var(--accent); border-radius: var(--radius);
                padding: 8px 10px 8px 26px; font-size: 12px; display: none;
                position: relative; }
   #inspector.on { display: block; }
@@ -175,7 +232,7 @@
     line-height: 1.45; white-space: pre-wrap; word-break: break-word;
     max-height: 300px; overflow-y: auto; color: #b7e3ff; }
   #bar { margin-bottom: 10px; background: var(--card); border: 1px solid var(--line);
-         border-radius: 10px; padding: 8px 12px; }
+         border-radius: var(--radius); padding: 8px 12px; }
   #timeline { width: 100%; height: 34px; display: block; cursor: pointer; margin-bottom: 6px; }
   #controls { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
   #transport { display: flex; gap: 10px; align-items: center;
@@ -200,10 +257,10 @@
   #introfleets .mdl { color: var(--dim); font-size: 13px; margin-left: 8px; }
   #introhint { margin-top: 20px; color: var(--dim); font-size: 12px; }
   #chartcard { background: var(--card); border: 1px solid var(--line);
-               border-radius: 10px; padding: 8px 10px; }
+               border-radius: var(--radius); padding: 8px 10px; }
   #chartcard h3 { font-size: 13px; color: var(--accent); margin-bottom: 4px; }
   #settingspanel { background: var(--card); border: 1px solid var(--line);
-                   border-radius: 10px; padding: 8px 10px; max-height: 560px;
+                   border-radius: var(--radius); padding: 8px 10px; max-height: 560px;
                    overflow-y: auto; font-size: 12px; }
   #settingspanel h3 { font-size: 13px; color: var(--accent); margin: 6px 0 3px; }
   /* the match configuration as collapsed-by-default sections */
@@ -224,7 +281,7 @@
   #fsmap:hover { border-color: var(--accent); }
   body.fsmode #fsmap { display: none; }   /* the ✕ overlay owns fullscreen */
   #helppanel { background: var(--card); border: 1px solid var(--line);
-    border-radius: 10px; padding: 10px 12px; font-size: 12px;
+    border-radius: var(--radius); padding: 10px 12px; font-size: 12px;
     max-height: 78vh; overflow-y: auto; }
   #helppanel h3 { font-size: 13px; color: var(--accent); margin: 8px 0 3px; }
   #helppanel p, #helppanel li { color: #c9d6ea; line-height: 1.45; }
@@ -243,7 +300,7 @@
                line-height:1.4; white-space:normal; text-align:left; }
   .info:hover .pop { display:block; }
   #logcard { background: var(--card); border: 1px solid var(--line);
-             border-radius: 10px; padding: 8px 10px; margin-top: 8px;
+             border-radius: var(--radius); padding: 8px 10px; margin-top: 8px;
              max-height: 300px; overflow-y: auto; }
   #logcard h3, #chartcard h3 { font-size: 13px; color: var(--accent); margin-bottom: 4px; }
   #gamelog { max-height: 44vh; overflow-y: auto; }
@@ -281,7 +338,7 @@
   .spcards { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px,1fr));
     gap: 12px; margin: 8px 0 26px; }
   .spcard { background: var(--card); border: 1px solid var(--line);
-    border-radius: 10px; padding: 12px 14px; }
+    border-radius: var(--radius); padding: 12px 14px; }
   .spcard .big { font-size: 24px; font-weight: 700; }
   .spcard .lbl { font-size: 12px; color: var(--dim); margin-top: 2px; }
   .spsec { font-size: 15px; color: var(--accent); margin: 22px 0 8px;
@@ -304,7 +361,7 @@
     overflow-wrap: anywhere; }
   #gamelog b { color: var(--ink); }
   #parleyfeed { background: var(--card); border: 1px solid var(--line);
-                border-radius: 10px; padding: 8px 10px;
+                border-radius: var(--radius); padding: 8px 10px;
                 max-height: calc(100vh - 230px); overflow-y: auto; }
   #parleyfeed .msg { font-size: 12px; margin-bottom: 7px; color: #d5deee;
                      border-left: 3px solid var(--mc, var(--dim));
@@ -313,7 +370,7 @@
   #parleyfeed .hd b { font-weight: 600; }
   #parleyfeed .empty { color: var(--dim); font-size: 12px; }
   #memofeed { background: var(--card); border: 1px solid var(--line);
-              border-radius: 10px; padding: 8px 10px; max-height: 560px;
+              border-radius: var(--radius); padding: 8px 10px; max-height: 560px;
               overflow-y: auto; }
   #memofeed .memo { font-size: 12px; margin-bottom: 10px; white-space: pre-wrap;
                     color: #d5deee; border-left: 3px solid var(--mc, var(--dim));
@@ -486,7 +543,8 @@ const SKIN_DEFAULT = {
   name: "flotilla",
   ui: { bg: "#0b1220", card: "#111a2e", line: "#1e2a44", ink: "#e6edf7",
         dim: "#8b9bb8", accent: "#0069ff",
-        font: "" },                     // "" = the stylesheet's own stack
+        font: "",                       // "" = the stylesheet's own stack
+        radius: "10px" },               // corner rounding; a bare number = px
   fleet: ["#4da3ff", "#ff5d5d", "#a3e635", "#c084fc",
           "#f472b6", "#3fe06a", "#6140e6", "#ca40e6"],
   sea: { top: "#0a1b33", bottom: "#081426",
@@ -541,6 +599,29 @@ const SKINS = {
     fx: { fog: "rgba(190,205,225,.55)" },
     minimap: { bg: "#bcd6ee", frame: "#8fa8c4", cursor: "#16233a" },
   },
+  // Generated from the DigitalOcean design-token pipeline — every hex resolves
+  // to a canonical kraken primitive, and the fleet palette is validated for
+  // pairwise distinctness (min ΔE00 16.8) and WCAG >=3:1 against the sea. Do
+  // NOT hand-edit: upstream regenerates this file when brand colors move.
+  // ui.font names Special Gothic, which the @font-face block above ships.
+  kraken: {
+    name: "kraken",
+    ui: { bg: "#000f0f", card: "#081f1e", line: "#1f403e", ink: "#e5eceb",
+          dim: "#6f908c", accent: "#1aafbf",
+          font: "'Special Gothic', 'Helvetica Neue', Arial, sans-serif" },
+    fleet: ["#30cbd9", "#b17ea4", "#e2b658", "#5a9c63",
+            "#5198fb", "#d8907e", "#9ba3a4", "#a6b559"],
+    sea: { top: "#081f1e", bottom: "#000a0a",
+           gridMinor: "#e5eceb0f", gridMajor: "#e5eceb1f",
+           label: "#9db5b266" },
+    land: { fill: "#3d401f", halo: "#58421d21",
+            coast: { sand: "#b0843a", shallow: "#104b5554", smooth: 2 } },
+    nodes: { fish: "#4d716e8c", wreck: "#84632c80", label: "#9db5b2ab" },
+    ships: { hullInk: "#000f0f", detail: "#e5eceb", laden: "#deab4f",
+             ghost: "#6f908c66" },
+    fx: { fog: "#000a0a99" },
+    minimap: { bg: "#000f0f", frame: "#325553", cursor: "#30cbd9" },
+  },
 };
 let SKIN = JSON.parse(JSON.stringify(SKIN_DEFAULT));
 // skins imported via the dashboard's Server-tab importer live server-side at
@@ -593,6 +674,16 @@ function cleanShapes(v) {
     if (cl.length >= 3) out[k] = cl;
   }
   return Object.keys(out).length ? out : null;
+}
+function cleanRadius(v) {
+  // ui.radius: a bare number is px (0-64, the useful range for cards/buttons);
+  // a string may carry its own unit but is length-capped and refused if it
+  // contains anything that could break out of the declaration. A rejected
+  // value keeps the default — a skin never gets to inject CSS here.
+  if (typeof v === "number" && isFinite(v))
+    return Math.min(64, Math.max(0, v)) + "px";
+  const s = String(v || "").trim();
+  return /^[0-9.]{1,6}(px|rem|em|%)?$/.test(s) ? s : SKIN_DEFAULT.ui.radius;
 }
 function cleanTexture(v) {
   // textures are SELF-CONTAINED images only: a data:image URI, capped. A
@@ -797,6 +888,13 @@ function applySkin(spec) {
           continue;
         }
         if (k === "texture") { base[sec][k] = cleanTexture(v); continue; }
+        if (sec === "ui" && k === "radius") {
+          // appearance only — a bare number means px, a string carries its own
+          // unit. Anything else keeps the default rather than emitting a var
+          // the browser will drop on the floor.
+          base.ui.radius = cleanRadius(v);
+          continue;
+        }
         base[sec][k] = typeof base[sec][k] === "number" ? +v || base[sec][k]
                                                         : String(v);
       }
@@ -813,6 +911,10 @@ function applySkin(spec) {
   for (const [k, v] of Object.entries(SKIN.ui)) {
     if (k !== "font") rt.setProperty("--" + k, v);
   }
+  // the CSS letterbox (theater + broadcast) paints open water around a 16:9
+  // chart, so it needs the sea colors the canvas is using
+  rt.setProperty("--sea-top", SKIN.sea.top);
+  rt.setProperty("--sea-bottom", SKIN.sea.bottom);
   document.body.style.fontFamily = SKIN.ui.font || "";
 }
 const S = { rp: null, fi: 0, playing: false, last: 0, acc: 0, sel: null,
@@ -1466,6 +1568,10 @@ parley messages${S.rp && S.rp.meta.regions
 to jump.</li>
 <li><b>🔍 zoom</b> — mouse wheel zooms at the cursor (up to 8×), drag pans,
 double-click resets.</li>
+<li><b>📺 broadcast</b> — add <code>&amp;broadcast=1</code> to this page's URL
+for a capture-ready feed: map only, full-bleed 16:9, no header, scrubber or
+panels baked into the recording (and no scrubber spoiling how much match is
+left). Keyboard transport still works, so you can pause and seek off-camera.</li>
 <li><b>reading the shapes</b> — custom hulls are drawn FROM their stats:
 length = speed, beam = hold, side gun mounts at 2+ guns (an odd count adds a
 bow chaser), a doubled bright outline = armor 3+, a mast dot = lookout 2+.
@@ -4222,6 +4328,9 @@ if (!location.protocol.startsWith("http")) {   // downloaded bundle: no home to 
   $("homelink").removeAttribute("href");
 }
 const qs = new URLSearchParams(location.search);
+// broadcast mode is switched on by the head script (before first paint); this
+// is just the read-side flag for behavior that can't be expressed in CSS.
+const BROADCAST = document.documentElement.classList.contains("broadcast");
 // skin resolution (see the SKIN block up top for the guarantees)
 (function initSkin() {
   let spec = null, imported = null;

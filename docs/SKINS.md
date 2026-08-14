@@ -31,7 +31,8 @@ but only hex gets those alphas).
 | section | field | what it paints |
 |---|---|---|
 | `ui` | `bg` `card` `line` `ink` `dim` `accent` | the DOM chrome (panels, cards, buttons, text) via CSS variables |
-| `ui` | `font` | font-family for the whole page ("" = the stock stack) |
+| `ui` | `font` | font-family for the whole page ("" = the stock stack). A skin can only NAME a face the page already loads — see "Fonts" below |
+| `ui` | `radius` | corner rounding on cards and panels. A bare number means px (clamped 0–64); a string may carry its own unit (`"6px"`, `"0.5rem"`, `"50%"`). Appearance only — no layout moves |
 | `fleet` | `[8 colors]` | the fleet palette — ships, trails, charts, names, everywhere a fleet is colored |
 | `sea` | `top` `bottom` | the water gradient |
 | `sea` | `gridMinor` `gridMajor` `label` | coordinate grid + on-map name labels |
@@ -210,3 +211,41 @@ files), and when it's final either leave it imported, promote it into the
 registry, or ship it as a `window.FLOTILLA_SKIN` injection in an exported
 bundle. Fleet colors need clear pairwise contrast against the sea and each
 other — eight admirals can be on screen at once.
+
+## Fonts
+
+`ui.font` is a plain CSS `font-family` value, so it can only name a face the
+page **already loads**. Naming a font nobody shipped silently falls through to
+the next entry in the stack — which is why every `ui.font` should end in a real
+fallback (`… , 'Helvetica Neue', Arial, sans-serif`).
+
+The pages ship the webfaces in `assets/fonts/`, declared with `@font-face` in
+`viewer/index.html` and both `dash/*.html`, and served from `/fonts/…`
+(`ROUTES_STATIC`). Today that is **Special Gothic** 400 + 500, which the
+`kraken` skin names. To add another face: drop the `woff2` in `assets/fonts/`,
+add its `ROUTES_STATIC` entries, add an `@font-face` block to those three
+pages, and include the license text alongside the files if it needs one.
+
+Off-origin — an exported bundle, a public showcase mirror — those URLs 404 and
+`font-display: swap` simply keeps the fallback. A skin never *breaks* off
+origin; it just renders in the next font down.
+
+## Skinning the site chrome
+
+The dashboard and tournament pages are not the viewer: no registry, no canvas,
+no `?skin=`. They ask `GET /api/site-skin` for **one fully-resolved `ui`
+block** and paint the same CSS variables. Set it in the Server tab (🎨 Viewer
+skins → 🖌 site chrome), or:
+
+```
+curl -X POST -d '{"name":"kraken"}' http://<host>/api/site-skin   # "" = stock
+```
+
+Only the `ui` section is used — the sea, ships and land tokens have nothing to
+paint outside the viewer. With no site skin set the pages keep their own
+stylesheet untouched, so the stock look is unchanged.
+
+Because the built-in `ui` blocks now exist on both sides of a language
+boundary (`viewer/index.html`'s `SKINS` and `server.py`'s `SKIN_BUILTIN_UI`),
+`tests/test_skins.py` reads the real registry out of the viewer and fails if
+the two ever drift. Change both, or the suite will tell you.
