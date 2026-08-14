@@ -2410,6 +2410,7 @@ class H(BaseHTTPRequestHandler):
             with JOBS_LOCK:
                 q = sum(1 for j in JOBS if j["state"] in ("queued", "running"))
             return self._send(200, {"ok": True, "version": VERSION, "queue": q,
+                                    "graceful": bool(os.environ.get("LISTEN_FDS")),
                                     "showcase": _showcase_cfg() is not None,
                                     "aux": _aux_cfg() is not None,
                                     "runs_enabled": bool(os.environ.get("DO_INFERENCE_KEY"))
