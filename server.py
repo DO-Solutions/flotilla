@@ -107,6 +107,10 @@ import time
 import urllib.parse
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
+_BOOT_T0 = time.time()                  # module load → serve latency, reported
+_BOOT_MS = None                         # by /api/health (the flagship has no
+_BOOT_RESTARTS = ""                     # SSH lane, so it must self-report)
+
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(HERE, "sim"))
 sys.path.insert(0, os.path.join(HERE, "scripts"))
@@ -2411,6 +2415,8 @@ class H(BaseHTTPRequestHandler):
                 q = sum(1 for j in JOBS if j["state"] in ("queued", "running"))
             return self._send(200, {"ok": True, "version": VERSION, "queue": q,
                                     "graceful": bool(os.environ.get("LISTEN_FDS")),
+                                    "boot_ms": _BOOT_MS,
+                                    "n_restarts": _BOOT_RESTARTS,
                                     "showcase": _showcase_cfg() is not None,
                                     "aux": _aux_cfg() is not None,
                                     "runs_enabled": bool(os.environ.get("DO_INFERENCE_KEY"))
@@ -3736,6 +3742,15 @@ def main():
         _ensure_socket_activation(BIND)
         srv = ThreadingHTTPServer((host, int(port)), H)
         print(f"Flotilla server {VERSION} — http://{BIND}  (library: {LIB})")
+    global _BOOT_MS, _BOOT_RESTARTS
+    _BOOT_MS = int((time.time() - _BOOT_T0) * 1000)
+    try:                                # crash-retry loops show up here
+        r = subprocess.run(["systemctl", "show", "flotilla-server",
+                            "-p", "NRestarts"], capture_output=True,
+                           text=True, timeout=5)
+        _BOOT_RESTARTS = r.stdout.strip()
+    except Exception:
+        pass
     srv.serve_forever()
 
 
