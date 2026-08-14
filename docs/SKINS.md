@@ -46,6 +46,7 @@ but only hex gets those alphas).
 | `ships` | `scale` | silhouette size multiplier (0.25–4; hit-testing is position-based, so purely visual) |
 | `ships` | `shapes` | custom silhouettes per role — see "Shapes & textures" below |
 | `ships` | `sprites` | actual images per role (+ `flagship`) — see "Shapes & textures" below |
+| `ships` | `spriteKey` | the team-color key (default `#ff00ff`): sprite pixels in shades of this color render in the fleet color; `""` disables |
 | `fx` | `fog` | the POV fog wash |
 | `fx` | `tail` | wake/trail length in frames (0–60) |
 | `minimap` | `bg` `frame` `cursor` | the overview map |
@@ -93,9 +94,18 @@ as the ship — a photo crop, pixel art, a logo boat:
   landscape crops look best; the source can be any size.
 - Same self-contained rule as textures: `data:image` URIs only, ≤200 KB
   each. Until an image decodes — or if it's malformed — the role keeps its
-  shape/stock silhouette, so ships are never invisible. Note fleet COLOR no
-  longer marks a sprited role's ships — pick imagery that stays readable
-  with up to eight fleets on screen (wakes and charts stay fleet-colored).
+  shape/stock silhouette, so ships are never invisible.
+- **Team color via `spriteKey`** — one PNG serves all eight fleets. Paint
+  the parts that should carry the team color in shades of the key color
+  (default magenta `#ff00ff`): every pixel whose color *proportions* match
+  the key is re-rendered in the fleet color at that pixel's own brightness,
+  so light magenta becomes light team color and dark magenta a dark shade —
+  shading survives the swap. Matching is proportion-based rather than
+  exact, which keeps anti-aliased edges from leaving magenta fringes;
+  pixels that drifted too far off the key stay untouched. If the artwork
+  legitimately uses magenta, point `spriteKey` at another 6-digit hex or
+  set it `""` to disable. The flagship sprite is keyed with its fleet's
+  color too. (Wakes, charts, and labels stay fleet-colored regardless.)
 
 **Textures.** `sea.texture` and `land.texture` take a **`data:image` URI**
 (png/jpeg/webp/gif, base64) that tiles as a repeating pattern — the sea one
