@@ -36,6 +36,7 @@ but only hex gets those alphas).
 | `sea` | `top` `bottom` | the water gradient |
 | `sea` | `gridMinor` `gridMajor` `label` | coordinate grid + on-map name labels |
 | `sea` | `texture` | a `data:image` URI tiled over the gradient (put the wash's alpha in the tile itself) |
+| `sea` | `decor` | sprites scattered on open water (waves, gulls, whales) — same shape as `land.decor`, density capped at 0.1, seeded per replay |
 | `land` | `fill` `halo` | islands |
 | `land` | `texture` | a `data:image` URI tiling the island fill (the reef halo keeps its color) |
 | `land` | `tileset` | blob16 autotile sheet — real coastlined islands from 16 tiles (see "Island dressing") |
@@ -146,6 +147,13 @@ distinguished (that's the 47-tile variant — not supported yet).
 Placement is deterministic from the replay seed, so every viewer of the
 same game sees the same palm in the same place. `density` is the fraction
 of interior cells decorated (0–0.5).
+
+**Diagonal smoothing** (always on for tiles and plain cells) — a water cell
+whose two perpendicular land neighbors share a land diagonal gets a
+quarter-round land fillet in that corner, so staircase coastlines bleed
+gently into the sea instead of stepping. The fillet never exceeds half a
+cell — the drawn shore stays honest about where ships can sail. (`coast`
+mode achieves the same rounding through its curve smoothing.)
 
 **Procedural coastline** (`land.coast`) — organic islands with **no assets
 at all**: the blocky outline is traced and corner-smoothed, filled with

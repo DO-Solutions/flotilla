@@ -492,7 +492,8 @@ const SKIN_DEFAULT = {
   sea: { top: "#0a1b33", bottom: "#081426",
          gridMinor: "#e6edf70b", gridMajor: "#e6edf71c",
          label: "#e6edf755",
-         texture: "" },                 // data:image URI, tiled OVER the gradient
+         texture: "",                   // data:image URI, tiled OVER the gradient
+         decor: null },                 // {sprites, density<=0.1} on open water
   land: { fill: "#8a774e", halo: "#c9b47f22",
           texture: "",                  // data:image URI, tiles the island fill
           // richer land dressing, in precedence order (see docs/SKINS.md):
@@ -609,14 +610,16 @@ function cleanTileset(v) {
   if (!src || (v.layout || "blob16") !== "blob16") return null;
   return { src, layout: "blob16" };
 }
-function cleanDecor(v) {
-  // {sprites: [dataURI...], density: 0-0.5} — up to 8 sprites scattered on
-  // interior land cells, deterministically seeded so every viewer sees the
-  // same island. A bad sprite is dropped alone.
+function cleanDecor(v, maxDensity) {
+  // {sprites: [dataURI...], density} — up to 8 sprites scattered
+  // deterministically (interior land cells, or open water for sea.decor,
+  // whose cap is far lower — the ocean is most of the map). A bad sprite
+  // is dropped alone.
   if (typeof v !== "object" || !v || !Array.isArray(v.sprites)) return null;
   const sprites = v.sprites.slice(0, 8).map(cleanTexture).filter(Boolean);
   if (!sprites.length) return null;
-  const density = Math.max(0, Math.min(0.5, +v.density || 0.15));
+  const cap = maxDensity || 0.5;
+  const density = Math.max(0, Math.min(cap, +v.density || cap * 0.3));
   return { sprites, density };
 }
 function cleanCoast(v) {
@@ -648,7 +651,8 @@ const SKIN_TEX_IMGS = { land: null, sea: null };  // raw images (island layer
                                                   // builds its own pattern)
 const SKIN_SPRITES = {};                 // role -> loaded Image
 let SKIN_TILESET = null;                 // loaded blob16 sheet Image
-let SKIN_DECOR = [];                     // loaded decor Images
+let SKIN_DECOR = [];                     // loaded land-decor Images
+let SKIN_SEA_DECOR = [];                 // loaded sea-decor Images
 let SKIN_EPOCH = 0;                      // bumped whenever skin visuals change
                                          // (the island layer keys on it)
 function _skinRepaint() {
@@ -701,6 +705,20 @@ function loadSkinPatterns() {
       img.onload = () => {
         if (img.naturalWidth) {
           SKIN_DECOR[i] = img;
+          SKIN_EPOCH++;
+          _skinRepaint();
+        }
+      };
+      img.src = uri;
+    });
+  }
+  SKIN_SEA_DECOR = [];
+  if (SKIN.sea.decor) {
+    SKIN.sea.decor.sprites.forEach((uri, i) => {
+      const img = new Image();
+      img.onload = () => {
+        if (img.naturalWidth) {
+          SKIN_SEA_DECOR[i] = img;
           SKIN_EPOCH++;
           _skinRepaint();
         }
@@ -768,7 +786,10 @@ function applySkin(spec) {
         if (k === "shapes") { base.ships.shapes = cleanShapes(v); continue; }
         if (k === "sprites") { base.ships.sprites = cleanSprites(v); continue; }
         if (k === "tileset") { base.land.tileset = cleanTileset(v); continue; }
-        if (k === "decor") { base.land.decor = cleanDecor(v); continue; }
+        if (k === "decor") {
+          base[sec].decor = cleanDecor(v, sec === "sea" ? 0.1 : 0.5);
+          continue;
+        }
         if (k === "coast") { base.land.coast = cleanCoast(v); continue; }
         if (k === "spriteKey") {         // 6-digit hex, or "" = swap off
           if (v === "" || /^#[0-9a-fA-F]{6}$/.test(String(v)))
@@ -2674,6 +2695,26 @@ function islandLayer(rp) {
     const L = SKIN.land;
     const fillPat = SKIN_TEX_IMGS.land
       ? c2.createPattern(SKIN_TEX_IMGS.land, "repeat") : null;
+    if (SKIN.sea.decor && SKIN_SEA_DECOR.some(Boolean)) {
+      // open-water dressing first, under the land: waves, gulls, whales —
+      // seeded per cell so every viewer sees the same ocean
+      const imgs = SKIN_SEA_DECOR.filter(Boolean);
+      const dens = SKIN.sea.decor.density;
+      for (let x = 0; x < rp.meta.w; x++) {
+        for (let y = 0; y < rp.meta.h; y++) {
+          if (land.has(x + "," + y)) continue;
+          const h = _hash2(x, y, (rp.meta.seed | 0) + 7);
+          if ((h % 1000) / 1000 >= dens) continue;
+          const img = imgs[(h >>> 10) % imgs.length];
+          const s = Math.min(cw, ch) * (0.55 + ((h >>> 20) % 35) / 100);
+          const hgt = s * img.naturalHeight / img.naturalWidth;
+          c2.drawImage(img,
+                       x * cw + (cw - s) / 2 + (((h >>> 4) % 9) - 4) * cw / 12,
+                       y * ch + (ch - hgt) / 2 + (((h >>> 7) % 9) - 4) * ch / 12,
+                       s, hgt);
+        }
+      }
+    }
     if (SKIN_TILESET && L.tileset) {
       // blob16 autotile: neighbor bitmask indexes a 4×4 sheet, row-major
       const tw = SKIN_TILESET.width / 4, th = SKIN_TILESET.height / 4;
@@ -2706,6 +2747,52 @@ function islandLayer(rp) {
         c2.fillRect(x * cw - 1, y * ch - 1, cw + 2, ch + 2);
         c2.fillStyle = fillPat || L.fill;
         c2.fillRect(x * cw + .5, y * ch + .5, cw - 1, ch - 1);
+      }
+    }
+    if (!L.coast) {
+      // diagonal smoothing: a water cell whose two perpendicular land
+      // neighbors share a land diagonal gets a quarter-round land fillet in
+      // that corner — the staircase bleeds gently into the sea. Radius is
+      // capped at half a cell, so the drawn shore never wanders far from
+      // the true (pathing) grid. Coast mode's corner-cutting already does
+      // this; tileset + plain cells get it here.
+      const cand = new Set();
+      for (const [x, y] of rp.meta.islands) {
+        for (const [nx, ny] of [[x + 1, y], [x - 1, y], [x, y + 1], [x, y - 1]]) {
+          if (nx >= 0 && ny >= 0 && nx < rp.meta.w && ny < rp.meta.h
+              && !land.has(nx + "," + ny)) cand.add(nx + "," + ny);
+        }
+      }
+      const rr = Math.min(cw, ch) * 0.5;
+      const tw = SKIN_TILESET ? SKIN_TILESET.width / 4 : 0;
+      const th = SKIN_TILESET ? SKIN_TILESET.height / 4 : 0;
+      for (const key of cand) {
+        const [x, y] = key.split(",").map(Number);
+        for (const [ax, ay, bx, by] of [[-1, 0, 0, -1], [1, 0, 0, -1],
+                                        [1, 0, 0, 1], [-1, 0, 0, 1]]) {
+          if (!land.has((x + ax) + "," + (y + ay))) continue;
+          if (!land.has((x + bx) + "," + (y + by))) continue;
+          if (!land.has((x + ax + bx) + "," + (y + ay + by))) continue;
+          // corner point shared with the diagonal land cell
+          const cxp = x * cw + (ax < 0 || bx < 0 ? 0 : cw);
+          const cyp = y * ch + (ay < 0 || by < 0 ? 0 : ch);
+          c2.save();
+          c2.beginPath();
+          c2.moveTo(cxp, cyp);
+          c2.arc(cxp, cyp, rr, 0, 2 * Math.PI);
+          c2.clip();
+          c2.beginPath();
+          c2.rect(x * cw, y * ch, cw, ch);   // stay inside THIS water cell
+          c2.clip();
+          if (SKIN_TILESET && L.tileset) {   // bleed the interior tile
+            c2.drawImage(SKIN_TILESET, (15 & 3) * tw, (15 >> 2) * th, tw, th,
+                         x * cw, y * ch, cw, ch);
+          } else {
+            c2.fillStyle = fillPat || L.fill;
+            c2.fillRect(x * cw, y * ch, cw, ch);
+          }
+          c2.restore();
+        }
       }
     }
     if (L.decor && SKIN_DECOR.some(Boolean)) {

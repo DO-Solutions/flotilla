@@ -2697,7 +2697,8 @@ const SK_DEFAULT = {
   fleet: ["#4da3ff", "#ff5d5d", "#a3e635", "#c084fc",
           "#f472b6", "#3fe06a", "#6140e6", "#ca40e6"],
   sea: { top: "#0a1b33", bottom: "#081426", gridMinor: "#e6edf70b",
-         gridMajor: "#e6edf71c", label: "#e6edf755", texture: "" },
+         gridMajor: "#e6edf71c", label: "#e6edf755", texture: "",
+         decor: null },
   land: { fill: "#8a774e", halo: "#c9b47f22", texture: "",
           tileset: null, decor: null, coast: null },
   nodes: { fish: "rgba(45,212,191,.5)", wreck: "rgba(251,191,36,.55)",
@@ -2737,11 +2738,13 @@ function skCleanTileset(v) {            // mirrors the viewer's cleanTileset
   if (!src || (v.layout || "blob16") !== "blob16") return null;
   return { src, layout: "blob16" };
 }
-function skCleanDecor(v) {              // mirrors the viewer's cleanDecor
+function skCleanDecor(v, maxDensity) {  // mirrors the viewer's cleanDecor
   if (typeof v !== "object" || !v || !Array.isArray(v.sprites)) return null;
   const sprites = v.sprites.slice(0, 8).map(skCleanTexture).filter(Boolean);
   if (!sprites.length) return null;
-  return { sprites, density: Math.max(0, Math.min(0.5, +v.density || 0.15)) };
+  const cap = maxDensity || 0.5;
+  return { sprites,
+           density: Math.max(0, Math.min(cap, +v.density || cap * 0.3)) };
 }
 function skCleanCoast(v) {              // mirrors the viewer's cleanCoast
   if (v === true) return { sand: "", shallow: "", smooth: 2 };
@@ -2778,7 +2781,10 @@ function skMerge(spec) {
         if (k === "shapes") { base.ships.shapes = skCleanShapes(v); continue; }
         if (k === "sprites") { base.ships.sprites = skCleanSprites(v); continue; }
         if (k === "tileset") { base.land.tileset = skCleanTileset(v); continue; }
-        if (k === "decor") { base.land.decor = skCleanDecor(v); continue; }
+        if (k === "decor") {
+          base[sec].decor = skCleanDecor(v, sec === "sea" ? 0.1 : 0.5);
+          continue;
+        }
         if (k === "coast") { base.land.coast = skCleanCoast(v); continue; }
         if (k === "spriteKey") {
           if (v === "" || /^#[0-9a-fA-F]{6}$/.test(String(v)))
@@ -2911,6 +2917,12 @@ function skPane(ctx, x0, w, h, sk, label) {
   if (dec) {                             // one interior decoration, to scale
     const dh = cs * dec.naturalHeight / dec.naturalWidth;
     ctx.drawImage(dec, bx + 2 * cs, by + 2 * cs - dh + cs, cs, dh);
+  }
+  const sdec = sk.sea.decor && sk.sea.decor.sprites.length
+    && skImage(sk.sea.decor.sprites[0]);
+  if (sdec) {                            // one open-water decoration
+    const dh = cs * sdec.naturalHeight / sdec.naturalWidth;
+    ctx.drawImage(sdec, x0 + w * .55, sy + sh * .38, cs, dh);
   }
   ctx.fillStyle = sk.sea.label;
   ctx.fillText("Isla", x0 + w * .26 - 8, sy + sh * .3 + 3);

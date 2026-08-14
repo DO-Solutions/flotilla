@@ -44,6 +44,29 @@ def test_reassign():
     assert 999 not in f.pending_reassign
 
 
+def test_island_shape_organic():
+    # organic silhouettes: deterministic per seed, different from diamonds,
+    # exactly 180°-symmetric (the mirror island is the rotated shape), and
+    # every guarantee the diamond path gives (harbors clear) still holds
+    d = mk(island_coverage=8, island_shape="diamond")
+    o1 = mk(island_coverage=8, island_shape="organic")
+    o2 = mk(island_coverage=8, island_shape="organic")
+    assert o1.blocked == o2.blocked, "organic must be deterministic per seed"
+    assert o1.blocked != d.blocked, "organic must differ from diamond"
+    W, H = o1.W, o1.H
+    assert all((W - 1 - x, H - 1 - y) in o1.blocked for x, y in o1.blocked), \
+        "organic map must stay 180°-symmetric"
+    for f in o1.fleets.values():
+        for bx, by in o1.blocked:
+            assert cheb(bx, by, f.hx, f.hy) > o1.hr + 1, \
+                "organic island in a harbor circle"
+    area = W * H
+    assert len(o1.blocked) >= area * 4 // 100, "organic coverage collapsed"
+    # default stays diamond: an unset knob reproduces the classic map
+    assert mk(island_coverage=8).blocked == d.blocked, \
+        "island_shape must default to diamond (August-cup comparability)"
+
+
 def test_islands():
     eng = mk(island_coverage=5)
     assert eng.blocked, "islands on -> blocked cells exist"

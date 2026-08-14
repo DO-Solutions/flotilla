@@ -102,6 +102,7 @@ default_designs) keep their old names as accepted aliases.
 | `flag_move` | `False` | text | Flagship relocation: admirals may order their flagship (and the whole command circle with it) to sail to a new anchorage. |
 | `flag_speed` | `2` | 1–6 | Flagship relocation speed, on the same scale as a ship's speed stat (a trawler is 3). |
 | `island_coverage` | `0` | 0–20 | Impassable island terrain, as % of the map under land. 0 = open ocean. Low values scatter a few small dots; high values build a dense archipelago of mixed-size landmasses. Sea lanes at least 2 cells wide are always preserved between islands, and harbors/resource nodes stay clear. Charted — all admirals know the landmasses from the start. |
+| `island_shape` | `diamond` | diamond / organic | Landmass silhouettes. diamond = the classic uniform blobs. organic = each island draws a varied convex shape (ellipses, hulls, diamonds) from the seed — livelier charts, same guarantees: every landmass stays convex (ships round it cleanly), same spacing and coverage rules. Deterministic per seed either way. |
 | `teams` | `` | text | Team play: player index groups, e.g. "0,1|2,3" for 2v2. Teammates never damage each other, share lookout vision, and win or lose together (scores sum). Empty = free-for-all. |
 | `description` | `` | text | Shown to admirals in state.scenario. Leave empty to auto-generate from the win condition. |
 

@@ -564,6 +564,15 @@
    "slider": true,
    "doc": "Impassable island terrain, as % of the map under land. 0 = open ocean. Low values scatter a few small dots; high values build a dense archipelago of mixed-size landmasses. Sea lanes at least 2 cells wide are always preserved between islands, and harbors/resource nodes stay clear. Charted \u2014 all admirals know the landmasses from the start."
   },
+  "island_shape": {
+   "d": "diamond",
+   "t": "enum",
+   "opts": [
+    "diamond",
+    "organic"
+   ],
+   "doc": "Landmass silhouettes. diamond = the classic uniform blobs. organic = each island draws a varied convex shape (ellipses, hulls, diamonds) from the seed \u2014 livelier charts, same guarantees: every landmass stays convex (ships round it cleanly), same spacing and coverage rules. Deterministic per seed either way."
+  },
   "teams": {
    "d": "",
    "t": "str",

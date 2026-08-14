@@ -95,6 +95,7 @@ SCHEMA = {
         "flag_move":   dict(d=False, t="bool", doc="Flagship relocation: admirals may order their flagship (and the whole command circle with it) to sail to a new anchorage."),
         "flag_speed":  dict(d=2,    t="int", lo=1, hi=6, show_if={"flag_move": True}, doc="Flagship relocation speed, on the same scale as a ship's speed stat (a trawler is 3)."),
         "island_coverage": dict(d=0, t="int", lo=0, hi=20, slider=True, doc="Impassable island terrain, as % of the map under land. 0 = open ocean. Low values scatter a few small dots; high values build a dense archipelago of mixed-size landmasses. Sea lanes at least 2 cells wide are always preserved between islands, and harbors/resource nodes stay clear. Charted — all admirals know the landmasses from the start."),
+        "island_shape": dict(d="diamond", t="enum", opts=["diamond", "organic"], doc="Landmass silhouettes. diamond = the classic uniform blobs. organic = each island draws a varied convex shape (ellipses, hulls, diamonds) from the seed — livelier charts, same guarantees: every landmass stays convex (ships round it cleanly), same spacing and coverage rules. Deterministic per seed either way."),
         "teams":       dict(d="",   t="str", doc='Team play: player index groups, e.g. "0,1|2,3" for 2v2. Teammates never damage each other, share lookout vision, and win or lose together (scores sum). Empty = free-for-all.'),
         "description": dict(d="",   t="str", doc="Shown to admirals in state.scenario. Leave empty to auto-generate from the win condition."),
     },

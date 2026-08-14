@@ -29,6 +29,28 @@ BUILD_TICKS = 100
 GATHER_PERIOD = 4       # 1 cargo per N ticks while on a node
 VOLLEY = 5              # ticks between shots
 REPAIR_PERIOD = 5       # docked: +2 hull per N ticks
+
+
+def _convex_hull(pts):
+    """Andrew's monotone chain, counter-clockwise. Used by organic island
+    silhouettes — tiny inputs (≤8 points), exactness irrelevant."""
+    pts = sorted(set(pts))
+    if len(pts) <= 2:
+        return pts
+
+    def _half(seq):
+        out = []
+        for p in seq:
+            while len(out) >= 2 and \
+                    ((out[-1][0] - out[-2][0]) * (p[1] - out[-2][1])
+                     - (out[-1][1] - out[-2][1]) * (p[0] - out[-2][0])) <= 0:
+                out.pop()
+            out.append(p)
+        return out
+
+    lower = _half(pts)
+    upper = _half(list(reversed(pts)))
+    return lower[:-1] + upper[:-1]
 MOVE_THRESH = 8         # move_acc >= this -> step one cell
 SIGNAL_COST = 5
 SIGNAL_CD = 3           # windows
@@ -619,6 +641,7 @@ class Engine(SimBase):
         target = self.W * self.H * cov // 100
         # size palette widens as the sea fills in: dots first, landmasses later
         sizes = (1, 1, 2, 2, 3) if cov < 8 else (1, 2, 2, 3, 3, 4)
+        organic = self.cfg.get("island_shape", "diamond") == "organic"
         harbors = [(f.hx, f.hy) for f in self.fleets.values()]
         placed_cells = 0
         tries = 0
@@ -640,14 +663,69 @@ class Engine(SimBase):
                     ok = False
             if not ok:
                 continue
-            for cx, cy in cands:
+            # organic: this landmass draws a varied CONVEX silhouette from the
+            # seed (offsets, not absolutes, so the 180° mirror repeats it).
+            # Convexity is load-bearing — see the docstring
+            offs = self._island_offsets(r) if organic else None
+            sites = [(x, y, 1)]
+            if (self.W - 1 - x, self.H - 1 - y) != (x, y):
+                sites.append((self.W - 1 - x, self.H - 1 - y, -1))
+            for cx, cy, flip in sites:
                 self.island_specs.append((cx, cy, r))
-                for ix in range(cx - r, cx + r + 1):
-                    for iy in range(cy - r, cy + r + 1):
-                        if abs(ix - cx) + abs(iy - cy) <= r \
-                                and 0 <= ix < self.W and 0 <= iy < self.H:
-                            self.blocked.add((ix, iy))
-                            placed_cells += 1
+                cells = (offs if offs is not None else
+                         [(dx, dy) for dx in range(-r, r + 1)
+                          for dy in range(-r, r + 1)
+                          if abs(dx) + abs(dy) <= r])
+                for dx, dy in cells:
+                    # the mirror island is the 180° ROTATION of the original
+                    # (offsets negated) so the map stays exactly symmetric
+                    ix, iy = cx + dx * flip, cy + dy * flip
+                    if 0 <= ix < self.W and 0 <= iy < self.H:
+                        self.blocked.add((ix, iy))
+                        placed_cells += 1
+
+    def _island_offsets(self, r):
+        """One organic landmass silhouette as (dx, dy) cell offsets within
+        Manhattan radius r — a random convex shape: an ellipse with jittered
+        axes, a random convex hull, or the classic diamond. Convex by
+        construction (the movement wall-slide rounds convex obstacles but
+        oscillates in concave pockets)."""
+        kind = self.rng.choice(("ellipse", "hull", "diamond"))
+        if kind == "diamond" or r <= 1:
+            return [(dx, dy) for dx in range(-r, r + 1)
+                    for dy in range(-r, r + 1) if abs(dx) + abs(dy) <= r]
+        if kind == "ellipse":
+            rx = max(1.0, r * self.rng.uniform(0.55, 1.0))
+            ry = max(1.0, r * self.rng.uniform(0.55, 1.0))
+            out = [(dx, dy) for dx in range(-r, r + 1)
+                   for dy in range(-r, r + 1)
+                   if (dx / rx) ** 2 + (dy / ry) ** 2 <= 1.0
+                   and abs(dx) + abs(dy) <= r]
+            return out or [(0, 0)]
+        # hull: 5-7 seed points inside the diamond, kept if a cell center
+        # lies inside their convex hull (cross-product test per hull edge)
+        pts = [(self.rng.uniform(-r, r), self.rng.uniform(-r, r))
+               for _ in range(self.rng.randrange(5, 8))]
+        pts = [(px * 0.9, py * 0.9) for px, py in pts]
+        hull = _convex_hull(pts)
+        if len(hull) < 3:
+            return [(dx, dy) for dx in range(-r, r + 1)
+                    for dy in range(-r, r + 1) if abs(dx) + abs(dy) <= r]
+        out = []
+        for dx in range(-r, r + 1):
+            for dy in range(-r, r + 1):
+                if abs(dx) + abs(dy) > r:
+                    continue
+                inside = True
+                for i in range(len(hull)):
+                    ax, ay = hull[i]
+                    bx, by = hull[(i + 1) % len(hull)]
+                    if (bx - ax) * (dy - ay) - (by - ay) * (dx - ax) < 0:
+                        inside = False
+                        break
+                if inside:
+                    out.append((dx, dy))
+        return out or [(0, 0)]
 
     def _name_region(self, x, y, pts):
         near = min(self.nodes.values(), key=lambda n: cheb(x, y, n.x, n.y) * 100 + n.id)
