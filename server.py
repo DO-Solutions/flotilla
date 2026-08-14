@@ -965,10 +965,16 @@ def submit_run(cfg):
             tj = os.path.join(tdir, "tournament.json")
             if not os.path.exists(tj):
                 os.makedirs(tdir, exist_ok=True)
+                try:                       # the bracket-to-be, so the page can
+                    from keelspring.runner import schedule_preview
+                    sched = schedule_preview(cfg)     # show scheduled lanes
+                except Exception:          # from minute zero
+                    sched = []
                 with open(tj, "w") as fh:
                     json.dump({"config": {"tournament": cfg.get("tournament",
                                                                 {})},
                                "matchups": [], "standings": {},
+                               "schedule": sched,
                                "partial": True}, fh, indent=1)
                 build_index(LIB)
     except Exception:
@@ -2876,6 +2882,22 @@ class H(BaseHTTPRequestHandler):
                     if j["mode"] == "tournament":
                         dst = os.path.join(LIB, "tournaments", j["name"], *parts)
                         os.makedirs(os.path.dirname(dst), exist_ok=True)
+                        if parts[-1] == "tournament.json" \
+                                and "schedule" not in rp:
+                            # a worker on older code ships the bracket without
+                            # the schedule — carry the submit-time one forward
+                            # (or compute it from the job's own config)
+                            try:
+                                with open(dst) as fh2:
+                                    rp["schedule"] = json.load(fh2)["schedule"]
+                            except Exception:
+                                try:
+                                    from keelspring.runner import \
+                                        schedule_preview
+                                    rp["schedule"] = schedule_preview(
+                                        rec["config"])
+                                except Exception:
+                                    pass
                         blob = json.dumps(rp, separators=(",", ":")).encode()
                         tmp = dst + ".tmp"
                         with open(tmp, "wb") as fh:

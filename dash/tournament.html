@@ -148,11 +148,23 @@ function matchupCards() {
     for (const p of m.players) if (!names.includes(p)) names.push(p);
   }
   const mus = [...done, ...extra];
-  // while the tournament is LIVE, show the WHOLE round-robin schedule: a
-  // lane only reaches the library when its first game lands (games run
-  // hours), and an invisible lane reads as "parallelization is off"
+  // while the tournament is LIVE, show the WHOLE schedule: a lane only
+  // reaches the library when its first game lands (games run hours), and an
+  // invisible lane reads as "parallelization is off"
   const cfg = (TJ.config && TJ.config.tournament) || {};
-  if (TJ.partial && (cfg.format || "round_robin") === "round_robin") {
+  if (TJ.partial && (TJ.schedule || []).length) {
+    // the authoritative matchup list (runner/server compute it identically);
+    // exact dir names, so live-lane matching needs no label games
+    const seenDirs = new Set(mus.map(m => m.dir).filter(Boolean));
+    for (const sm of TJ.schedule) {
+      if (seenDirs.has(sm.dir)) continue;
+      const laneLive = (LIVELANES || []).includes(sm.dir);
+      for (const p of sm.players) if (!names.includes(p)) names.push(p);
+      mus.push({ round: 9e9, players: sm.players, dir: sm.dir, games: [],
+                 winner: null, live: false, pendingLane: laneLive,
+                 waiting: !laneLive });
+    }
+  } else if (TJ.partial && (cfg.format || "round_robin") === "round_robin") {
     const parts = (TJ.config.participants || []).map(p =>
       typeof p === "string" ? p : (p.label || p.model || "?"));
     const roster = [...new Set(parts)];
@@ -175,6 +187,11 @@ function matchupCards() {
         }
       }
     }
+  }
+  // round-robin brackets read in schedule order (m01..mNN); elim keeps its
+  // round grouping downstream
+  if ((cfg.format || "round_robin") !== "single_elim") {
+    mus.sort((a, b) => String(a.dir || "zz").localeCompare(String(b.dir || "zz")));
   }
   return { names, mus };
 }
@@ -218,19 +235,27 @@ function render() {
   const elim = (cfg.format || "round_robin") === "single_elim";
   const maxRound = Math.max(0, ...mus.map(m =>
     m.round > 0 && m.round < 9e9 ? m.round : 0));
-  const statusOf = (m) => m.live ? "live"
-    : (m.pendingLane || !(m.games || []).length) ? "sched" : "done";
+  const laneLiveOf = (m) => !!(LIVEJOB && m.dir
+                               && (LIVELANES || []).includes(m.dir));
+  // a lane streaming its FIRST game (no replay landed) is LIVE, not
+  // scheduled — the column answers "is anything happening right now?"
+  const statusOf = (m) => m.live || laneLiveOf(m) ? "live"
+    : (m.pendingLane || m.waiting || !(m.games || []).length) ? "sched"
+    : "done";
   const card = (m) => {
     const st = statusOf(m);
-    if (st === "sched") {                  // nothing landed yet, nothing to watch
-      return `<div class="mu" style="opacity:.6">` +
-        `<div class="hd"><span class="stat">⛵ at sea — no games reported ` +
-        `yet</span>` +
-        (LIVEJOB && LIVELANES.includes(m.dir)
+    if (!(m.games || []).length) {         // nothing landed yet: at sea, or
+      const laneLive = laneLiveOf(m);      // still waiting its turn
+      return `<div class="mu${laneLive ? " liv" : ""}" ` +
+        `style="opacity:${laneLive ? "1" : ".6"}">` +
+        `<div class="hd"><span class="stat">${laneLive
+          ? '<span class="live">⛵ game 1 at sea</span>'
+          : "🗓 scheduled"}</span>` +
+        (laneLive
           ? `<a class="btn btn-watch" style="background:#c22432" target="_blank" ` +
             `href="player.html?live=${encodeURIComponent(LIVEJOB)}` +
             `&lane=${encodeURIComponent(m.dir)}"` +
-            ` title="follow this lane's first game tick by tick">📡 Lane</a>`
+            ` title="follow this lane's first game tick by tick">🔴 Live</a>`
           : "") +
         `</div>` +
         m.players.map(p => `<div class="p"><span style="color:` +
@@ -250,15 +275,16 @@ function render() {
         ? '<span class="live">🔴 series live</span>'
         : (m.winner ? "✓ decided" : "✓ complete") + rlab}</span>` +
       (st === "live"
-        ? (LIVEJOB && LIVELANES.includes(m.dir)
+        ? `<a class="btn btn-watch" target="_blank" href="${gameHref(m, g1, 1)}"` +
+          ` title="watch this series from game 1 — spoiler-free">▶ Watch</a>` +
+          (LIVEJOB && LIVELANES.includes(m.dir)
             ? `<a class="btn btn-watch" style="background:#c22432" target="_blank" ` +
               `href="player.html?live=${encodeURIComponent(LIVEJOB)}` +
               `&lane=${encodeURIComponent(m.dir)}"` +
-              ` title="follow this lane's game tick by tick">📡 Lane</a>`
-            : "") +
-          `<a class="btn btn-watch" style="background:#c22432" target="_blank" ` +
-          `href="${gameHref(m, g1, "last")}"` +
-          ` title="jump to the newest game of this live series">🔴 Live</a>`
+              ` title="jump into the game being played right now">🔴 Live</a>`
+            : `<a class="btn btn-watch" style="background:#c22432" target="_blank" ` +
+              `href="${gameHref(m, g1, "last")}"` +
+              ` title="jump to the newest game of this live series">🔴 Live</a>`)
         : `<a class="btn btn-watch" target="_blank" href="${gameHref(m, g1, 1)}"` +
           ` title="watch this series from game 1 — spoiler-free">▶ Watch</a>`) +
       `</div>`;

@@ -178,6 +178,10 @@
          border-radius: 10px; padding: 8px 12px; }
   #timeline { width: 100%; height: 34px; display: block; cursor: pointer; margin-bottom: 6px; }
   #controls { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+  #transport { display: flex; gap: 10px; align-items: center;
+               flex: 1 1 300px; min-width: 250px; }
+  #ctlcluster { display: flex; gap: 10px; align-items: center;
+                flex-wrap: wrap; }
   button, select { background: #16223c; color: var(--ink); border: 1px solid var(--line);
                    border-radius: 6px; padding: 5px 14px; cursor: pointer; font: inherit; }
   button:hover { border-color: var(--accent); }
@@ -336,6 +340,8 @@
          title="back to the match library">FLO<span>TILLA</span></a></h1>
   <div id="meta">no replay loaded</div>
   <div id="gnav">
+    <button id="livefirst" style="display:none"
+            title="watch this series from game 1">⏮⏮ Game 1</button>
     <button id="liveprev" style="display:none"
             title="watch the previous game of this series">⏮ previous game</button>
     <button id="firstg" style="display:none" title="jump to the first game">Game 1</button>
@@ -351,7 +357,14 @@ at your own pace, then jump to the one being played now"></button>
 <div id="bar">
   <canvas id="timeline" width="1152" height="34"></canvas>
   <div id="controls">
-    <button id="play">▶ Play</button>
+    <!-- transport row, video-player order: Play stays glued to the scrubber
+         (on narrow screens the settings cluster wraps beneath, whole) -->
+    <div id="transport">
+      <button id="play">▶ Play</button>
+      <input id="scrub" type="range" min="0" max="0" value="0">
+      <span id="clock">00:00</span>
+    </div>
+    <div id="ctlcluster">
     <select id="speed">
       <option value="0.01">0.01×</option><option value="0.02">0.02×</option>
       <option value="0.03">0.03×</option><option value="0.04">0.04×</option>
@@ -367,11 +380,10 @@ at your own pace, then jump to the one being played now"></button>
       <option value="-1">👁 all-seeing</option>
     </select>
     <button id="spoil" title="spoiler shield: hides the winner, future timeline marks and future chart lines until playback reaches them — click to toggle">🙈 spoilers hidden</button>
-    <input id="scrub" type="range" min="0" max="0" value="0">
-    <span id="clock">00:00</span>
     <button id="dl" title="download a self-contained page of this replay">⬇ replay</button>
     <button id="barpin" class="fsonly" title="this bar: pinned (faded until
       hovered) ⇄ auto-hide (returns when your mouse touches the bottom edge) — B">📌 pinned</button>
+    </div>
   </div>
 </div>
 
@@ -4081,14 +4093,25 @@ async function livePoll(jid, lane) {
         if (line.header) {
           game = line.game || d.game || game + 1;
           liveTakeLine(line, game, line.total || d.games_expected);
-          // mid-series live: offer the finished games behind this one
-          const lp = $("liveprev");
-          if (d.mode === "series" && d.name && game > 1 &&
-              !(S.liveQueue || []).length) {
+          // mid-series live: offer the finished games behind this one.
+          // A tournament LANE is a series too — its games live under
+          // tournaments/<name>/<lane>/, same navigation
+          const lp = $("liveprev"), lf = $("livefirst");
+          const nav = !(S.liveQueue || []).length && d.name
+            ? (d.mode === "series" ? `replays/${d.name}`
+               : d.mode === "tournament" && lane
+                 ? `tournaments/${d.name}/${lane}` : null)
+            : null;
+          if (nav && game > 1) {
             lp.style.display = "";
             lp.onclick = () => { location.href = "player.html?replay="
-              + encodeURIComponent(`replays/${d.name}/g${game - 1}.json`); };
+              + encodeURIComponent(`${nav}/g${game - 1}.json`); };
           } else lp.style.display = "none";
+          if (nav && game > 2) {
+            lf.style.display = "";
+            lf.onclick = () => { location.href = "player.html?replay="
+              + encodeURIComponent(`${nav}/g1.json`); };
+          } else lf.style.display = "none";
         } else {
           liveTakeLine(line, game);
         }
@@ -4114,7 +4137,9 @@ async function livePoll(jid, lane) {
           $("meta").innerHTML += `<span class="mdim"> · match complete — reloading full replay…</span>`;
           location.href = "player.html?replay=" + encodeURIComponent(
             d.mode === "series" ? `replays/${d.name}/g${d.game}.json`
-                                : `replays/${d.name}.json`);
+              : d.mode === "tournament" && lane
+                ? `tournaments/${d.name}/${lane}/g${game}.json`
+                : `replays/${d.name}.json`);
         } else {
           // cancelled/failed runs have no landed replay to redirect into
           $("meta").textContent =

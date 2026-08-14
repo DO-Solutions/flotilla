@@ -111,6 +111,46 @@ def spec_name(spec):
     return spec
 
 
+def mdir_name(group, midx):
+    """m<NN>_<A>_v_<B> — group entries are operator-supplied labels, so strip
+    anything that could escape outdir (a label of ../../tmp/x once wrote
+    there)."""
+    import re as _re
+    tag = _re.sub(r"[^A-Za-z0-9_-]", "", "_v_".join(group))[:60]
+    return f"m{midx:02d}_" + tag
+
+
+def schedule_preview(cfg):
+    """Every matchup a tournament WILL play — [{"dir", "players"}], computed
+    exactly the way run_tournament builds its schedule (deterministic from
+    cfg, same rng consumption order). Lets the bracket page show scheduled
+    lanes before a single game lands. single_elim pairs later rounds off
+    results, so its schedule is unknowable up front: []."""
+    if config_schema is None:
+        contract.game()                    # bind the registered game's schema
+    t = config_schema.section_resolve("tournament", cfg.get("tournament"))
+    names = dedupe([spec_name(s) for s in cfg["participants"]])
+    ppm = 2 if t["format"] == "single_elim" else int(t["players_per_match"])
+    rng = random.Random(cfg.get("seed", 42))
+    if t["format"] == "round_robin":
+        rounds = [[list(c) for c in itertools.combinations(names, ppm)]]
+    elif t["format"] == "random_pairs":
+        rounds = []
+        for _ in range(int(t["rounds"])):
+            order = names[:]
+            rng.shuffle(order)
+            rounds.append([order[i:i + ppm]
+                           for i in range(0, len(order) - ppm + 1, ppm)])
+    else:
+        return []
+    out, mi = [], 0
+    for rgroups in rounds:
+        for g in rgroups:
+            mi += 1
+            out.append({"dir": mdir_name(g, mi), "players": list(g)})
+    return out
+
+
 def dedupe(names):
     from collections import Counter
     dupes = {n for n, c in Counter(names).items() if c > 1}
@@ -582,12 +622,24 @@ def run_tournament(cfg, adm, scenario, outdir, prov=None, resume_ck=None):
         if wait:
             time.sleep(wait)
 
-    def _mdir_name(group, midx):
-        # group entries are operator-supplied labels — strip anything that
-        # could escape outdir (a label of ../../tmp/x otherwise wrote there)
-        import re as _re
-        tag = _re.sub(r"[^A-Za-z0-9_-]", "", "_v_".join(group))[:60]
-        return f"m{midx:02d}_" + tag
+    _mdir_name = mdir_name                 # module helper (shared with the
+                                           # server's submit-time preview)
+    # the full matchup list, known up front for every format but single_elim —
+    # rides every tournament.json write so the bracket page can show
+    # scheduled lanes before their first game lands
+    schedule_meta = []
+    if rounds != "ELIM":
+        _mi = 0
+        for _rg in rounds:
+            for _g in _rg:
+                _mi += 1
+                schedule_meta.append({"dir": mdir_name(_g, _mi),
+                                      "players": list(_g)})
+    if not matchups:                       # fresh start: bracket-to-be
+        with open(os.path.join(outdir, "tournament.json"), "w") as fh:
+            json.dump({"config": cfg, "matchups": [], "standings": standings,
+                       "schedule": schedule_meta, "partial": True},
+                      fh, indent=1)
 
     def _record_matchup(group, rnd, midx, mdir, rows):
         w = matchup_winner(rows, group)
@@ -609,7 +661,9 @@ def run_tournament(cfg, adm, scenario, outdir, prov=None, resume_ck=None):
             # follow the tournament as it runs, not just after the last matchup
             with open(os.path.join(outdir, "tournament.json"), "w") as fh:
                 json.dump({"config": cfg, "matchups": matchups,
-                           "standings": standings, "partial": True}, fh, indent=1)
+                           "standings": standings,
+                           "schedule": schedule_meta, "partial": True},
+                          fh, indent=1)
         return w
 
     def play_matchup(group, rnd, midx, fresh=False):
@@ -875,7 +929,7 @@ def run_tournament(cfg, adm, scenario, outdir, prov=None, resume_ck=None):
                                               standings[n]["score"]))
 
     tj = {"config": cfg, "matchups": matchups, "standings": standings,
-          "champion": champion,
+          "champion": champion, "schedule": schedule_meta,
           "memos_final": {n: bots[n].notes for n in names
                           if isinstance(bots[n], LLMAdmiral) and bots[n].notes}}
     with open(os.path.join(outdir, "tournament.json"), "w") as fh:
