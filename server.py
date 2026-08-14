@@ -972,7 +972,13 @@ def submit_run(cfg):
                     sched = []
                 with open(tj, "w") as fh:
                     json.dump({"config": {"tournament": cfg.get("tournament",
-                                                                {})},
+                                                                {}),
+                                          # the bracket page translates the
+                                          # dirs' stripped tags back to real
+                                          # labels through this — without it
+                                          # early win tallies read 0/0
+                                          "participants":
+                                              cfg.get("participants", [])},
                                "matchups": [], "standings": {},
                                "schedule": sched,
                                "partial": True}, fh, indent=1)

@@ -128,6 +128,16 @@ function matchupCards() {
   // roster labels so colors and schedule-matching line up
   const roster0 = ((TJ.config || {}).participants || []).map(p =>
     typeof p === "string" ? p : (p.label || p.model || "?"));
+  // no participants yet (a submit-time stub bracket): the schedule's player
+  // lists carry the real labels — without a roster, stripped dir tags can't
+  // translate back and every win tally reads 0/0
+  if (!roster0.length && (TJ.schedule || []).length) {
+    for (const sm of TJ.schedule) {
+      for (const p of sm.players || []) {
+        if (!roster0.includes(p)) roster0.push(p);
+      }
+    }
+  }
   const strip = (x) => String(x).replace(/[^A-Za-z0-9_-]/g, "");
   const unstrip = (x) => roster0.find(r => strip(r) === x) || x;
   const extra = [];
