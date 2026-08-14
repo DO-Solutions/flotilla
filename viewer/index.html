@@ -46,12 +46,16 @@
     width: 330px; overflow-y: auto; background: #0b1220e6; padding: 10px;
     backdrop-filter: blur(4px);
     transition: opacity .25s ease, transform .3s ease; }
-  body.fsmode #bar { position: fixed; left: 0; right: 0; top: 0; z-index: 8;
-    background: #0b1220cc; padding: 6px 10px; backdrop-filter: blur(4px);
+  /* transport at the BOTTOM, the standard fullscreen idiom: thumb reach on
+     phones, and the summon zone stays clear of the browser's own top-edge
+     gestures. Safe-area padding keeps it above the iOS home indicator. */
+  body.fsmode #bar { position: fixed; left: 0; right: 0; bottom: 0; z-index: 8;
+    background: #0b1220cc; backdrop-filter: blur(4px);
+    padding: 6px 10px calc(6px + env(safe-area-inset-bottom, 0px));
     transition: opacity .25s ease, transform .3s ease; }
   /* a pinned panel owns its column: the bar stops at its edge, and the
-     top-edge summon zone skips that column (reaching for the panel tabs must
-     never yank the bar down over them) */
+     bottom-edge summon zone skips that column (reaching for the panel must
+     never yank the bar up over it) */
   body.fsmode:not(.autopanel) #bar { right: 330px; }
   /* pinned: present but faded until hovered */
   body.fsmode #side { opacity: .3; }
@@ -62,7 +66,7 @@
   body.fsmode.autopanel #side { transform: translateX(102%); opacity: 0; }
   body.fsmode.autopanel.peekpanel #side { transform: none; opacity: 1; }
   body.fsmode #drop { display: none; }   /* no drop-hint over the theater */
-  body.fsmode.autobar #bar { transform: translateY(-102%); opacity: 0; }
+  body.fsmode.autobar #bar { transform: translateY(102%); opacity: 0; }
   body.fsmode.autobar.peekbar #bar { transform: none; opacity: 1; }
   .fsonly { display: none; }
   body.fsmode .fsonly { display: inline-block; }
@@ -367,7 +371,7 @@ at your own pace, then jump to the one being played now"></button>
     <span id="clock">00:00</span>
     <button id="dl" title="download a self-contained page of this replay">⬇ replay</button>
     <button id="barpin" class="fsonly" title="this bar: pinned (faded until
-      hovered) ⇄ auto-hide (returns when your mouse touches the top edge) — B">📌 pinned</button>
+      hovered) ⇄ auto-hide (returns when your mouse touches the bottom edge) — B">📌 pinned</button>
   </div>
 </div>
 
@@ -3204,8 +3208,8 @@ function toggleOverlay(which) {           // pinned (dim until hover) ⇄ auto (
 $("sidepin").addEventListener("click", () => toggleOverlay("panel"));
 $("barpin").addEventListener("click", () => toggleOverlay("bar"));
 // fullscreen defaults to a CLEAN view: both overlays auto-hide (they return at
-// the top/right edges, or via B/P, or the 📌 pins) — pinned bars smothered the
-// map on phones
+// the bottom/right edges, or via B/P, or the 📌 pins) — pinned bars smothered
+// the map on phones
 document.body.classList.add("autopanel", "autobar");
 $("sidepin").textContent = "👆 auto";
 $("barpin").textContent = "👆 auto";
@@ -3214,7 +3218,7 @@ document.addEventListener("keydown", e => {
   if (e.key === "p" || e.key === "P") toggleOverlay("panel");
   if (e.key === "b" || e.key === "B") toggleOverlay("bar");
 });
-// edge summons for auto mode: the right/top 36px of the screen wake the
+// edge summons for auto mode: the right/bottom 36px of the screen wake the
 // overlays; they stay while the pointer is on them
 document.addEventListener("mousemove", e => {
   const b = document.body;
@@ -3231,7 +3235,7 @@ document.addEventListener("mousemove", e => {
     const overPanelCol = panelVisible
       && e.clientX > window.innerWidth - 330;
     b.classList.toggle("peekbar",
-      (e.clientY < 36 && !overPanelCol) || !!inBar);
+      (e.clientY > window.innerHeight - 36 && !overPanelCol) || !!inBar);
   }
 });
 
@@ -3784,10 +3788,15 @@ canvas.addEventListener("mousemove", e => {
     return;
   }
   // lower-left corner of the MAP itself (works in fullscreen too), and it
-  // fades away after 5 idle seconds so it never squats on the view
+  // fades away after 5 idle seconds so it never squats on the view. A PINNED
+  // fullscreen bar now lives at the bottom — lift the readout above it.
   hc.style.display = "";
   hc.style.opacity = "1";
-  hc.style.top = (canvas.offsetTop + canvas.clientHeight - 32) + "px";
+  let lift = 32;
+  if (document.body.classList.contains("fsmode")
+      && !document.body.classList.contains("autobar"))
+    lift += $("bar").offsetHeight || 0;
+  hc.style.top = (canvas.offsetTop + canvas.clientHeight - lift) + "px";
   hc.style.left = (canvas.offsetLeft + 10) + "px";
   hc.textContent = `${cx}, ${cy}`;
   clearTimeout(hcFade); clearTimeout(hcHide);
