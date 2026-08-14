@@ -38,6 +38,9 @@ but only hex gets those alphas).
 | `sea` | `texture` | a `data:image` URI tiled over the gradient (put the wash's alpha in the tile itself) |
 | `land` | `fill` `halo` | islands |
 | `land` | `texture` | a `data:image` URI tiling the island fill (the reef halo keeps its color) |
+| `land` | `tileset` | blob16 autotile sheet — real coastlined islands from 16 tiles (see "Island dressing") |
+| `land` | `decor` | sprites scattered on island interiors, seeded per replay (see "Island dressing") |
+| `land` | `coast` | procedural smoothed coastline, zero assets (see "Island dressing") |
 | `nodes` | `fish` `wreck` `label` | resource shoals, wrecks, their labels |
 | `ships` | `hullInk` | dark interior details (wheelhouses, outlines against bright water) |
 | `ships` | `detail` | bright details (gun studs, armor rings, selection) |
@@ -106,6 +109,55 @@ as the ship — a photo crop, pixel art, a logo boat:
   legitimately uses magenta, point `spriteKey` at another 6-digit hex or
   set it `""` to disable. The flagship sprite is keyed with its fleet's
   color too. (Wakes, charts, and labels stay fleet-colored regardless.)
+
+## Island dressing
+
+Three ways to make islands read as islands, in precedence order —
+`tileset` wins over `coast`, which wins over the plain `texture`/`fill`
+cells. All of it renders once into a cached layer (islands are static), so
+none of it costs anything per frame, and any malformed input falls back to
+the plain cell fill. Ships path on the cell grid regardless — nothing here
+changes where anything can sail.
+
+**Auto-tiling** (`land.tileset`) — the standard game technique: the artist
+draws one sheet of 16 tiles and the renderer picks per cell by which
+neighbors are also land.
+
+```json
+{ "land": { "tileset": { "src": "data:image/png;base64,...", "layout": "blob16" } } }
+```
+
+The sheet is a **4×4 grid of equal square tiles**, indexed by the
+land-neighbor bitmask **N=1 · E=2 · S=4 · W=8**, row-major: tile index =
+mask, column = `index % 4`, row = `index ÷ 4`. So tile 0 (top-left) is a
+lone island cell (water on all four sides), tile 15 (bottom-right) is pure
+interior, tile 3 (N+E land) is a southwest shoreline corner, and so on.
+Draw beaches on each tile's water-facing sides and the coastline assembles
+itself. Any tile size works (32–64 px reads well); diagonals aren't
+distinguished (that's the 47-tile variant — not supported yet).
+
+**Scatter decoration** (`land.decor`) — up to 8 sprites sprinkled on
+*interior* cells (single-cell islets stay bare):
+
+```json
+{ "land": { "decor": { "sprites": ["data:image/png;base64,..."], "density": 0.2 } } }
+```
+
+Placement is deterministic from the replay seed, so every viewer of the
+same game sees the same palm in the same place. `density` is the fraction
+of interior cells decorated (0–0.5).
+
+**Procedural coastline** (`land.coast`) — organic islands with **no assets
+at all**: the blocky outline is traced and corner-smoothed, filled with
+`land.texture`/`fill`, ringed with a sand edge over a shallow-water halo.
+
+```json
+{ "land": { "coast": { "sand": "#d9c489", "shallow": "#aacfe855", "smooth": 2 } } }
+```
+
+`coast: true` uses sensible defaults; `smooth` is 0–3 rounding passes (the
+smoothed shore always stays within half a cell of the true grid, so the
+picture never lies about where ships can sail).
 
 **Textures.** `sea.texture` and `land.texture` take a **`data:image` URI**
 (png/jpeg/webp/gif, base64) that tiles as a repeating pattern — the sea one

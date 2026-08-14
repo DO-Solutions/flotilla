@@ -494,7 +494,14 @@ const SKIN_DEFAULT = {
          label: "#e6edf755",
          texture: "" },                 // data:image URI, tiled OVER the gradient
   land: { fill: "#8a774e", halo: "#c9b47f22",
-          texture: "" },                // data:image URI, tiles the island fill
+          texture: "",                  // data:image URI, tiles the island fill
+          // richer land dressing, in precedence order (see docs/SKINS.md):
+          // tileset (blob16 autotile sheet) > coast (procedural smoothed
+          // coastline, zero assets) > texture/fill cells. decor scatters
+          // sprites on interior cells in every mode, seeded per replay.
+          tileset: null,                // {src: dataURI, layout: "blob16"}
+          decor: null,                  // {sprites: [dataURI...], density: 0-0.5}
+          coast: null },                // {sand, shallow, smooth} or true
   nodes: { fish: "rgba(45,212,191,.5)", wreck: "rgba(251,191,36,.55)",
            label: "#e6edf7aa" },
   ships: { hullInk: "#0b1220", detail: "#ffffff", laden: "#ffd76a",
@@ -593,6 +600,34 @@ function cleanTexture(v) {
           /^data:image\/(png|jpe?g|webp|gif);base64,[A-Za-z0-9+/=]+$/.test(v))
     ? v : "";
 }
+function cleanTileset(v) {
+  // {src: dataURI, layout: "blob16"} — a 4×4 sheet of 16 tiles indexed by the
+  // land-neighbor bitmask (N=1 E=2 S=4 W=8, row-major). Unknown layouts and
+  // non-data sources are refused whole (stock cells render instead).
+  if (typeof v !== "object" || !v) return null;
+  const src = cleanTexture(v.src);
+  if (!src || (v.layout || "blob16") !== "blob16") return null;
+  return { src, layout: "blob16" };
+}
+function cleanDecor(v) {
+  // {sprites: [dataURI...], density: 0-0.5} — up to 8 sprites scattered on
+  // interior land cells, deterministically seeded so every viewer sees the
+  // same island. A bad sprite is dropped alone.
+  if (typeof v !== "object" || !v || !Array.isArray(v.sprites)) return null;
+  const sprites = v.sprites.slice(0, 8).map(cleanTexture).filter(Boolean);
+  if (!sprites.length) return null;
+  const density = Math.max(0, Math.min(0.5, +v.density || 0.15));
+  return { sprites, density };
+}
+function cleanCoast(v) {
+  // true or {sand, shallow, smooth} — procedural smoothed coastline; colors
+  // are CSS strings, smooth = Chaikin rounds (0-3)
+  if (v === true) return { sand: "", shallow: "", smooth: 2 };
+  if (typeof v !== "object" || !v) return null;
+  return { sand: typeof v.sand === "string" ? v.sand : "",
+           shallow: typeof v.shallow === "string" ? v.shallow : "",
+           smooth: Math.max(0, Math.min(3, Math.round(+v.smooth || 2))) };
+}
 function cleanSprites(v) {
   // {role: dataURI} — every value passes the texture rule; a bad entry is
   // dropped alone, an empty result means stock rendering (null)
@@ -609,21 +644,31 @@ function cleanSprites(v) {
 // is async (Image decode) — the sea/land fills fall back to their colors
 // until onload repaints.
 const SKIN_PATTERNS = { land: null, sea: null };
+const SKIN_TEX_IMGS = { land: null, sea: null };  // raw images (island layer
+                                                  // builds its own pattern)
 const SKIN_SPRITES = {};                 // role -> loaded Image
+let SKIN_TILESET = null;                 // loaded blob16 sheet Image
+let SKIN_DECOR = [];                     // loaded decor Images
+let SKIN_EPOCH = 0;                      // bumped whenever skin visuals change
+                                         // (the island layer keys on it)
 function _skinRepaint() {
   try {                                  // repaint a paused view
     if (typeof S !== "undefined" && S.rp && !S.playing) seek(S.fi);
   } catch (e) { }
 }
 function loadSkinPatterns() {
+  SKIN_EPOCH++;
   for (const sec of ["land", "sea"]) {
     SKIN_PATTERNS[sec] = null;
+    SKIN_TEX_IMGS[sec] = null;
     const src = SKIN[sec].texture;
     if (!src || typeof ctx === "undefined" || !ctx) continue;
     const img = new Image();
     img.onload = () => {
       try { SKIN_PATTERNS[sec] = ctx.createPattern(img, "repeat"); }
       catch (e) { SKIN_PATTERNS[sec] = null; }
+      SKIN_TEX_IMGS[sec] = img;
+      SKIN_EPOCH++;
       _skinRepaint();
     };
     img.src = src;
@@ -636,6 +681,32 @@ function loadSkinPatterns() {
       if (img.naturalWidth) { SKIN_SPRITES[role] = img; _skinRepaint(); }
     };
     img.src = uri;
+  }
+  SKIN_TILESET = null;
+  SKIN_DECOR = [];
+  if (SKIN.land.tileset) {
+    const img = new Image();
+    img.onload = () => {
+      if (img.naturalWidth >= 4 && img.naturalHeight >= 4) {
+        SKIN_TILESET = img;
+        SKIN_EPOCH++;
+        _skinRepaint();
+      }
+    };
+    img.src = SKIN.land.tileset.src;
+  }
+  if (SKIN.land.decor) {
+    SKIN.land.decor.sprites.forEach((uri, i) => {
+      const img = new Image();
+      img.onload = () => {
+        if (img.naturalWidth) {
+          SKIN_DECOR[i] = img;
+          SKIN_EPOCH++;
+          _skinRepaint();
+        }
+      };
+      img.src = uri;
+    });
   }
 }
 // team-color keying: sprite pixels whose color PROPORTIONS match spriteKey
@@ -696,6 +767,9 @@ function applySkin(spec) {
         if (!(k in base[sec])) continue;
         if (k === "shapes") { base.ships.shapes = cleanShapes(v); continue; }
         if (k === "sprites") { base.ships.sprites = cleanSprites(v); continue; }
+        if (k === "tileset") { base.land.tileset = cleanTileset(v); continue; }
+        if (k === "decor") { base.land.decor = cleanDecor(v); continue; }
+        if (k === "coast") { base.land.coast = cleanCoast(v); continue; }
         if (k === "spriteKey") {         // 6-digit hex, or "" = swap off
           if (v === "" || /^#[0-9a-fA-F]{6}$/.test(String(v)))
             base.ships.spriteKey = String(v).toLowerCase();
@@ -2516,6 +2590,147 @@ function drawShipShape(preset, color, cargo, sel, stats) {
   }
 }
 
+// ---- island layer: static land dressing (autotile / coastline / decor),
+// rendered ONCE per (replay, skin, size) into an offscreen canvas and
+// blitted per frame. Purely presentational — pathing reads the cell grid,
+// never any of this. Any failure falls back to the plain cell fill.
+let ISLAND_LAYER = null, ISLAND_KEY = "";
+function _landSet(rp) {
+  if (!rp.__landSet) {
+    rp.__landSet = new Set(rp.meta.islands.map(([x, y]) => x + "," + y));
+  }
+  return rp.__landSet;
+}
+function _landMask(land, x, y) {         // N=1 E=2 S=4 W=8 (land neighbors)
+  return (land.has(x + "," + (y - 1)) ? 1 : 0)
+       | (land.has((x + 1) + "," + y) ? 2 : 0)
+       | (land.has(x + "," + (y + 1)) ? 4 : 0)
+       | (land.has((x - 1) + "," + y) ? 8 : 0);
+}
+function _hash2(x, y, seed) {            // deterministic per cell + replay —
+  let h = (x * 73856093) ^ (y * 19349663) ^ ((seed | 0) * 83492791);
+  h = Math.imul(h ^ (h >>> 13), 1274126177);
+  return (h ^ (h >>> 16)) >>> 0;         // every viewer sees the same island
+}
+function _coastLoops(rp) {
+  // boundary edges of the land region, walked counter-clockwise: each land
+  // cell emits one edge per water side, edges chain start->end into closed
+  // loops (corner coordinates in CELL units)
+  const land = _landSet(rp);
+  const segs = new Map();                // "x,y" start -> [[ex, ey], ...]
+  const add = (sx, sy, ex, ey) => {
+    const k = sx + "," + sy;
+    (segs.get(k) || segs.set(k, []).get(k)).push([ex, ey]);
+  };
+  for (const [x, y] of rp.meta.islands) {
+    if (!land.has(x + "," + (y - 1))) add(x, y, x + 1, y);
+    if (!land.has((x + 1) + "," + y)) add(x + 1, y, x + 1, y + 1);
+    if (!land.has(x + "," + (y + 1))) add(x + 1, y + 1, x, y + 1);
+    if (!land.has((x - 1) + "," + y)) add(x, y + 1, x, y);
+  }
+  const loops = [];
+  for (const [start, ends] of segs) {
+    while (ends.length) {
+      const loop = [start.split(",").map(Number)];
+      let cur = ends.pop();
+      while (cur) {
+        loop.push(cur);
+        const k = cur[0] + "," + cur[1];
+        if (k === start) break;
+        const nxt = segs.get(k);
+        cur = nxt && nxt.length ? nxt.pop() : null;
+      }
+      if (loop.length >= 4) loops.push(loop);
+    }
+  }
+  return loops;
+}
+function _chaikin(pts, rounds) {         // corner-cutting: stays within half a
+  for (let r = 0; r < rounds; r++) {     // cell of the true (blocky) outline
+    const out = [];
+    for (let i = 0; i < pts.length; i++) {
+      const a = pts[i], b = pts[(i + 1) % pts.length];
+      out.push([a[0] * .75 + b[0] * .25, a[1] * .75 + b[1] * .25],
+               [a[0] * .25 + b[0] * .75, a[1] * .25 + b[1] * .75]);
+    }
+    pts = out;
+  }
+  return pts;
+}
+function islandLayer(rp) {
+  const key = [rp.meta.seed, rp.meta.islands.length, LW | 0, LH | 0,
+               SKIN_EPOCH].join("|");
+  if (ISLAND_LAYER && ISLAND_KEY === key) return ISLAND_LAYER;
+  try {
+    const scale = (typeof RS === "number" && RS > 0) ? RS : 1;
+    const cv = document.createElement("canvas");
+    cv.width = Math.max(1, Math.round(LW * scale));
+    cv.height = Math.max(1, Math.round(LH * scale));
+    const c2 = cv.getContext("2d");
+    if (!c2) return null;
+    c2.scale(scale, scale);
+    const cw = LW / rp.meta.w, ch = LH / rp.meta.h;
+    const land = _landSet(rp);
+    const L = SKIN.land;
+    const fillPat = SKIN_TEX_IMGS.land
+      ? c2.createPattern(SKIN_TEX_IMGS.land, "repeat") : null;
+    if (SKIN_TILESET && L.tileset) {
+      // blob16 autotile: neighbor bitmask indexes a 4×4 sheet, row-major
+      const tw = SKIN_TILESET.width / 4, th = SKIN_TILESET.height / 4;
+      for (const [x, y] of rp.meta.islands) {
+        const m = _landMask(land, x, y);
+        c2.drawImage(SKIN_TILESET, (m & 3) * tw, (m >> 2) * th, tw, th,
+                     x * cw, y * ch, cw, ch);
+      }
+    } else if (L.coast) {
+      const loops = _coastLoops(rp).map(lp =>
+        _chaikin(lp.map(([x, y]) => [x * cw, y * ch]), L.coast.smooth));
+      const path = new Path2D();
+      for (const lp of loops) {
+        path.moveTo(lp[0][0], lp[0][1]);
+        for (let i = 1; i < lp.length; i++) path.lineTo(lp[i][0], lp[i][1]);
+        path.closePath();
+      }
+      // shallow-water halo under, land fill, sand rim on top
+      c2.strokeStyle = L.coast.shallow || withA(L.fill, "33");
+      c2.lineWidth = Math.max(3, cw * 0.9);
+      c2.stroke(path);
+      c2.fillStyle = fillPat || L.fill;
+      c2.fill(path);
+      c2.strokeStyle = L.coast.sand || L.halo;
+      c2.lineWidth = Math.max(1.5, cw * 0.3);
+      c2.stroke(path);
+    } else {
+      for (const [x, y] of rp.meta.islands) {
+        c2.fillStyle = L.halo;
+        c2.fillRect(x * cw - 1, y * ch - 1, cw + 2, ch + 2);
+        c2.fillStyle = fillPat || L.fill;
+        c2.fillRect(x * cw + .5, y * ch + .5, cw - 1, ch - 1);
+      }
+    }
+    if (L.decor && SKIN_DECOR.some(Boolean)) {
+      const imgs = SKIN_DECOR.filter(Boolean);
+      for (const [x, y] of rp.meta.islands) {
+        if (_landMask(land, x, y) !== 15) continue;   // interior cells only
+        const h = _hash2(x, y, rp.meta.seed);
+        if ((h % 1000) / 1000 >= L.decor.density) continue;
+        const img = imgs[(h >>> 10) % imgs.length];
+        const s = Math.min(cw, ch) * (0.7 + ((h >>> 20) % 40) / 100);
+        const hgt = s * img.naturalHeight / img.naturalWidth;
+        c2.drawImage(img,
+                     x * cw + (cw - s) / 2 + (((h >>> 4) % 7) - 3) * cw / 14,
+                     y * ch + (ch - hgt) / 2 + (((h >>> 7) % 7) - 3) * ch / 14,
+                     s, hgt);
+      }
+    }
+    ISLAND_LAYER = cv;
+    ISLAND_KEY = key;
+    return cv;
+  } catch (e) {
+    return null;                         // fallback: plain cell fill
+  }
+}
+
 function lerpAngle(a, b, k) {
   let d = b - a;
   while (d > Math.PI) d -= 2 * Math.PI;
@@ -2655,13 +2870,18 @@ function draw(fr, prev, alpha) {
   }
   // impassable islands: charted geography — always visible, under everything.
   // Sand core + a pale reef fringe so land reads instantly against open sea.
-  if (rp.meta.islands) {
-    const landFill = SKIN_PATTERNS.land || SKIN.land.fill;
-    for (const [ix, iy] of rp.meta.islands) {
-      ctx.fillStyle = SKIN.land.halo;
-      ctx.fillRect(ix * cw - 1, iy * ch - 1, cw + 2, ch + 2);
-      ctx.fillStyle = landFill;
-      ctx.fillRect(ix * cw + .5, iy * ch + .5, cw - 1, ch - 1);
+  if (rp.meta.islands && rp.meta.islands.length) {
+    const layer = islandLayer(rp);
+    if (layer) {
+      ctx.drawImage(layer, 0, 0, LW, LH);
+    } else {                             // no layer (headless/fault): cells
+      const landFill = SKIN_PATTERNS.land || SKIN.land.fill;
+      for (const [ix, iy] of rp.meta.islands) {
+        ctx.fillStyle = SKIN.land.halo;
+        ctx.fillRect(ix * cw - 1, iy * ch - 1, cw + 2, ch + 2);
+        ctx.fillStyle = landFill;
+        ctx.fillRect(ix * cw + .5, iy * ch + .5, cw - 1, ch - 1);
+      }
     }
   }
   const PV = S.pov >= 0 ? S.povCache : null;

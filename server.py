@@ -1773,6 +1773,25 @@ def _restore_state():
                             json.dump({"config": {}, "matchups": [],
                                        "standings": {}, "partial": True},
                                       fh, indent=1)
+                    else:
+                        # schedule backfill: a cup submitted before schedules
+                        # existed (worker on old code ships brackets without
+                        # one) gains it here, idempotently, from the job cfg
+                        try:
+                            with open(tj) as fh:
+                                cur = json.load(fh)
+                            if "schedule" not in cur:
+                                from keelspring.runner import schedule_preview
+                                with AUX_LOCK:
+                                    jcfg = (AUX.get(j["id"]) or {}).get("config")
+                                if jcfg:
+                                    cur["schedule"] = schedule_preview(jcfg)
+                                    tmp = tj + ".tmp"
+                                    with open(tmp, "w") as fh:
+                                        json.dump(cur, fh, indent=1)
+                                    os.replace(tmp, tj)
+                        except Exception:
+                            pass
                 build_index(LIB)
             except Exception:
                 pass
@@ -3318,13 +3337,13 @@ class H(BaseHTTPRequestHandler):
                     return self._send(400,
                                       {"error": "skin must be a JSON object "
                                        "(see docs/SKINS.md for the tokens)"})
-                # generous enough for texture tiles + a full set of ship
-                # sprites (each data: URI ≤200 KB client-side), still a hard
-                # bound on disk use
+                # generous enough for texture tiles + a full ship-sprite set
+                # + a blob16 tileset + decor sprites (each data: URI ≤200 KB
+                # client-side), still a hard bound on disk use
                 blob = json.dumps(skin, indent=1, sort_keys=True)
-                if len(blob) > 2_000_000:
+                if len(blob) > 4_000_000:
                     return self._send(400, {"error": "skin too large "
-                                            "(2 MB cap)"})
+                                            "(4 MB cap)"})
                 # unknown sections save fine (applySkin ignores them) but a
                 # typo'd section silently painting nothing is the #1 authoring
                 # trap — surface it
