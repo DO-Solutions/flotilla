@@ -99,6 +99,7 @@ import shlex
 import os
 import re
 import shutil
+import socket
 import subprocess
 import sys
 import threading
@@ -2928,6 +2929,19 @@ class H(BaseHTTPRequestHandler):
                         with open(tmp, "wb") as fh:
                             fh.write(blob)
                         os.replace(tmp, dst)
+                        if parts[-1] == "tournament.json":
+                            # a recorded matchup's lane stream is over —
+                            # drop its live-<lane>.jsonl (a lingering file
+                            # dragged decided series back into "live")
+                            wd2 = os.path.join(LIB, "_work", jid)
+                            for mm in (rp.get("matchups") or []):
+                                lf = os.path.join(
+                                    wd2, "live-%s.jsonl"
+                                    % _san(str(mm.get("dir") or "")))
+                                try:
+                                    os.remove(lf)
+                                except OSError:
+                                    pass
                         if d.get("row"):
                             rec["rows"].append(d["row"])
                             j["games_done"] += 1
@@ -3622,6 +3636,55 @@ class H(BaseHTTPRequestHandler):
             return self._send(500, {"error": str(e)[:300]})
 
 
+_SOCKET_UNIT = """[Unit]
+Description=Flotilla server socket (held open across restarts)
+[Socket]
+ListenStream=%s
+Service=flotilla-server.service
+[Install]
+WantedBy=sockets.target
+"""
+_SOCKET_DROPIN = """[Unit]
+Requires=flotilla.socket
+After=flotilla.socket
+"""
+
+
+def _ensure_socket_activation(bind):
+    """Graceful deploys, self-installed: the flagship updates by tarball pull
+    + service restart (no SSH lane by design), so the app itself installs the
+    systemd socket unit that keeps the listening socket open across restarts.
+    Once installed, a deploy's ~2s process swap QUEUES connections in the
+    kernel instead of refusing them — viewers see a pause, never a 502. The
+    deploy that ships this installs the units (one last blip); every deploy
+    after is seamless. Not root / not systemd (tests, dev): no-op."""
+    try:
+        if not os.path.isdir("/run/systemd/system") or os.geteuid() != 0:
+            return
+        unit = "/etc/systemd/system/flotilla.socket"
+        dropd = "/etc/systemd/system/flotilla-server.service.d"
+        want = _SOCKET_UNIT % bind
+        cur = ""
+        if os.path.exists(unit):
+            with open(unit) as fh:
+                cur = fh.read()
+        if cur == want and os.path.exists(os.path.join(dropd, "socket.conf")):
+            return
+        with open(unit, "w") as fh:
+            fh.write(want)
+        os.makedirs(dropd, exist_ok=True)
+        with open(os.path.join(dropd, "socket.conf"), "w") as fh:
+            fh.write(_SOCKET_DROPIN)
+        subprocess.run(["systemctl", "daemon-reload"], check=False)
+        # enable WITHOUT --now: the running process still holds the port; the
+        # service drop-in's Requires= pulls the socket up on the next restart
+        # (old process exits, socket binds, new process inherits)
+        subprocess.run(["systemctl", "enable", "flotilla.socket"], check=False)
+        print("graceful-deploy socket installed — active from the next restart")
+    except Exception as e:
+        print(f"NOTE: socket-activation install skipped ({e})")
+
+
 def main():
     os.makedirs(LIB, exist_ok=True)
     for d in ("matches", "series", "tournaments", "bundles"):
@@ -3659,8 +3722,19 @@ def main():
     threading.Thread(target=_aux_reaper, daemon=True).start()
     threading.Thread(target=_pool_maintain, daemon=True).start()
     threading.Thread(target=_auto_resume_loop, daemon=True).start()
-    srv = ThreadingHTTPServer((host, int(port)), H)
-    print(f"Flotilla server {VERSION} — http://{BIND}  (library: {LIB})")
+    if os.environ.get("LISTEN_FDS"):
+        # systemd handed us the already-listening socket (fd 3): accept from
+        # it — the socket unit keeps it open while this process restarts
+        srv = ThreadingHTTPServer((host, int(port)), H,
+                                  bind_and_activate=False)
+        srv.socket = socket.fromfd(3, socket.AF_INET, socket.SOCK_STREAM)
+        srv.server_address = (host, int(port))
+        print(f"Flotilla server {VERSION} — http://{BIND} "
+              f"(socket-activated; library: {LIB})")
+    else:
+        _ensure_socket_activation(BIND)
+        srv = ThreadingHTTPServer((host, int(port)), H)
+        print(f"Flotilla server {VERSION} — http://{BIND}  (library: {LIB})")
     srv.serve_forever()
 
 

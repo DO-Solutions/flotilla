@@ -71,6 +71,25 @@ RestartSec=5
 [Install]
 WantedBy=multi-user.target
 SVC
+# graceful deploys: the socket unit holds 127.0.0.1:8080 open while the
+# service restarts — connections queue instead of seeing 502. (The server
+# also self-installs these units on older droplets; here they exist from
+# birth.)
+cat > /etc/systemd/system/flotilla.socket <<'SOCK'
+[Unit]
+Description=Flotilla server socket (held open across restarts)
+[Socket]
+ListenStream=127.0.0.1:8080
+Service=flotilla-server.service
+[Install]
+WantedBy=sockets.target
+SOCK
+mkdir -p /etc/systemd/system/flotilla-server.service.d
+cat > /etc/systemd/system/flotilla-server.service.d/socket.conf <<'DRP'
+[Unit]
+Requires=flotilla.socket
+After=flotilla.socket
+DRP
 cat > /etc/systemd/system/flotilla-update.service <<'SVU'
 [Unit]
 Description=Flotilla app update check
@@ -110,7 +129,7 @@ ${DOMAIN} {
 CF
 systemctl daemon-reload
 /usr/local/bin/flotilla-update
-systemctl enable --now flotilla-server flotilla-update.timer
+systemctl enable --now flotilla.socket flotilla-server flotilla-update.timer
 systemctl restart caddy
 echo "== flotilla server host ready =="
 UD

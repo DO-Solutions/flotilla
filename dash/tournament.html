@@ -122,7 +122,7 @@ function matchupCards() {
   const names = [...new Set((TJ.matchups || []).flatMap(m => m.players))];
   const done = (TJ.matchups || []).map(m => ({
     round: m.round, players: m.players, dir: m.dir, games: m.games,
-    winner: m.winner, live: false }));
+    winner: m.winner, live: false, recorded: true }));
   const seen = new Set(done.map(m => m.dir));
   // dir names carry STRIPPED labels (Qwen35) — translate back to the real
   // roster labels so colors and schedule-matching line up
@@ -248,8 +248,12 @@ function render() {
   const laneLiveOf = (m) => !!(LIVEJOB && m.dir
                                && (LIVELANES || []).includes(m.dir));
   // a lane streaming its FIRST game (no replay landed) is LIVE, not
-  // scheduled — the column answers "is anything happening right now?"
-  const statusOf = (m) => m.live || laneLiveOf(m) ? "live"
+  // scheduled — the column answers "is anything happening right now?".
+  // A RECORDED matchup is done regardless: its lane's stream file can
+  // linger a little after the series ends, and stale bytes must not drag
+  // a decided series back into the Live column
+  const statusOf = (m) => m.recorded ? "done"
+    : m.live || laneLiveOf(m) ? "live"
     : (m.pendingLane || m.waiting || !(m.games || []).length) ? "sched"
     : "done";
   const card = (m) => {
@@ -351,6 +355,15 @@ function render() {
   const swOf = {};
   for (const m of TJ.matchups || [])
     if (m.winner) swOf[m.winner] = (swOf[m.winner] || 0) + 1;
+  // a matchup folds into standings only when its series RECORDS — games won
+  // in series still at sea get an annotation, so a 3-0 lane never reads 0
+  const liveW = {};
+  const recorded = new Set((TJ.matchups || []).map(m => m.dir));
+  for (const m of mus) {
+    if (m.recorded || recorded.has(m.dir)) continue;
+    for (const g of m.games || [])
+      if (g.winner) liveW[g.winner] = (liveW[g.winner] || 0) + 1;
+  }
   const rows = Object.entries(TJ.standings || {})
     .sort((a, b) => (swOf[b[0]] || 0) - (swOf[a[0]] || 0)
       || b[1].wins - a[1].wins || b[1].score - a[1].score);
@@ -363,7 +376,8 @@ function render() {
       `<th>total score</th></tr></thead><tbody>` +
       rows.map(([n, s]) =>
         `<tr><td style="color:${playerColor(names, n)}">${esc(n)}</td>` +
-        `<td>${sh(esc(swOf[n] || 0))}</td><td>${sh(esc(s.wins))}</td>` +
+        `<td>${sh(esc(swOf[n] || 0))}</td><td>${sh(esc(s.wins)
+          + (liveW[n] ? ` (+${liveW[n]} at sea)` : ""))}</td>` +
         `<td>${sh(esc(s.score))}</td></tr>`).join("") +
       `</tbody></table></div>` : "";
 }
