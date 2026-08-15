@@ -20,7 +20,11 @@ index. Agent-first API (all JSON; same schema as the GUI):
                              optional "name" labels the result in the library)
                              -> {job}   local jobs queue FIFO (one at a time);
                              auxiliary jobs run concurrently up to max_concurrent
-  GET  /api/runs             recent jobs with state + log tail
+  GET  /api/runs             recent jobs with state + log tail; an aux job also
+                             carries aux_quiet_s = seconds since its worker's
+                             last callback (heartbeats are ~10s and independent
+                             of admiral latency, so a large value means the
+                             worker is gone, not thinking)
   POST /api/cancel           {"id": <job id>} -> cancel a queued/running job
   POST /api/rename           {"series": <name>, "display_name": <text>} -> persist a
                              series display name (empty display_name clears it)
@@ -1587,6 +1591,13 @@ AUX_LOCK = threading.Lock()
 _AUX_STAGGER_S = int(os.environ.get("FLOTILLA_AUX_STAGGER_S", "480"))
 _AUX_STAGGER_LOCK = threading.Lock()
 _aux_last_start = [0.0]                  # mutable cell for the last launch time
+# Worker silence thresholds. The worker's tail thread heartbeats every ~10s
+# regardless of how long an admiral is thinking, so these are generous by two
+# orders of magnitude — a trip means the process is gone, not busy. Tunable
+# because a pathological network could stretch the retry ladder (5 attempts,
+# ~15s of backoff) and nobody should have to edit code to widen it.
+AUX_SILENT_WARN_S = int(os.environ.get("FLOTILLA_AUX_SILENT_WARN_S", "300"))
+AUX_SILENT_DEAD_S = int(os.environ.get("FLOTILLA_AUX_SILENT_DEAD_S", "1200"))
 
 
 def _aux_stagger_gate(job):
@@ -1741,6 +1752,14 @@ def _restore_state():
             st = json.load(fh)
         with AUX_LOCK:
             AUX.update(st.get("aux", {}))
+            # last_seen is about OUR uptime, not the worker's: a stamp from
+            # before a restart (or from a persisted file hours old) would read
+            # as instant death and reap a perfectly healthy worker. Re-arm the
+            # clock; the next heartbeat (~10s) confirms life for real.
+            now = time.time()
+            for _r in AUX.values():
+                if isinstance(_r, dict):
+                    _r["last_seen"] = now
         with POOL_LOCK:
             POOL.update(st.get("pool", {}))
     except Exception:
@@ -2260,6 +2279,35 @@ def _aux_watch(job, aux):
                 + float(cur.get("max_age_h", 8)) * 3600
             if time.time() >= deadline:
                 break
+        # SILENCE CHECK. The age cap alone could not tell a dead worker from a
+        # thinking one, so a worker that died without posting /fail sat unnoticed
+        # for up to max_age_h. Heartbeats are independent of admiral latency
+        # (separate thread, ~10s), so silence is a real signal: warn once, then
+        # reap. Without this a crashed worker burned hours of wall-clock and a
+        # billed droplet while the bracket looked "running".
+        with AUX_LOCK:
+            rec = AUX.get(job["id"])
+            seen = (rec or {}).get("last_seen")
+        if seen:
+            quiet = time.time() - seen
+            if quiet > AUX_SILENT_DEAD_S:
+                job["state"] = "failed"
+                job["error"] = (f"auxiliary went silent for "
+                                f"{int(quiet // 60)} min (no callback, not even "
+                                "a heartbeat) — worker died or wedged")
+                job["finished"] = time.time()
+                job["log"].append(f"💀 {job['error']} — reaping")
+                _persist_jobs()
+                _mark_cancelled(job, error=job["error"])
+                break
+            if quiet > AUX_SILENT_WARN_S and not job.get("_quiet_warned"):
+                job["_quiet_warned"] = True
+                job["log"].append(
+                    f"⚠ auxiliary has been silent {int(quiet)}s — expected a "
+                    "heartbeat every ~10s; watching")
+                _persist_jobs()
+            elif quiet <= AUX_SILENT_WARN_S and job.get("_quiet_warned"):
+                job["_quiet_warned"] = False      # it came back; re-arm
         time.sleep(20)
     if job["state"] == "paused":
         # the droplet is already released; the AUX record (bearer + config)
@@ -2482,6 +2530,16 @@ class H(BaseHTTPRequestHandler):
         if path == "/api/runs":
             with JOBS_LOCK:
                 out = [dict(j, log=j["log"][-8:]) for j in JOBS[-20:]][::-1]
+            # surface worker liveness: "is this thing alive or just thinking?"
+            # used to be unanswerable without reading tick streams and guessing
+            with AUX_LOCK:
+                seen = {k: v.get("last_seen") for k, v in AUX.items()
+                        if isinstance(v, dict)}
+            now = time.time()
+            for row in out:
+                s = seen.get(row.get("id"))
+                if s:
+                    row["aux_quiet_s"] = round(now - s, 1)
             return self._send(200, {"jobs": out})
         if path == "/favicon.ico":
             svg = ('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 '
@@ -2713,13 +2771,13 @@ class H(BaseHTTPRequestHandler):
                 j = _job(jid)
                 if not j:
                     return self._send(404, {"error": "no such job"})
-                if j.get("mode") == "tournament":
-                    # the tournament runner has no checkpoint path — accepting
-                    # this used to return a success toast while the run burned
-                    # to completion unpaused
-                    return self._send(400, {"error": "tournaments cannot be "
-                                            "paused yet — only matches and "
-                                            "series checkpoint"})
+                # Tournaments used to be refused here ("no checkpoint path").
+                # That stopped being true when the runner gained the two-level
+                # checkpoint (tournament state + every in-flight lane) — proven
+                # by tests/test_tournament_pause.py, and it is the same path
+                # worker rotation and the api-outage breaker already use. The
+                # stale guard meant rotation could pause a tournament but a
+                # HUMAN could not, which is exactly backwards.
                 if j.get("aux"):
                     if j["state"] != "running":
                         return self._send(400, {"error": f"job is {j['state']}"})
@@ -2829,6 +2887,9 @@ class H(BaseHTTPRequestHandler):
                 if rec is None or j is None \
                         or not _bearer_ok(self.headers.get("X-Aux-Token"), rec["bearer"]):
                     return self._send(401, {"error": "bad aux token"})
+                with AUX_LOCK:                     # liveness (see /live below)
+                    if jid in AUX:
+                        AUX[jid]["last_seen"] = time.time()
                 wd = os.path.join(LIB, "_work", jid)
                 os.makedirs(wd, exist_ok=True)
                 # stored as data, served back to the (next) worker — plain
@@ -2861,6 +2922,16 @@ class H(BaseHTTPRequestHandler):
                 if rec is None or j is None \
                         or not _bearer_ok(self.headers.get("X-Aux-Token"), rec["bearer"]):
                     return self._send(401, {"error": "bad aux token"})
+                # LIVENESS. The worker's tail thread posts a heartbeat every
+                # ~10s even with nothing to say, and it runs INDEPENDENTLY of
+                # the admirals' thinking — so silence here means the worker is
+                # gone or wedged, never merely slow. Before this stamp the
+                # flagship had no liveness signal at all: a dead worker was
+                # indistinguishable from a thinking one until max_age_h (up to
+                # 8h later), and "is it alive?" was unanswerable from outside.
+                with AUX_LOCK:
+                    if jid in AUX:
+                        AUX[jid]["last_seen"] = time.time()
                 d = json.loads(body or b"{}")
                 wd = os.path.join(LIB, "_work", jid)
                 os.makedirs(wd, exist_ok=True)

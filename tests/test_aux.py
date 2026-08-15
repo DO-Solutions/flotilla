@@ -637,6 +637,77 @@ st, _ = req(f"/api/aux/{jid6}/done", {"series": {}},
             headers={"X-Aux-Token": b6})
 ok(st == 200 and server._job(jid6)["state"] == "done", "restored job completes")
 
+# ---- worker liveness (2026-08-15) ----
+# Before this the flagship had NO liveness signal: a worker that died without
+# posting /fail was indistinguishable from one thinking hard, and sat unnoticed
+# until max_age_h — up to 8h of wall-clock and a billed droplet on a bracket
+# that looked "running". Heartbeats are independent of admiral latency, so
+# silence is a real signal.
+st, rL = req("/api/run", {"mode": "series", "seed": 7, "executor": "auxiliary",
+                          "bots": ["merchant", "corsair"],
+                          "series": {"games": 1, "memos": False},
+                          "name": "aux-live"})
+jidL = rL["job"]["id"]
+time.sleep(0.8)
+with server.AUX_LOCK:
+    bL = server.AUX[jidL]["bearer"]
+    server.AUX[jidL].pop("last_seen", None)
+st, runs = req("/api/runs")
+row = [r for r in runs["jobs"] if r["id"] == jidL][0]
+ok("aux_quiet_s" not in row, "no heartbeat yet -> no liveness figure reported")
+st, _ = req(f"/api/aux/{jidL}/live", {"lines": []}, headers={"X-Aux-Token": bL})
+ok(st == 200, "empty-lines heartbeat is accepted")
+with server.AUX_LOCK:
+    ok(server.AUX[jidL].get("last_seen") is not None,
+       "a bare heartbeat stamps last_seen (this is the whole signal)")
+st, runs = req("/api/runs")
+row = [r for r in runs["jobs"] if r["id"] == jidL][0]
+ok(row.get("aux_quiet_s") is not None and row["aux_quiet_s"] < 30,
+   f"/api/runs reports how long the worker has been quiet ({row.get('aux_quiet_s')}s) "
+   "— answerable in ONE call now")
+
+# a restart must NOT read its own stale stamp as death
+with server.AUX_LOCK:
+    server.AUX[jidL]["last_seen"] = 1.0          # ancient, as if persisted
+server._restore_state()
+with server.AUX_LOCK:
+    ok(time.time() - server.AUX[jidL]["last_seen"] < 30,
+       "restore RE-ARMS last_seen — a restart never reaps a healthy worker")
+
+# silence past the dead threshold reaps, instead of waiting out max_age_h
+_dead_was = server.AUX_SILENT_DEAD_S
+server.AUX_SILENT_DEAD_S = 1
+with server.AUX_LOCK:
+    server.AUX[jidL]["last_seen"] = time.time() - 600
+jL = server._job(jidL)
+server._aux_watch(jL, {"rotate_enabled": False})
+server.AUX_SILENT_DEAD_S = _dead_was
+ok(jL["state"] == "failed" and "silent" in (jL.get("error") or ""),
+   f"a silent worker is reaped with a plain-language error ({jL.get('error','')[:60]})")
+
+# ---- a human can pause a TOURNAMENT (stale guard removed) ----
+# The runner grew a two-level checkpoint (tests/test_tournament_pause.py), and
+# rotation + the api-outage breaker already pause tournaments through it — but
+# /api/pause still refused them, so the one actor who could not pause a
+# tournament was the operator.
+st, rT = req("/api/run", {"mode": "tournament", "seed": 9,
+                          "executor": "auxiliary",
+                          "participants": ["merchant", "corsair"],
+                          "tournament": {"format": "round_robin",
+                                         "games_per_match": 1},
+                          "name": "aux-tpause"})
+ok(st == 202, f"tournament accepted for the pause test (got {st} {str(rT)[:70]})")
+jidT = rT["job"]["id"]
+time.sleep(0.8)
+st, rp2 = req("/api/pause", {"id": jidT})
+ok(st == 200 and rp2.get("pausing"),
+   f"/api/pause accepts a tournament (got {st} {str(rp2)[:70]})")
+with server.AUX_LOCK:
+    ok(server.AUX.get(jidT, {}).get("command") == "pause"
+       and server.AUX[jidT].get("pause_by") == "user",
+       "the pause is queued for the worker and attributed to the USER "
+       "(so rotation's auto-resume leaves it alone)")
+
 # capacity gate
 with open(os.path.join(TMP, "aux.json"), "w") as fh:
     json.dump({"do_token": "fake", "callback_base": "https://cb.example",
