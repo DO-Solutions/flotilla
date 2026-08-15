@@ -6,15 +6,30 @@
 <title>Flotilla — match library</title>
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns=%27http://www.w3.org/2000/svg%27 viewBox=%270 0 100 100%27%3E%3Ctext y=%27.9em%27 font-size=%2790%27%3E%E2%9B%B5%3C/text%3E%3C/svg%3E">
 <style>
+  /* see viewer/index.html for the why — SIL OFL 1.1, assets/fonts/OFL.txt */
+  @font-face {
+    font-family: "Special Gothic";
+    src: url("fonts/SpecialGothic-400.woff2") format("woff2");
+    font-weight: 400; font-display: swap;
+  }
+  @font-face {
+    font-family: "Special Gothic";
+    src: url("fonts/SpecialGothic-500.woff2") format("woff2");
+    font-weight: 500 700; font-display: swap;
+  }
   :root { --bg:#0b1220; --card:#111a2e; --line:#1e2a44; --ink:#e6edf7;
-          --dim:#b7c3d9; --accent:#0069ff; }
+          --dim:#b7c3d9; --accent:#0069ff; --radius:10px; }
   * { box-sizing:border-box; margin:0; }
   body { background:var(--bg); color:var(--ink);
-         font:14px/1.5 "Segoe UI",system-ui,sans-serif; padding:18px; }
+         font:14px/1.5 "Segoe UI",system-ui,sans-serif; padding:18px;
+         /* the shorthand above sets the stock stack; --font (from a site
+            skin) overrides just the family, so no timing-sensitive JS has
+            to touch document.body */
+         font-family:var(--font,"Segoe UI",system-ui,sans-serif); }
   header { display:flex; align-items:baseline; gap:14px; margin-bottom:14px; }
   h1 { font-size:22px; letter-spacing:3px; } h1 span { color:var(--accent); }
   #sub { color:var(--dim); font-size:12px; }
-  .card { background:var(--card); border:1px solid var(--line); border-radius:10px;
+  .card { background:var(--card); border:1px solid var(--line); border-radius:var(--radius);
           padding:12px 14px; margin-bottom:14px; }
   table { width:100%; border-collapse:collapse; font-size:13px; }
   .subgames { margin:2px 0 8px; }
@@ -71,7 +86,7 @@
   .mlogo.big { width:30px; height:30px; margin-right:9px; vertical-align:middle;
     flex:0 0 auto; }
   .mlogo.big.mono { font:bold 15px/30px sans-serif; }
-  .tile { background:#0d1526; border:1px solid var(--line); border-radius:10px;
+  .tile { background:#0d1526; border:1px solid var(--line); border-radius:var(--radius);
           padding:10px 12px; }
   .tile h3 { color:var(--accent); font-size:13px; margin-bottom:8px;
              text-transform:uppercase; letter-spacing:1px; }
@@ -146,6 +161,22 @@
   .job .st-paused { color:#8ec7ff; }
   .jcancel { color:#ff6b6b; border-color:#ff6b6b55; margin-left:8px; }
 </style>
+<script>
+// Site chrome follows the operator's default skin (Server tab -> Viewer skins).
+// These pages have no skin registry and no canvas, so the server hands back ONE
+// fully-resolved ui block and we paint the same vars the viewer chrome uses.
+// No default skin set => we touch nothing and the stylesheet above stands, so
+// the stock look is byte-identical to before this existed. Palette only: a skin
+// never reaches match data (see docs/SKINS.md).
+fetch("api/site-skin").then(r => r.ok ? r.json() : null).then(d => {
+  if (!d || !d.name || !d.ui) return;
+  const rt = document.documentElement.style;
+  for (const [k, v] of Object.entries(d.ui)) {
+    if (typeof v === "string" && v) rt.setProperty("--" + k, v);
+  }
+}).catch(() => {});
+</script>
+
 </head>
 <body>
 <header>
@@ -458,6 +489,16 @@
     is <code>docs/SKINS.md</code>) and every viewer on this server can use it:
     share <code>player.html?skin=&lt;name&gt;</code>, or pick it in the viewer's
     🎨 settings. Appearance only — a skin never touches the match or the data.</div>
+  <div style="margin-bottom:8px; display:flex; gap:8px; flex-wrap:wrap; align-items:center">
+    <label title="Paints THIS SERVER's dashboard and tournament pages from the
+      chosen skin's ui block — one JSON rebrands the whole site. Viewers with
+      no skin of their own adopt it too, so the whole install matches; a
+      ?skin= link or a viewer's own 🎨 pick still wins. Stock = the built-in
+      palette.">🖌 site chrome</label>
+    <select class="sname" id="siteskin" style="width:170px"></select>
+    <a class="btn btn-dl" id="siteskinsave" href="#">Apply</a>
+    <span id="siteskinmsg" class="dim"></span>
+  </div>
   <div id="sklist" class="dim">loading…</div>
   <div style="margin-top:10px; display:flex; gap:16px; flex-wrap:wrap; align-items:flex-start">
     <div style="display:flex; flex-direction:column; gap:6px">
@@ -3014,6 +3055,37 @@ function skMsg(m, sticky) {
   }, 6000);
 }
 
+// the site-chrome picker: built-ins first, then whatever is imported. Saving
+// only rewrites site-skin.json — it never touches an imported skin file, so
+// "stock" is always a safe way back out.
+function siteSkinFill(d) {
+  const sel = $("siteskin");
+  if (!sel) return;
+  const names = (d.reserved || []).concat(
+    (d.skins || []).map(s => String(s.name)));
+  const cur = d.site_skin || "";
+  sel.innerHTML = '<option value="">stock (built-in palette)</option>' +
+    names.map(n => `<option value="${esc(n)}"${n === cur ? " selected" : ""}>`
+                 + `${esc(n)}</option>`).join("");
+}
+
+async function siteSkinSave() {
+  const nm = $("siteskin").value;
+  let r = null;
+  try {
+    r = await (await fetch("api/site-skin", { method: "POST",
+      body: JSON.stringify({ name: nm }) })).json();
+  } catch (e) { }
+  const msg = $("siteskinmsg");
+  if (!r || r.error) {
+    msg.textContent = (r && r.error) || "could not save";
+    return;
+  }
+  msg.textContent = nm ? `site chrome now follows "${nm}" — reload to see it`
+                       : "site chrome back to stock — reload to see it";
+  setTimeout(() => { msg.textContent = ""; }, 8000);
+}
+
 async function skRefresh() {
   const el = $("sklist");
   if (!el) return;
@@ -3023,9 +3095,11 @@ async function skRefresh() {
     el.textContent = "skins unavailable";
     return;
   }
+  siteSkinFill(d);
   if (!d.skins.length) {
     el.innerHTML = "no imported skins yet — the built-ins " +
-      "<code>flotilla</code> and <code>daylight</code> are always available";
+      "<code>flotilla</code>, <code>daylight</code> and <code>kraken</code> " +
+      "are always available";
   } else {
     el.innerHTML = d.skins.map(s => {
       const n = String(s.name || "").replace(/[^A-Za-z0-9_-]/g, "");
@@ -3051,9 +3125,11 @@ async function skRefresh() {
 
 document.addEventListener("click", async e => {
   const t = e.target.closest && e.target.closest(
-    "#sksave,[data-skview],[data-sklink],[data-skuse],[data-skload],[data-skdel]");
+    "#sksave,#siteskinsave,[data-skview],[data-sklink],[data-skuse]," +
+    "[data-skload],[data-skdel]");
   if (!t) return;
   e.preventDefault();
+  if (t.id === "siteskinsave") return siteSkinSave();
   if (t.id === "sksave") {
     const nm = $("skname").value.trim();
     let spec = null;

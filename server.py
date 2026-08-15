@@ -72,6 +72,11 @@ Public showcase (see docs/FLEET_AUXILIARIES.md):
                              (POST {"name","stats"} saves, {"name","delete"} removes)
   GET/POST /api/skins        imported viewer skins (the Server-tab importer;
                              POST {"name","skin"} saves, {"name","delete"} removes)
+  GET/POST /api/site-skin    which skin paints the SITE chrome (dashboard +
+                             tournament). GET -> {"name", "ui"} with the ui
+                             block fully resolved; POST {"name"} sets it
+                             ("" = stock). The pages have no skin registry, so
+                             the server resolves built-in-or-imported for them.
   GET  /skins/<name>.json    one imported skin — same-origin, so the viewer's
                              ?skin=<name> / ?skinurl= resolution can fetch it
   The public spectator player is player.html?livejsonl=<prefix> / ?replay=<path>
@@ -1020,6 +1025,16 @@ ROUTES_STATIC = {
     "/index.html": ("dash/dashboard.html", "text/html"),
     "/player.html": ("viewer/index.html", "text/html"),
     "/tournament.html": ("dash/tournament.html", "text/html"),
+    # Bundled webfonts. Every page is served from the root, so the pages' own
+    # @font-face url("fonts/X.woff2") resolves here. A skin's ui.font can only
+    # name what the page actually loads — without these, "Special Gothic" (and
+    # any other shipped face) silently falls through to the next stack entry.
+    # SIL OFL 1.1, license text alongside the files in assets/fonts/OFL.txt.
+    "/fonts/SpecialGothic-400.woff2": ("assets/fonts/SpecialGothic-400.woff2",
+                                       "font/woff2"),
+    "/fonts/SpecialGothic-500.woff2": ("assets/fonts/SpecialGothic-500.woff2",
+                                       "font/woff2"),
+    "/fonts/OFL.txt": ("assets/fonts/OFL.txt", "text/plain; charset=utf-8"),
 }
 
 def _showcase_cfg():
@@ -1122,11 +1137,65 @@ SHIP_STATS = tuple(contract.game().ship_stats)   # the game's designer stats
 SKINS_LOCK = threading.Lock()
 # the viewer resolves these from its own built-in registry BEFORE asking the
 # server, so an import under either name could never be reached — refuse it
-SKIN_RESERVED = ("flotilla", "daylight")
+SKIN_RESERVED = ("flotilla", "daylight", "kraken")
 # the token sections docs/SKINS.md defines; anything else is saved but flagged
 # (the viewer's applySkin silently ignores unknown sections)
 SKIN_SECTIONS = ("name", "ui", "fleet", "sea", "land", "nodes", "ships",
                  "fx", "minimap")
+# The site chrome (dashboard + tournament) is not the viewer: it has no skin
+# registry, no canvas, and no ?skin= param. It asks /api/site-skin for ONE
+# resolved ui block and paints its CSS vars from it, so the whole site rebrands
+# from a single JSON instead of three files' worth of hardcoded hexes.
+#
+# The ui blocks below MIRROR the viewer's built-in SKINS registry. That is a
+# duplication across a language boundary, so tests/test_skins.py fails if the
+# two ever drift — do not "fix" a mismatch by editing only one side.
+SKIN_UI_DEFAULT = {"bg": "#0b1220", "card": "#111a2e", "line": "#1e2a44",
+                   "ink": "#e6edf7", "dim": "#8b9bb8", "accent": "#0069ff",
+                   "font": "", "radius": "10px"}
+SKIN_BUILTIN_UI = {
+    "flotilla": {},                              # {} = the stock block above
+    "daylight": {"bg": "#eef3f9", "card": "#ffffff", "line": "#c9d6e8",
+                 "ink": "#16233a", "dim": "#5a6b85"},
+    "kraken": {"bg": "#000f0f", "card": "#081f1e", "line": "#1f403e",
+               "ink": "#e5eceb", "dim": "#6f908c", "accent": "#1aafbf",
+               "font": "'Special Gothic', 'Helvetica Neue', Arial, sans-serif"},
+}
+
+
+def _site_skin_name():
+    """The operator's chosen site-chrome skin ("" = stock). Its own file so the
+    Server tab can set it without touching imported-skin storage."""
+    try:
+        with open(os.path.join(LIB, "site-skin.json")) as fh:
+            return _clean_skin_name(json.load(fh).get("name", "")) or ""
+    except (OSError, ValueError):
+        return ""
+
+
+def _site_skin_ui(name=None):
+    """Resolve a skin name to a COMPLETE ui block (stock defaults filled in).
+    Built-ins come from the mirror table; anything else is an imported skin
+    read off disk. An unknown or malformed name resolves to stock rather than
+    half-painting the site."""
+    if name is None:
+        name = _site_skin_name()
+    ui = dict(SKIN_UI_DEFAULT)
+    if not name:
+        return ui
+    if name in SKIN_BUILTIN_UI:
+        ui.update(SKIN_BUILTIN_UI[name])
+        return ui
+    try:
+        with SKINS_LOCK:
+            with open(os.path.join(_skins_dir(), name + ".json")) as fh:
+                spec = json.load(fh)
+        for k, v in (spec.get("ui") or {}).items():
+            if k in SKIN_UI_DEFAULT and isinstance(v, (str, int, float)):
+                ui[k] = str(v)
+    except (OSError, ValueError, AttributeError):
+        pass                                     # unknown skin -> stock chrome
+    return ui
 
 
 def _skins_dir():
@@ -2526,7 +2595,13 @@ class H(BaseHTTPRequestHandler):
                                      "bytes": os.path.getsize(p),
                                      "updated": os.path.getmtime(p)})
             return self._send(200, {"skins": rows,
-                                    "reserved": list(SKIN_RESERVED)})
+                                    "reserved": list(SKIN_RESERVED),
+                                    "site_skin": _site_skin_name()})
+        if path == "/api/site-skin":
+            # one resolved ui block for the site chrome (dash + tournament).
+            # Cheap and unauthenticated-safe: it is a palette, nothing else.
+            return self._send(200, {"name": _site_skin_name(),
+                                    "ui": _site_skin_ui()})
         if path == "/api/runs":
             with JOBS_LOCK:
                 out = [dict(j, log=j["log"][-8:]) for j in JOBS[-20:]][::-1]
@@ -3421,6 +3496,26 @@ class H(BaseHTTPRequestHandler):
                                                     in contract.game().presets.items()},
                                         "saved": ships,
                                         "stats": list(SHIP_STATS)})
+            if path == "/api/site-skin":
+                # which skin paints the SITE chrome. "" restores the stock
+                # palette. Stored separately from imported-skin files so
+                # clearing it can never delete anyone's skin.
+                d = json.loads(body)
+                nm = _clean_skin_name(d.get("name", "")) or ""
+                if nm and nm not in SKIN_BUILTIN_UI:
+                    with SKINS_LOCK:
+                        if not os.path.isfile(os.path.join(_skins_dir(),
+                                                           nm + ".json")):
+                            return self._send(404, {
+                                "error": f'no skin named "{nm}" — import it '
+                                         "first, or use a built-in"})
+                os.makedirs(LIB, exist_ok=True)
+                tmp = os.path.join(LIB, "site-skin.json.tmp")
+                with open(tmp, "w") as fh:
+                    json.dump({"name": nm}, fh)
+                os.replace(tmp, os.path.join(LIB, "site-skin.json"))
+                return self._send(200, {"ok": True, "name": nm,
+                                        "ui": _site_skin_ui(nm)})
             if path == "/api/skins":
                 # import/remove a viewer skin (the Server-tab importer). The
                 # saved file is served at /skins/<name>.json — same-origin, so
