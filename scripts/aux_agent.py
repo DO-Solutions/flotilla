@@ -118,6 +118,36 @@ def _drain(path, ofs):
     return [], ofs
 
 
+def _ship(path, ofs, lane=None):
+    """Drain `path` past `ofs` and post it home. Returns (new_ofs, resp, sent).
+
+    SHIP-THEN-ADVANCE: the cursor moves only when the flagship actually took
+    the batch. The old order drained (advancing the cursor) and then posted,
+    discarding post()'s status — so when post() exhausted its five attempts and
+    returned (None, {}), those lines were gone for good: nothing retried them,
+    nothing logged them. One flagship hiccup silently deleted a whole decision
+    window from the live view (2026-08-14, the m05 Opus5-v-GPT56 lane: frames,
+    events AND both admirals' decisions for t=200..298 vanished as a unit, so
+    spectators watched the fleets teleport 10 game-seconds). The archived
+    replay was unaffected — it is serialized from the engine's in-memory frames
+    at game end — but the live view had no way back.
+
+    Holding the cursor means a failed batch is simply re-drained next pass, and
+    keeps growing until it lands. A long outage therefore stalls the live view
+    instead of punching a hole in it: recoverable, and visible, which the
+    silent drop never was."""
+    lines, nofs = _drain(path, ofs)
+    if not lines:
+        return nofs, {}, False             # adopt truncation resets (new game)
+    body = {"lines": lines}
+    if lane:
+        body["lane"] = lane
+    st, resp = post("live", body)
+    if st is None:                         # unreachable through every retry
+        return ofs, resp or {}, True       # hold the cursor: re-send next pass
+    return nofs, resp or {}, True
+
+
 def tail_live(path, stop, outdir):
     """Tail the base live.jsonl home — plus every live-<lane>.jsonl a
     parallel tournament's matchup lanes write (each posts with its lane name,
@@ -128,11 +158,7 @@ def tail_live(path, stop, outdir):
     quiet = 0
     while not stop.is_set() or os.path.exists(path):
         sent = False
-        lines, ofs = _drain(path, ofs)
-        resp = {}
-        if lines:
-            sent = True
-            _, resp = post("live", {"lines": lines})
+        ofs, resp, sent = _ship(path, ofs)
         try:
             for fn in os.listdir(outdir):
                 if fn.startswith("live-") and fn.endswith(".jsonl"):
@@ -140,12 +166,10 @@ def tail_live(path, stop, outdir):
         except OSError:
             pass
         for lp, lofs in list(lanes.items()):
-            llines, lanes[lp] = _drain(lp, lofs)
-            if llines:
-                sent = True
-                lane = os.path.basename(lp)[len("live-"):-len(".jsonl")]
-                _, r2 = post("live", {"lines": llines, "lane": lane})
-                resp = r2 or resp
+            lane = os.path.basename(lp)[len("live-"):-len(".jsonl")]
+            lanes[lp], r2, lsent = _ship(lp, lofs, lane=lane)
+            sent = sent or lsent
+            resp = r2 or resp
         if not sent:
             quiet += 1
             if quiet >= 5:                # heartbeat: poll for commands anyway

@@ -2687,12 +2687,24 @@ class H(BaseHTTPRequestHandler):
                     chunk = fh.read(2_000_000)
                 nl = chunk.rfind("\n")
                 if nl >= 0:                      # only complete lines ship
+                    bad = 0
                     for ln in chunk[:nl].split("\n"):
                         if ln:
                             try:
                                 out["lines"].append(json.loads(ln))
                             except ValueError:
-                                pass
+                                # unparseable line: it can only be skipped (the
+                                # cursor must move or the stream wedges here
+                                # forever) — but SAY SO. Silently swallowing it
+                                # made a lost window indistinguishable from a
+                                # quiet sim, which cost an afternoon of
+                                # "is it the replay or the sim?" (2026-08-14).
+                                bad += 1
+                    if bad:
+                        out["skipped"] = bad
+                        sys.stderr.write(
+                            f"[live] {jid}: skipped {bad} unparseable "
+                            f"line(s) at ofs {ofs}\n")
                     ofs += nl + 1
                 out["ofs"] = ofs
                 if size > ofs:
