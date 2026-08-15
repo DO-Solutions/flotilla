@@ -44,19 +44,34 @@ def _strip_positions(src):
 def extract(src, name):
     """Pull one top-level `function name(...){...}` or `const name = ...;` out of
     the viewer source, by brace/semicolon matching over a comment- and
-    string-masked copy."""
-    masked = _strip_positions(src)
+    string-masked copy.
+
+    The declaration is located in the RAW source and the mask is then built
+    FROM THAT POINT ON, rather than masking the whole file first. The masker is
+    a quote/comment scanner with no regex-literal support, so one regex holding
+    a quote character — `escHtml`'s `/[&<>"']/g` is the live example — flips its
+    quote parity, and from there every string boundary is off by one. Masking
+    the whole file made that damage contagious: declarations AFTER such a regex
+    silently vanished, and a caller doing `extract(src, "thing")` got None with
+    no hint why. Starting the mask at the declaration means a function is only
+    affected by its own body.
+
+    A declaration is matched at a line start, which is unambiguous enough here:
+    the viewer indents everything nested, so a top-level `function foo(` in
+    column 0 is the real one. Callers should still assert that what they asked
+    for came back — every suite here does."""
     for pat in (f"\nfunction {name}(", f"\nconst {name} "):
-        at = masked.find(pat)
+        at = src.find(pat)
         if at < 0:
             continue
         at += 1                                     # past the newline
+        masked = _strip_positions(src[at:])         # parity starts fresh here
         if pat.startswith("\nconst"):
-            end = masked.find(";", at)
+            end = masked.find(";")
             if end < 0:
                 return None
-            return src[at:end + 1]
-        brace = masked.find("{", at)
+            return src[at:at + end + 1]
+        brace = masked.find("{")
         if brace < 0:
             return None
         depth, i = 0, brace
@@ -66,7 +81,7 @@ def extract(src, name):
             elif masked[i] == "}":
                 depth -= 1
                 if depth == 0:
-                    return src[at:i + 1]
+                    return src[at:at + i + 1]
             i += 1
         return None
     return None
