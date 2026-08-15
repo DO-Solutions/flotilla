@@ -258,7 +258,15 @@ finally:
 # records (winners re-derived, nothing replayed) ----
 EL = json.loads(json.dumps(BASE))
 EL["participants"] = ["merchant", "corsair", "admiralty", "turtle"]
-EL["tournament"].update({"format": "single_elim", "games_per_match": 1})
+# games_per_match=3, not 1. The flag has to be planted in the window between
+# round 1 landing and the bracket finishing, and a 4-bot single_elim is only 3
+# matchups: at gpm=1 that window measured 0.30s against this loop's old 0.2s
+# poll — a coin flip, and the reason this case failed intermittently on main and
+# on unrelated PRs for weeks (the same commit passed one day and failed the
+# next). gpm=3 stretches the final to ~0.7s; the 20ms poll below cuts detection
+# to a thirtieth of that. Matchup COUNT is unchanged, so the assertions below
+# still describe the same bracket.
+EL["tournament"].update({"format": "single_elim", "games_per_match": 3})
 f = tempfile.mkdtemp(prefix="ft-tp-f-")
 os.makedirs(f, exist_ok=True)
 cfgpath = os.path.join(f, "cfg.json")
@@ -267,17 +275,28 @@ p = subprocess.Popen([sys.executable,
                       os.path.join(HERE, "sim", "run_config.py"), cfgpath],
                      stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                      text=True)
+planted = False
 deadline = time.time() + 300
 while time.time() < deadline:      # freeze once round 1 is fully recorded
+    if p.poll() is not None:
+        break                      # the bracket finished first — see below
     tj = os.path.join(f, "tournament.json")
     if os.path.isfile(tj):
         try:
             if len(json.load(open(tj)).get("matchups", [])) >= 2:
                 open(os.path.join(f, "pause.flag"), "w").write("1")
+                planted = True
                 break
         except ValueError:
             pass
-    time.sleep(0.2)
+    time.sleep(0.02)
+# Report a lost race AS a lost race. Without this the scaffolding's failure
+# arrived disguised as a product bug ("pause exits 75 (rc 0)") plus a cascade
+# ("resume completes (rc 1)" — there was no checkpoint because nothing paused),
+# which is what sent people looking for a pause regression that did not exist.
+ok(planted, "test scaffolding: pause flag planted after round 1 and before the "
+            "bracket finished (if this fails the run outpaced the poller — "
+            "widen games_per_match, do not go hunting in the pause code)")
 out, _ = p.communicate(timeout=300)
 ok(p.returncode == 75, f"elim pause exits 75 (rc {p.returncode})")
 r = run_cfg(EL, f, resume=True)
