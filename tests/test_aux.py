@@ -487,6 +487,57 @@ ok(lines == [{"header": True}],
 ok(os.path.basename(_lp)[len("live-"):-len(".jsonl")] == "m01_A_v_B",
    "the lane name round-trips through the stream filename")
 
+# ---- ship-then-advance: a failed post must NOT consume the batch ----
+# Regression: the worker drained (advancing its cursor) and THEN posted,
+# throwing away post()'s status. When post() gave up, that window was gone —
+# frames, events and decisions together — and the live view showed the fleets
+# teleporting across the missing 10 game-seconds (2026-08-14, m05 lane).
+_sp = os.path.join(_td, "live-m09_S_v_T.jsonl")
+with open(_sp, "w") as fh:
+    fh.write('{"t":100,"frames":["w1"]}\n{"t":200,"frames":["w2"]}\n')
+_posted = []
+_real_post = aux_agent.post
+
+
+def _post_down(path, payload, attempts=5, raw=None):
+    _posted.append(payload)
+    return None, {}                          # every attempt failed
+
+
+def _post_up(path, payload, attempts=5, raw=None):
+    _posted.append(payload)
+    return 200, {}
+
+
+aux_agent.post = _post_down
+_o1, _r1, _s1 = aux_agent._ship(_sp, 0, lane="m09_S_v_T")
+ok(_o1 == 0 and _s1 is True,
+   "a post that never lands holds the cursor at 0 (batch not consumed)")
+
+aux_agent.post = _post_up
+_n_before = len(_posted)
+_o2, _r2, _s2 = aux_agent._ship(_sp, _o1, lane="m09_S_v_T")
+ok(_o2 == os.path.getsize(_sp) and _s2 is True,
+   "the retry ships the whole held batch and only then advances the cursor")
+_last = _posted[-1]
+# len(_posted) guards the coincidence: if the failed batch had been consumed,
+# this pass would have found nothing to send and _posted would not have grown
+ok(len(_posted) == _n_before + 1
+   and [l["t"] for l in _last["lines"]] == [100, 200]
+   and _last.get("lane") == "m09_S_v_T",
+   "no window is lost across the failure: both t=100 and t=200 arrive intact")
+
+with open(_sp, "a") as fh:                   # steady state keeps advancing
+    fh.write('{"t":300,"frames":["w3"]}\n')
+_o3, _r3, _s3 = aux_agent._ship(_sp, _o2, lane="m09_S_v_T")
+ok(_o3 == os.path.getsize(_sp) and [l["t"] for l in _posted[-1]["lines"]] == [300],
+   "a healthy pass ships only the new window and advances past it")
+
+_nl, _nr, _ns = aux_agent._ship(_sp, _o3, lane="m09_S_v_T")
+ok(_ns is False and _nl == _o3,
+   "nothing new to send: no post, cursor parked")
+aux_agent.post = _real_post
+
 _real_sleep = time.sleep
 
 
