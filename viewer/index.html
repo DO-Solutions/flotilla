@@ -234,6 +234,15 @@
   #bar { margin-bottom: 10px; background: var(--card); border: 1px solid var(--line);
          border-radius: var(--radius); padding: 8px 12px; }
   #timeline { width: 100%; height: 34px; display: block; cursor: pointer; margin-bottom: 6px; }
+  /* timeline tooltip: the marks already said WHEN and clicking already jumped
+     there — this says WHAT, which is the whole question a spectator has. */
+  #tltip { position: fixed; z-index: 30; pointer-events: none; display: none;
+           max-width: 340px; padding: 5px 8px; border-radius: var(--radius);
+           background: var(--card); border: 1px solid var(--line);
+           color: var(--ink); font-size: 12px; line-height: 1.35;
+           box-shadow: 0 4px 14px #0006; }
+  #tltip .tt { color: var(--dim); font-variant-numeric: tabular-nums; }
+  .broadcast #tltip { display: none !important; }   /* never in a capture */
   #controls { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
   #transport { display: flex; gap: 10px; align-items: center;
                flex: 1 1 300px; min-width: 250px; }
@@ -413,6 +422,7 @@ at your own pace, then jump to the one being played now"></button>
 </header>
 <div id="bar">
   <canvas id="timeline" width="1152" height="34"></canvas>
+  <div id="tltip"></div>
   <div id="controls">
     <!-- transport row, video-player order: Play stays glued to the scrubber
          (on narrow screens the settings cluster wraps beneath, whole) -->
@@ -1227,6 +1237,105 @@ function curSpeed() {
 function fmtTime(t) {
   const s = Math.floor(t / (S.rp ? S.rp.meta.tick_hz : 10));
   return String(Math.floor(s / 60)).padStart(2, "0") + ":" + String(s % 60).padStart(2, "0");
+}
+
+// ---- SPECTATOR EVENT VOCABULARY (docs/SPECTATOR.md) ----
+// Every spectator surface is a different PRESENTATION of the same events: the
+// timeline tooltip today, and the event feed, the on-map effects and the
+// anchors Historic Moments cites as they land. Phrase a beat ONCE here and
+// they all agree; phrase it per surface and they drift the first time anyone
+// edits one of them.
+//
+// Reads the engine's own event stream — nothing here changes what is recorded,
+// and nothing in the sim, the fog rules or the replay pipeline reads this.
+//
+// rank is how LOUD a beat is, not how it draws: 3 = the match turned on it,
+// 2 = worth interrupting for, 1 = context, 0 = never surfaced. Intents and
+// orders are ~95% of the stream by volume and would drown everything else,
+// so they sit at 0 rather than being absent — an unknown kind is also 0, so
+// a new engine event is silent until someone gives it a voice here.
+const EV_RANK = {
+  flag_sunk: 3,
+  sink: 2, region: 2,
+  signal: 1, parley: 1, design: 1, yard_built: 1, courier: 1,
+  spawn: 0, deposit: 0, build_start: 0, repair_start: 0, repaired: 0,
+  refit: 0, refit_start: 0, reassign: 0, program: 0, program_rejected: 0,
+  design_rejected: 0, orders: 0, report: 0, intent: 0, yard_start: 0,
+  relocate_order: 0, flag_arrive: 0,
+};
+const EV_ICON = {flag_sunk: "☠", sink: "✖", region: "▣", signal: "⚑",
+                 parley: "✉", design: "⚙", yard_built: "⚓", courier: "✎"};
+
+function evFleet(id) {                   // fleet id -> the admiral's label
+  const n = S.rp && S.rp.result && S.rp.result.names;
+  return (n && n[id] != null) ? String(n[id]) : "fleet " + id;
+}
+
+function evPlace(x, y) {
+  // Nearest territory seat, using the engine's OWN rule (Chebyshev, ties by
+  // straight-line then the lower id) so a beat is named the same way the sim
+  // would name it. Only territory scenarios have seats — in Bounty and
+  // Conquest a beat simply has no place name, and callers must cope.
+  const seats = S.rp && S.rp.meta && S.rp.meta.regions;
+  if (!Array.isArray(seats) || !seats.length) return null;
+  let best = null, bc = Infinity, be = Infinity;
+  for (const s of seats) {
+    const dx = Math.abs(s.x - x), dy = Math.abs(s.y - y);
+    const cheb = Math.max(dx, dy), euc = dx * dx + dy * dy;
+    if (cheb < bc || (cheb === bc && euc < be)) { best = s; bc = cheb; be = euc; }
+  }
+  return best ? best.name : null;
+}
+
+function describeEvent(e) {
+  // -> {t, rank, icon, fleet, text} for anything worth surfacing, else null.
+  // NOTE both sink.by and flag_sunk.by are FLEET ids (core.py credits the
+  // attacker's fleet, not the ship) — reading either as a ship id would
+  // silently name the wrong admiral as the killer.
+  if (!e || !e.k) return null;
+  const rank = EV_RANK[e.k] ?? 0;
+  if (!rank) return null;
+  const icon = EV_ICON[e.k] || "·";
+  const at = (x, y) => { const p = evPlace(x, y); return p ? ` at ${p}` : ""; };
+  let text = null;
+  switch (e.k) {
+    case "flag_sunk":
+      text = e.by != null ? `${evFleet(e.by)} destroyed ${evFleet(e.fleet)}'s flagship`
+                          : `${evFleet(e.fleet)}'s flagship went down`;
+      break;
+    case "sink": {
+      const cls = e.preset || "ship";
+      if (e.cause === "scuttle") text = `${evFleet(e.fleet)} scuttled a ${cls}`;
+      else if (e.by != null)
+        text = `${evFleet(e.by)} sank ${evFleet(e.fleet)}'s ${cls}${at(e.x, e.y)}`;
+      else text = `${evFleet(e.fleet)} lost a ${cls}${at(e.x, e.y)}`;
+      break;
+    }
+    case "region":
+      text = e.prev == null
+        ? `${evFleet(e.fleet)} claimed ${e.name}`
+        : `${evFleet(e.fleet)} took ${e.name} from ${evFleet(e.prev)}`;
+      break;
+    case "signal":
+      text = `${evFleet(e.fleet)} signalled return to port`
+             + (e.flag === "return_safe" ? " (safe route)" : "");
+      break;
+    case "parley":
+      text = `${evFleet(e.fleet)} → ${evFleet(e.to)}`;
+      break;
+    case "design":
+      text = `${evFleet(e.fleet)} designed the ${e.name}`;
+      break;
+    case "yard_built":
+      text = `${evFleet(e.fleet)} opened a yard slot`;
+      break;
+    case "courier":
+      text = e.what === "sent"
+        ? `${evFleet(e.fleet)} dispatched a cutter to squadron ${e.squad}`
+        : `${evFleet(e.fleet)}'s cutter ${e.what} (squadron ${e.squad})`;
+      break;
+  }
+  return text ? {t: e.t, rank, icon, fleet: e.fleet, text} : null;
 }
 
 // top-bar navigation, one state machine (2026-08-09 spec): watching a replay
@@ -4150,6 +4259,48 @@ tlc.addEventListener("click", e => {
   const r = tlc.getBoundingClientRect();
   if (!r.width) return;
   seekFrac((e.clientX - r.left) / r.width);
+});
+
+// ---- timeline hover: what happened here? (docs/SPECTATOR.md) ----
+// The marks and click-to-jump already existed; the missing half was WHAT a
+// mark is, which is the question a spectator actually has and the one that
+// makes finding a moment for a video cut fast. Text comes from describeEvent,
+// so a beat reads identically here and on every other surface.
+function tlEventNear(clientX) {
+  if (!S.rp || !tlc) return null;
+  const r = tlc.getBoundingClientRect();
+  if (!r.width) return null;
+  const q2 = S.tlq || 1, Wt = tlc.width / q2;
+  const mx = (clientX - r.left) / r.width * Wt;         // -> logical px
+  const T = Math.max(1, S.rp.frames.at(-1).t);
+  const now = S.rp.frames[S.fi] ? S.rp.frames[S.fi].t : 0;
+  let best = null, bd = 7;                              // 7 logical px of slop
+  for (const e of (S.tl || []).concat(S.parley || [])) {
+    if (S.spoiler && e.t > now) continue;   // the marks hide the future; so do we
+    const d = Math.abs(e.t / T * Wt - mx);
+    if (d < bd) { bd = d; best = e; }
+  }
+  return best;
+}
+tlc.addEventListener("mousemove", ev => {
+  const tip = $("tltip");
+  if (!tip) return;
+  const e = tlEventNear(ev.clientX);
+  const d = e && describeEvent(e);
+  if (!d) { tip.style.display = "none"; return; }
+  tip.innerHTML = `<span class="tt">${escHtml(fmtTime(d.t))}</span> `
+    + `${escHtml(d.icon)} <b style="color:${COLORS[d.fleet % COLORS.length]}">`
+    + `${escHtml(d.text)}</b>`;
+  tip.style.display = "block";
+  // clamp to the viewport so a mark near the right edge doesn't push it off
+  const w = tip.offsetWidth || 200;
+  tip.style.left = Math.max(4, Math.min(window.innerWidth - w - 4,
+                                        ev.clientX - w / 2)) + "px";
+  tip.style.top = Math.max(4, ev.clientY - (tip.offsetHeight || 28) - 10) + "px";
+});
+tlc.addEventListener("mouseleave", () => {
+  const tip = $("tltip");
+  if (tip) tip.style.display = "none";
 });
 function toWorld(e) {
   const r = canvas.getBoundingClientRect();
