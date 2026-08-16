@@ -311,5 +311,39 @@ console.log(JSON.stringify({
        "everything worth reading")
     ok(t["badNum"] == 1, "a non-numeric value keeps the default")
 
+# ---- the viewer's own feed-corner preference outranks the skin's ----
+# Which corner is free depends on where the fleets are on this map, not on the
+# brand — so a per-browser choice wins, and switching skins must not move the
+# feed back out from under the viewer.
+PREF = extract(src, "applyFeedPref")
+ok(bool(PREF), "applyFeedPref is still extractable")
+if PREF:
+    pref = node_eval(r"""
+let SKIN = {}, store = {};
+const localStorage = {getItem: k => (k in store ? store[k] : null)};
+""" + PREF + r"""
+function run(saved, skinPos) {
+  store = saved === null ? {} : {"flotilla-feedpos": saved};
+  SKIN = {feed: {enabled: true, position: skinPos}};
+  applyFeedPref();
+  return SKIN.feed.enabled === false ? "off" : SKIN.feed.position;
+}
+console.log(JSON.stringify({
+  noPref:   run(null, "tr"),
+  override: run("bl", "tr"),
+  off:      run("off", "tr"),
+  junk:     run("../evil", "tr"),
+  empty:    run("", "tr"),
+}));
+""")
+    ok(pref["noPref"] == "tr",
+       "with no preference the skin's corner stands")
+    ok(pref["override"] == "bl",
+       "a viewer's corner choice overrides the skin's")
+    ok(pref["off"] == "off", "the viewer can hide the feed outright")
+    ok(pref["junk"] == "tr" and pref["empty"] == "tr",
+       "a junk or empty preference falls back to the skin rather than "
+       "breaking the corner")
+
 print(f"FAILURES: {fails}")
 sys.exit(1 if fails else 0)

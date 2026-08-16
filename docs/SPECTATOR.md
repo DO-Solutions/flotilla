@@ -97,6 +97,15 @@ Appearance and density only. **What is worth saying lives in the shared
 vocabulary, not in a skin** — a skin can restyle the feed, never rewrite the
 match.
 
+### Moving it out of the way
+
+Which corner is free depends on where the fleets happen to be on this map at
+this moment — that is not a branding decision, so the viewer's settings tab has
+its own **📰 feed corner** picker (four corners, or hidden). It is per-browser
+and it **outranks the skin's choice**, re-applied after every skin change so
+switching skins cannot quietly slide the feed back on top of a flagship. Clear
+it and the skin's own choice returns.
+
 > Not built yet: per-kind copy overrides (`feed.templates`), so Design can own
 > the wording without a code change. Deferred deliberately until there is real
 > copy to build against — inventing a placeholder vocabulary before anyone has

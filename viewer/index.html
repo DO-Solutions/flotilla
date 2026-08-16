@@ -986,6 +986,7 @@ function applySkin(spec) {
     if (v) rt.setProperty("--feed-" + k, v);
     else rt.removeProperty("--feed-" + k);
   }
+  applyFeedPref();                 // the viewer's corner choice outranks the skin's
   document.body.style.fontFamily = SKIN.ui.font || "";
 }
 const S = { rp: null, fi: 0, playing: false, last: 0, acc: 0, sel: null,
@@ -1177,7 +1178,25 @@ function renderSettingsPanel() {
     `<span class="info">i<span class="pop">appearance only — palette, ` +
     `type, silhouettes, motion. Never touches the match, the fog rules, ` +
     `or the data. ?skin= and ?skinurl= (same-origin JSON) work too — ` +
-    `see docs/SKINS.md</span></span></div>`;
+    `see docs/SKINS.md</span></span></div>` +
+    // The feed corner is a skin token, but which corner is FREE depends on
+    // where the fleets happen to be on this map — that is a per-match, even
+    // per-moment call, and nobody should have to edit a skin JSON to stop the
+    // feed sitting on top of a flagship. Per-browser, like the other toggles.
+    `<div style="display:flex;align-items:center;gap:6px;margin-bottom:6px">` +
+    `<label class="dim" for="feedpos">📰 feed corner</label>` +
+    `<select id="feedpos">` +
+    [["tl", "top left"], ["tr", "top right"],
+     ["bl", "bottom left"], ["br", "bottom right"], ["off", "hidden"]]
+      .map(([v, lbl]) => {
+        const cur = SKIN.feed && SKIN.feed.enabled === false
+          ? "off" : ((SKIN.feed || {}).position || "tl");
+        return `<option value="${v}"${cur === v ? " selected" : ""}>${lbl}</option>`;
+      }).join("") + `</select>` +
+    `<span class="info">i<span class="pop">where the event feed sits — move ` +
+    `it off whichever corner the action is in. Remembered in this browser and ` +
+    `it overrides the skin's own choice; the skin default returns if you ` +
+    `clear it.</span></span></div>`;
   const sec = (title, body, note) =>
     `<details><summary>${title}` +
     (note ? ` <span class="dim">${note}</span>` : "") +
@@ -3996,6 +4015,16 @@ document.addEventListener("mouseout", e => {
   if (S.rp && !S.playing) seek(S.fi);
 });
 document.addEventListener("change", e => {
+  if (e.target && e.target.id === "feedpos") {
+    // a per-browser override of the skin's feed corner: "" means defer to the
+    // skin again. Stored, then re-applied by applyFeedPref() on every skin
+    // change so switching skins cannot silently move the feed back.
+    const v = e.target.value;
+    try { localStorage.setItem("flotilla-feedpos", v); } catch (err) {}
+    applyFeedPref();
+    if (S.rp) seek(S.fi);                // repaint at the current frame
+    return;
+  }
   if (e.target && e.target.id === "skinsel") {
     const k = e.target.value;
     if (SKINS[k] || !SKIN_NAME_RE.test(k)) applySkin(SKINS[k] || {});
@@ -4360,6 +4389,19 @@ function evVisible(e, fi) {
     case "region": return true;
     default: return mine;
   }
+}
+
+function applyFeedPref() {
+  // The viewer's own corner choice wins over the skin's, because which corner
+  // is free depends on where the fleets happen to be on THIS map at THIS
+  // moment — that is not a branding decision, and nobody should have to edit a
+  // skin JSON to stop the feed sitting on top of a flagship. Re-applied after
+  // every applySkin so switching skins cannot quietly move the feed back.
+  let v = null;
+  try { v = localStorage.getItem("flotilla-feedpos"); } catch (e) { v = null; }
+  if (!v || !SKIN.feed) return;                 // no preference: the skin decides
+  if (v === "off") { SKIN.feed.enabled = false; return; }
+  if (["tl", "tr", "bl", "br"].includes(v)) SKIN.feed.position = v;
 }
 
 function renderFeed(fr) {
