@@ -1659,7 +1659,12 @@ function applyShowIf() {
       for (const [ck, cond] of Object.entries(s.show_if)) {
         const v = effKnob(KNOB_SEC[ck] || sec, ck);
         if (cond && typeof cond === "object" && "not" in cond) {
-          if (String(v) === String(cond.not)) show = false;
+          // {"not": x} or {"not": [x, y]} — the array form is "none of these",
+          // which players_per_match needs now that BOTH single_elim and swiss
+          // fix it at 2. Without it the array stringifies and never matches, so
+          // the row shows a knob the runner is quietly ignoring.
+          const banned = Array.isArray(cond.not) ? cond.not : [cond.not];
+          if (banned.map(String).includes(String(v))) show = false;
         } else if (Array.isArray(cond)) {
           if (!cond.map(String).includes(String(v))) show = false;
         } else if (String(v) !== String(cond)) show = false;
