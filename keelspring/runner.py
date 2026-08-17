@@ -649,8 +649,13 @@ def run_series(named_bots, seed, scenario, ser, outdir, label="series", prov=Non
            "sim_feedback": sim_feedback}
     if ser.get("historic_moments"):
         doc["historic_moments"] = _series_moments(named_bots, games, ser)
-    with open(os.path.join(outdir, "series.json"), "w") as fh:
+    sj_path = os.path.join(outdir, "series.json")
+    with open(sj_path, "w") as fh:
         json.dump(doc, fh, indent=1)
+    # AFTER the write, same rule as memos_saved: the aux agent ships this
+    # exact file on this line — memos/sim_feedback/historic_moments live only
+    # here, and an emit BEFORE the write ships a stale or missing file
+    _emit({"series_saved": True, "file": sj_path})
     return games
 
 

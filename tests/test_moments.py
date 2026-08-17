@@ -277,6 +277,27 @@ ok(abs(server._estimate_cost(s_fallback) - e_on) < 0.011,
    "the estimate uses the Server-tab default when the config is silent — "
    "the same fallback submit-time injection applies")
 
+# ---- the series.json shipping chain (source anchors) ----
+# A matchup's series.json is the ONLY home of its memos, sim_feedback and
+# historic_moments, and the worker box is disposable. Three links must exist:
+# the runner announces the write AFTER it happens, the aux agent ships on
+# that line, and the local executor mirrors the file into the library.
+runner_src = open(os.path.join(ROOT, "keelspring", "runner.py")).read()
+aux_src = open(os.path.join(ROOT, "scripts", "aux_agent.py")).read()
+srv_src = open(os.path.join(ROOT, "server.py")).read()
+ok('"series_saved"' in runner_src
+   and runner_src.index("json.dump(doc, fh") <
+       runner_src.index('_emit({"series_saved"'),
+   "the runner emits series_saved AFTER the write (an emit before ships a "
+   "stale or missing file — the memos_saved lesson)")
+ok('"series_saved"' in aux_src,
+   "the aux agent ships the matchup series.json on that line")
+ok('fn == "series.json" and root != outdir' in srv_src,
+   "the local executor mirrors matchup series.json into the library")
+ok("server-managed" in srv_src,
+   "series-mode ingest refuses a raw series.json overwrite (the ledger is "
+   "_update_series_json's)")
+
 # ---- end to end: a real (scripted) series run writes the section ----
 # Scripted bots mean zero narrator calls (no LLM players), but the whole
 # plumbing fires: ser carries the knobs, run_series calls the pass, and
