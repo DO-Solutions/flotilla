@@ -186,6 +186,7 @@ const document = {documentElement: {style: {setProperty(){},
                   body: {style: {}}};
 function loadSkinPatterns() {}
 function applyFeedPref() {}
+function audioSkinChanged() {}
 let SKIN = null, TAIL = 14;
 const COLORS = [];
 """
