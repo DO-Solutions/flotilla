@@ -60,6 +60,7 @@ but only hex gets those alphas).
 | `ships` | `spriteKey` | the team-color key (default `#ff00ff`): sprite pixels in shades of this color render in the fleet color; `""` disables |
 | `fx` | `fog` | the POV fog wash |
 | `fx` | `tail` | wake/trail length in frames (0–60) |
+| `fx` | `sink` `flagSunk` `region` `parley` `signal` `flash` `edgeArrow` | on-map VFX, one nested object per effect — see `docs/SPECTATOR.md` for the per-effect keys and defaults |
 | `minimap` | `bg` `frame` `cursor` | the overview map |
 
 ## Shapes & textures

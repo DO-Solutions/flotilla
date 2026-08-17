@@ -67,10 +67,19 @@ def extract(src, name):
         at += 1                                     # past the newline
         masked = _strip_positions(src[at:])         # parity starts fresh here
         if pat.startswith("\nconst"):
-            end = masked.find(";")
-            if end < 0:
-                return None
-            return src[at:at + end + 1]
+            # first semicolon at bracket depth 0 — a flat `;` scan truncated
+            # any const whose object literal holds METHODS (FX_PAINTERS was
+            # the live example: the first statement inside the first painter
+            # ended the extraction mid-function, and node saw EOF mid-object)
+            depth = 0
+            for i, ch in enumerate(masked):
+                if ch in "{[(":
+                    depth += 1
+                elif ch in "}])":
+                    depth -= 1
+                elif ch == ";" and depth == 0:
+                    return src[at:at + i + 1]
+            return None
         brace = masked.find("{")
         if brace < 0:
             return None
