@@ -66,11 +66,19 @@ def _ev_line(e, names):
         return f"{nm(e['fleet'])} designed the {e.get('name')}"
     if k == "yard_built":
         return f"{nm(e['fleet'])} opened a yard slot"
+    if k == "treaty":
+        t = str(e.get("terms") or "")[:80]
+        return (f"{nm(e['fleet'])} and {nm(e['other'])} signed a treaty"
+                + (f' — "{t}"' if t else ""))
+    if k == "treaty_end":
+        if e.get("cause") == "aggression":
+            return f"{nm(e['fleet'])} BROKE the treaty with {nm(e['other'])}"
+        return f"{nm(e['fleet'])} dissolved the treaty with {nm(e['other'])}"
     return None
 
 
 _ANCHOR_KINDS = ("flag_sunk", "sink", "region", "signal", "parley", "design",
-                 "yard_built")
+                 "yard_built", "treaty", "treaty_end")
 
 
 def anchors_for(replays):
@@ -84,8 +92,9 @@ def anchors_for(replays):
         # keep every big beat; thin the chatter kinds evenly if over budget
         budget = max(10, MAX_ANCHOR_LINES // max(1, len(replays)))
         if len(evs) > budget:
-            big = [e for e in evs if e["k"] in ("flag_sunk", "region")]
-            rest = [e for e in evs if e["k"] not in ("flag_sunk", "region")]
+            _BIG = ("flag_sunk", "region", "treaty", "treaty_end")
+            big = [e for e in evs if e["k"] in _BIG]
+            rest = [e for e in evs if e["k"] not in _BIG]
             step = max(1, len(rest) // max(1, budget - len(big)))
             evs = sorted(big + rest[::step], key=lambda e: e["t"])
         for e in evs:
