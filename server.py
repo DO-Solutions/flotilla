@@ -869,6 +869,12 @@ def submit_run(cfg):
     mode = cfg.get("mode", "match")
     if mode not in ("match", "series", "tournament"):
         raise ValueError(f"mode must be match|series|tournament, got {mode!r}")
+    # unknown top-level sections are silently ignored downstream, so catch them
+    # HERE — before a droplet is provisioned and hours of games run under a
+    # configuration nobody asked for (see run_config.validate_config)
+    problems = run_config.validate_config(cfg)
+    if problems:
+        raise ValueError("; ".join(problems))
     config_schema.resolve(cfg.get("scenario") or {})        # loud validation up front
     bots = cfg.get("participants" if mode == "tournament" else "bots") or []
     if not (2 <= len(bots) <= 8) and mode != "tournament":
