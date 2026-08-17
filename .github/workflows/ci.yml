@@ -31,6 +31,14 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: "20"
+      # jsdom for the Configure-form parity test (tests/test_dash_parity.py),
+      # which drives the real dashboard in a real DOM. Installed here rather
+      # than committed as a dependency: the shipped product stays pure-stdlib
+      # Python plus self-contained HTML, and jsdom never leaves the test lane.
+      # Without it that suite would fail rather than skip, which is the point —
+      # FLOTILLA_REQUIRE_NODE=1 means a missing tool is a failure, not silence.
+      - name: test-only JS deps
+        run: npm install --no-save --silent jsdom
       - name: sim tests
         working-directory: sim
         env:

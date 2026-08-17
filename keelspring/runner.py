@@ -120,6 +120,55 @@ def mdir_name(group, midx):
     return f"m{midx:02d}_" + tag
 
 
+# Every top-level key a run config may carry. Knobs INSIDE the four schema
+# sections are already validated by config_schema.resolve() — an unknown one
+# raises "unknown config key 'x'". A whole unknown SECTION had no such check:
+# merged_scenario() reads exactly scenario/admirals/series/tournament and
+# everything else is silently ignored, so a config that says one thing runs as
+# another with no error anywhere.
+#
+# That is not hypothetical. A cup was launched with pipeline_depth in a
+# top-level "pacing" section (its real SCHEMA section, but not an envelope
+# section); it was dropped, the run was never pipelined, and two days of a
+# supposed A/B measured two identical configurations before anyone noticed.
+CONFIG_TOP_KEYS = {
+    "mode", "seed", "name", "outdir",           # identity + placement
+    "bots", "participants",                     # the players
+    "scenario", "admirals", "series", "tournament",   # the four schema bags
+    "continue", "ack_cost",                     # run behaviour
+    "executor", "aux_size", "public",           # server-side submit options
+}
+
+
+def validate_config(cfg):
+    """Unknown top-level keys -> a list of human-readable complaints ([] = ok).
+
+    Deliberately a hard error at the boundary rather than a warning in a log:
+    the whole failure mode here is a config that LOOKS applied and is not, and
+    a warning nobody reads is indistinguishable from the silence we already
+    had."""
+    if not isinstance(cfg, dict):
+        return ["config must be a JSON object"]
+    unknown = sorted(set(cfg) - CONFIG_TOP_KEYS)
+    if not unknown:
+        return []
+    schema_sections = set(SCHEMA or {})
+    out = []
+    for k in unknown:
+        # the trap that actually bit: a real SCHEMA section name (pacing, world,
+        # economy, combat) used as an envelope section. Say exactly where it goes.
+        if k in schema_sections:
+            out.append(
+                f"'{k}' is a schema SECTION, not a config section — its knobs "
+                f"go inside \"scenario\" (which carries every world/economy/"
+                f"combat/pacing/scenario knob). As written it would be ignored "
+                f"entirely.")
+        else:
+            out.append(f"unknown config key '{k}' — expected one of: "
+                       + ", ".join(sorted(CONFIG_TOP_KEYS)))
+    return out
+
+
 def schedule_preview(cfg):
     """Every matchup a tournament WILL play — [{"dir", "players"}], computed
     exactly the way run_tournament builds its schedule (deterministic from
@@ -1032,6 +1081,11 @@ def main():
 def run(cfg):
     """Run a config dict — the ONE series/match/tournament runner (series.py's
     CLI delegates here so there is exactly one set of semantics)."""
+    # every entry point lands here, so this is the one place a misspelled or
+    # misplaced section can be caught for the CLI, the server, and aux workers
+    problems = validate_config(cfg)
+    if problems:
+        raise SystemExit("config rejected:\n  - " + "\n  - ".join(problems))
     adm = config_schema.section_resolve("admirals", cfg.get("admirals"))
     scenario = merged_scenario(cfg)
     outdir = cfg.get("outdir", "run-out")
