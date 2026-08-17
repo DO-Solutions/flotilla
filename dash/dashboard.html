@@ -2806,7 +2806,7 @@ async function pollJobs() {
         (j.state === "paused" ?
           ` <a class="btn btn-watch jresume" href="#" data-id="${j.id}">▶ resume</a>` : "") +
         (["queued", "running", "paused"].includes(j.state) ?
-          ` <a class="btn btn-dl jcancel" href="#" data-id="${j.id}">✕ cancel</a>` : "") +
+          ` <a class="btn btn-dl jcancel" href="#" data-id="${j.id}" title="cancel this run (asks first; finished games are kept)">✕</a>` : "") +
         (j.error ? ` <span class="st-failed">${esc(j.error)}</span>` : "") +
         (j.state === "running" && j.log && j.log.length ?
           `<div class="dim" style="font-size:11px">${(j.log.at(-1) || "").replace(/</g, "&lt;").slice(0, 140)}</div>` : "") +
