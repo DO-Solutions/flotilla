@@ -26,8 +26,18 @@ index. Agent-first API (all JSON; same schema as the GUI):
                              of admiral latency, so a large value means the
                              worker is gone, not thinking)
   POST /api/cancel           {"id": <job id>} -> cancel a queued/running job
+  GET  /api/name-check?name= is this run name free? -> {"name", "conflict"}
+                             (conflict = a sentence to show the operator, or null).
+                             Archiving does NOT free a name; deleting does.
   POST /api/rename           {"series": <name>, "display_name": <text>} -> persist a
                              series display name (empty display_name clears it)
+                             {"tournament": <name>, "new_name": <name>} -> a REAL
+                             rename: moves the directory, so every matchup and
+                             game path moves with it (they are derived from the
+                             dir at index time) and the embedded config.name is
+                             rewritten. Refused while a job of that name is live,
+                             if the target name is taken, or if a public showcase
+                             link points at the old name.
   POST /api/archive          {"series": <name> | "match": <file>, "archived": bool}
                              -> hide/show in the dashboard list (data untouched;
                              matches use the matches-meta.json sidecar)
@@ -875,6 +885,11 @@ def submit_run(cfg):
     problems = run_config.validate_config(cfg)
     if problems:
         raise ValueError("; ".join(problems))
+    # a name is a directory: two runs sharing one write into the SAME place and
+    # blend their games (see the p5 cup). Refuse before anything is provisioned.
+    clash = name_conflict(cfg.get("name"))
+    if clash:
+        raise ValueError(clash)
     config_schema.resolve(cfg.get("scenario") or {})        # loud validation up front
     bots = cfg.get("participants" if mode == "tournament" else "bots") or []
     if not (2 <= len(bots) <= 8) and mode != "tournament":
@@ -1254,6 +1269,52 @@ def _showcase_list_path():
 
 SHOWLIST_LOCK = threading.Lock()   # read-modify-write: two aux jobs finishing
                                    # together used to drop one entry
+
+
+def library_name_owner(name):
+    """What already owns this run name in the library, or None if it is free.
+
+    ARCHIVING does not free a name — archiving only sets a flag and the data
+    stays on disk, so its games are still served and its directory would still
+    be written into. DELETING frees it, because the data is gone. That falls
+    out of asking the filesystem rather than tracking a separate list, which is
+    also why it cannot drift out of sync with reality."""
+    n = _san(str(name or ""))
+    if not n:
+        return None
+    if os.path.isfile(os.path.join(LIB, "tournaments", n, "tournament.json")):
+        return "tournament"
+    if os.path.isfile(os.path.join(LIB, "series", n, "series.json")):
+        return "series"
+    if os.path.isfile(os.path.join(LIB, "matches", n + ".json")):
+        return "match"
+    return None
+
+
+def name_conflict(name):
+    """A human-readable reason this run name cannot be used, or None.
+
+    Two ways a name is taken: the library already holds data under it, or a job
+    is live with it. The second matters as much as the first — two live jobs
+    sharing a name write into the SAME directory, which is exactly how the
+    pipelined cup ended up mixed with the cancelled run it replaced."""
+    n = _san(str(name or ""))
+    if not n:
+        return None                        # blank = the server auto-names it
+    owner = library_name_owner(n)
+    if owner:
+        return (f"the name {n!r} is already used by a {owner} in the library — "
+                f"pick another, or delete that one first (archiving keeps the "
+                f"name taken, because the data is still there)")
+    with JOBS_LOCK:
+        live = any(j.get("name") == n
+                   and j.get("state") in ("queued", "running", "paused")
+                   for j in JOBS)
+    if live:
+        return (f"a job named {n!r} is already queued/running/paused — two runs "
+                f"sharing a name write into the same directory and mix their "
+                f"games together")
+    return None
 
 
 def _showcase_list():
@@ -2603,6 +2664,15 @@ class H(BaseHTTPRequestHandler):
             return self._send(200, {"skins": rows,
                                     "reserved": list(SKIN_RESERVED),
                                     "site_skin": _site_skin_name()})
+        if path == "/api/name-check":
+            # Chart a Course asks BEFORE launching, so a clash is a red note
+            # under the field rather than a rejected submit after the whole
+            # config is filled in. submit_run re-checks — this is convenience,
+            # never the gate.
+            q = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
+            nm = (q.get("name") or [""])[0]
+            return self._send(200, {"name": _san(str(nm)),
+                                    "conflict": name_conflict(nm)})
         if path == "/api/site-skin":
             # one resolved ui block for the site chrome (dash + tournament).
             # Cheap and unauthenticated-safe: it is a palette, nothing else.
@@ -3571,6 +3641,69 @@ class H(BaseHTTPRequestHandler):
             if path == "/api/rename":
                 d = json.loads(body)
                 disp = str(d.get("display_name", "")).strip()[:120]
+                if d.get("tournament"):
+                    # A REAL rename: move the directory. Everything else about a
+                    # tournament is derived from it at index time — the matchup
+                    # "series" rows and every game path are built from the dir
+                    # name — so moving it renames the games too, and build_index
+                    # regenerates the paths. Only the name embedded in
+                    # tournament.json has to be rewritten by hand.
+                    tn = _san(str(d["tournament"]))
+                    new = _san(str(d.get("new_name", "")))
+                    tdir = os.path.join(LIB, "tournaments", tn)
+                    if not tn or not os.path.isfile(os.path.join(
+                            tdir, "tournament.json")):
+                        return self._send(404, {"error": "no such tournament"})
+                    if not new:
+                        return self._send(400, {"error": "new_name is required "
+                                                "(letters/digits/-/_)"})
+                    if new == tn:
+                        return self._send(400, {"error": "that is the same name"})
+                    # renaming out from under a live job would leave it writing
+                    # into a directory that no longer exists under that name
+                    with JOBS_LOCK:
+                        live = any(j.get("name") == tn and
+                                   j.get("state") in ("queued", "running",
+                                                      "paused")
+                                   for j in JOBS)
+                    if live:
+                        return self._send(400, {
+                            "error": f"{tn!r} is queued/running/paused — cancel "
+                                     "it first, or its games will keep landing "
+                                     "under the old name"})
+                    clash = name_conflict(new)
+                    if clash:
+                        return self._send(400, {"error": clash})
+                    # a published link points at the OLD name; renaming under it
+                    # would leave a public URL serving nothing. Make the operator
+                    # retire it deliberately rather than breaking it silently.
+                    if any(x.get("ident") == f"tournament-{tn}"
+                           for x in _showcase_list()):
+                        return self._send(400, {
+                            "error": f"{tn!r} has a public showcase link — "
+                                     "retire it first (/api/showcase-delete), "
+                                     "or the link would serve a tournament that "
+                                     "no longer exists at that path"})
+                    os.rename(tdir, os.path.join(LIB, "tournaments", new))
+                    ndir = os.path.join(LIB, "tournaments", new)
+                    tj = os.path.join(ndir, "tournament.json")
+                    try:                   # keep the embedded name honest
+                        with open(tj) as fh:
+                            doc = json.load(fh)
+                        if isinstance(doc.get("config"), dict):
+                            doc["config"]["name"] = new
+                        if disp:
+                            doc["display_name"] = disp
+                        tmp = tj + ".tmp"
+                        with open(tmp, "w") as fh:
+                            json.dump(doc, fh, indent=1)
+                        os.replace(tmp, tj)
+                    except (OSError, ValueError):
+                        pass               # the move is what matters; a damaged
+                                           # tournament.json is already visible
+                    build_index(LIB)
+                    return self._send(200, {"ok": True, "tournament": new,
+                                            "renamed_from": tn})
                 if d.get("match"):         # standalone match: sidecar meta
                     fn = _san(str(d["match"]))
                     if not os.path.isfile(os.path.join(LIB, "matches", fn)):
