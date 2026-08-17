@@ -220,5 +220,130 @@ console.log(JSON.stringify(out));
        "with spoilers on, a FUTURE mark is not hoverable — the tooltip cannot "
        "leak what the timeline itself is hiding")
 
+# ---- the feed's fog rule ----
+# The feed may only report what the POV admiral could actually know. Get this
+# wrong and the POV view stops meaning anything — it would be narrating the
+# other fleet's private business over the top of a fog-of-war display.
+VIS = extract(src, "evVisible")
+ok(bool(VIS), "evVisible is still extractable")
+if VIS:
+    fog = node_eval(r"""
+let S = {};
+function povAlly(f) { return S.povCache && (S.povCache.allies || [S.pov]).includes(f); }
+""" + VIS + r"""
+// fleet 0 is us. Ship 7 (fleet 1) was visible at frame 5, ship 9 never was.
+function setPov(on) {
+  S = on ? {pov: 0, fi: 5, povCache: {allies: [0],
+             vis: [new Set(), new Set(), new Set(), new Set(), new Set(),
+                   new Set([7])]}}
+         : {pov: -1, povCache: null};
+}
+const out = {};
+setPov(false);
+out.allSeeing = evVisible({k: "sink", fleet: 1, ship: 9, by: 1}, 5);
+setPov(true);
+out.ownLoss      = evVisible({k: "sink", fleet: 0, ship: 3, by: 1}, 5);
+out.ourKill      = evVisible({k: "sink", fleet: 1, ship: 9, by: 0}, 5);
+out.seenEnemy    = evVisible({k: "sink", fleet: 1, ship: 7, by: 1}, 5);
+out.unseenEnemy  = evVisible({k: "sink", fleet: 1, ship: 9, by: 1}, 5);
+out.priorFrame   = evVisible({k: "sink", fleet: 1, ship: 7, by: 1}, 6);
+out.parleyOurs   = evVisible({k: "parley", fleet: 1, to: 0}, 5);
+out.parleyTheirs = evVisible({k: "parley", fleet: 1, to: 2}, 5);
+out.signalTheirs = evVisible({k: "signal", fleet: 1}, 5);
+out.signalOurs   = evVisible({k: "signal", fleet: 0}, 5);
+out.regionAny    = evVisible({k: "region", fleet: 1}, 5);
+out.yardTheirs   = evVisible({k: "yard_built", fleet: 1}, 5);
+console.log(JSON.stringify(out));
+""")
+    ok(fog["allSeeing"] is True,
+       "all-seeing view reports everything (no POV, no filtering)")
+    ok(fog["ownLoss"] is True and fog["ourKill"] is True,
+       "our own losses and our own kills always report")
+    ok(fog["seenEnemy"] is True,
+       "an enemy ship we could SEE reports when it sinks")
+    ok(fog["unseenEnemy"] is False,
+       "an enemy ship we never saw does NOT report — the feed cannot leak a "
+       "sinking that happened outside our vision")
+    ok(fog["priorFrame"] is True,
+       "the previous frame counts: a ship is already gone from the frame it "
+       "sinks in, so a strict same-frame test would drop every enemy sink")
+    ok(fog["parleyOurs"] is True and fog["parleyTheirs"] is False,
+       "parley reports only to the two fleets on the wire")
+    ok(fog["signalOurs"] is True and fog["signalTheirs"] is False,
+       "a rival's signal hoist is their own business")
+    ok(fog["regionAny"] is True,
+       "territory flips report to everyone — ownership is public in "
+       "state.regions, so this leaks nothing")
+    ok(fog["yardTheirs"] is False,
+       "a rival's yard work is inferred by scouting, not announced")
+
+# ---- feed token validation ----
+TOK = extract(src, "feedToken")
+ok(bool(TOK), "feedToken is still extractable")
+if TOK:
+    t = node_eval(TOK + r"""
+function fresh() { return {enabled: true, position: "tl", maxLines: 5, ttlS: 8,
+                           scale: 1, minRank: 2, bg: "", ink: "", accent: ""}; }
+function set(k, v) { const f = fresh(); feedToken(f, k, v); return f[k]; }
+console.log(JSON.stringify({
+  offBool:  set("enabled", false),
+  offStr:   set("enabled", "false"),
+  onDefault: set("enabled", true),
+  goodPos:  set("position", "br"),
+  badPos:   set("position", "../evil"),
+  clampMax: set("maxLines", 999),
+  clampTtl: set("ttlS", 0),
+  clampRank: set("minRank", 0),
+  badNum:   set("scale", "enormous"),
+}));
+""")
+    ok(t["offBool"] is False and t["offStr"] is False,
+       "the feed can actually be switched off (a boolean must not become the "
+       "truthy string \"false\")")
+    ok(t["onDefault"] is True, "enabled:true stays on")
+    ok(t["goodPos"] == "br" and t["badPos"] == "tl",
+       "position takes a corner and refuses anything else")
+    ok(t["clampMax"] == 12 and t["clampTtl"] == 1,
+       f"numbers clamp into their range (got maxLines={t['clampMax']}, "
+       f"ttlS={t['clampTtl']})")
+    ok(t["clampRank"] == 1,
+       "minRank cannot drop to 0 — that would admit the muted kinds and bury "
+       "everything worth reading")
+    ok(t["badNum"] == 1, "a non-numeric value keeps the default")
+
+# ---- the viewer's own feed-corner preference outranks the skin's ----
+# Which corner is free depends on where the fleets are on this map, not on the
+# brand — so a per-browser choice wins, and switching skins must not move the
+# feed back out from under the viewer.
+PREF = extract(src, "applyFeedPref")
+ok(bool(PREF), "applyFeedPref is still extractable")
+if PREF:
+    pref = node_eval(r"""
+let SKIN = {}, store = {};
+const localStorage = {getItem: k => (k in store ? store[k] : null)};
+""" + PREF + r"""
+function run(saved, skinPos) {
+  store = saved === null ? {} : {"flotilla-feedpos": saved};
+  SKIN = {feed: {enabled: true, position: skinPos}};
+  applyFeedPref();
+  return SKIN.feed.enabled === false ? "off" : SKIN.feed.position;
+}
+console.log(JSON.stringify({
+  noPref:   run(null, "tr"),
+  override: run("bl", "tr"),
+  off:      run("off", "tr"),
+  junk:     run("../evil", "tr"),
+  empty:    run("", "tr"),
+}));
+""")
+    ok(pref["noPref"] == "tr",
+       "with no preference the skin's corner stands")
+    ok(pref["override"] == "bl",
+       "a viewer's corner choice overrides the skin's")
+    ok(pref["off"] == "off", "the viewer can hide the feed outright")
+    ok(pref["junk"] == "tr" and pref["empty"] == "tr",
+       "a junk or empty preference falls back to the skin rather than "
+       "breaking the corner")
+
 print(f"FAILURES: {fails}")
 sys.exit(1 if fails else 0)
