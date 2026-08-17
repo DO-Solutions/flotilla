@@ -61,6 +61,7 @@ but only hex gets those alphas).
 | `fx` | `fog` | the POV fog wash |
 | `fx` | `tail` | wake/trail length in frames (0–60) |
 | `fx` | `sink` `flagSunk` `region` `parley` `signal` `flash` `edgeArrow` | on-map VFX, one nested object per effect — see `docs/SPECTATOR.md` for the per-effect keys and defaults |
+| `audio` | `enabled` `volume` `sink` `flagSunk` `region` `parley` `signal` | event stingers, off and empty by default — clips are `data:audio` URIs, ~200 KB decoded each; see `docs/SPECTATOR.md` |
 | `minimap` | `bg` `frame` `cursor` | the overview map |
 
 ## Shapes & textures

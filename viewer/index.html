@@ -241,6 +241,14 @@
      patch of sea otherwise never learns that anything happened. */
   #feed { position: absolute; z-index: 6; pointer-events: none;
           display: flex; flex-direction: column; gap: 3px; max-width: 42%; }
+  /* audio arming hint: browsers refuse sound before a gesture, and silence
+     with no explanation reads as broken — worst in a broadcast take, where
+     the operator must arm BEFORE recording. Any click dismisses it. */
+  #audiohint { position: fixed; top: 8px; left: 50%; z-index: 60;
+               transform: translateX(-50%); background: var(--card);
+               border: 1px solid var(--line); color: var(--dim);
+               border-radius: var(--radius); padding: 4px 10px;
+               font-size: 12px; cursor: pointer; }
   #feed.tl { top: 10px; left: 10px; }
   #feed.tr { top: 10px; right: 10px; align-items: flex-end; }
   #feed.bl { bottom: 10px; left: 10px; justify-content: flex-end; }
@@ -489,6 +497,7 @@ at your own pace, then jump to the one being played now"></button>
     </div>
     <button id="fsmap" title="fullscreen — panel + bar become overlays (P and B toggle them, Esc exits)">⛶</button>
     <div id="feed" class="tl"></div>
+    <div id="audiohint" style="display:none">🔊 click anywhere to enable sound</div>
     <canvas id="sea" width="1152" height="648"></canvas>
     <div id="becalmed" style="display:none;position:absolute;top:12px;left:50%;
          transform:translateX(-50%);background:#0a1b33ee;border:1px solid var(--line);
@@ -629,6 +638,12 @@ const SKIN_DEFAULT = {
           scale: 1,                    // 1080p vs 4K capture
           minRank: 2,                  // 2 = the big beats; 1 adds context
           bg: "", ink: "", accent: "" },   // "" = follow the ui palette
+  // audio stingers (docs/SPECTATOR.md §4): OFF AND EMPTY by default — no
+  // sound ships in this repo; a skin carries clips the way it carries
+  // sprites. data:audio URIs only, ~200 KB decoded per clip (base64 inflates
+  // ~33%, so the URI cap is 280k chars). Keys mirror the fx effect groups.
+  audio: { enabled: false, volume: 0.7,
+           sink: "", flagSunk: "", region: "", parley: "", signal: "" },
 };
 const SKINS = {
   flotilla: {},
@@ -779,6 +794,31 @@ function fxToken(fx, k, v) {
       case "width": base.width = num(base.width, 0.5, 6); break;
       case "size":  base.size = num(base.size, 4, 40); break;
     }
+  }
+}
+function cleanAudioClip(v) {
+  // stingers are SELF-CONTAINED audio only: a data: URI in a codec every
+  // engine ships, capped at 280k chars (~200 KB decoded — base64 inflates
+  // ~33%). Remote URLs never load, the same rule as every other skin asset.
+  return (typeof v === "string" && v.length <= 280000 &&
+          /^data:audio\/(mpeg|ogg|wav|webm|mp4);base64,[A-Za-z0-9+/=]+$/.test(v))
+    ? v : "";
+}
+function audioToken(audio, k, v) {
+  // same reasoning as feedToken/fxToken: the generic path would turn
+  // enabled:false into the truthy string "false", and the clip slots must
+  // pass the self-contained-asset rule, never a generic String()
+  switch (k) {
+    case "enabled":
+      audio.enabled = !(v === false || v === "false" || v === 0);
+      break;
+    case "volume": {
+      const n = +v;
+      if (Number.isFinite(n)) audio.volume = Math.min(1, Math.max(0, n));
+      break;
+    }
+    default:
+      if (typeof audio[k] === "string") audio[k] = cleanAudioClip(v);
   }
 }
 function cleanRadius(v) {
@@ -998,6 +1038,7 @@ function applySkin(spec) {
         if (sec === "fx" && typeof base.fx[k] === "object" && base.fx[k]) {
           fxToken(base.fx, k, v); continue;
         }
+        if (sec === "audio") { audioToken(base.audio, k, v); continue; }
         if (sec === "ui" && k === "radius") {
           // appearance only — a bare number means px, a string carries its own
           // unit. Anything else keeps the default rather than emitting a var
@@ -1034,6 +1075,7 @@ function applySkin(spec) {
     else rt.removeProperty("--feed-" + k);
   }
   applyFeedPref();                 // the viewer's corner choice outranks the skin's
+  audioSkinChanged();              // new skin = new clips; old decode cache dead
   document.body.style.fontFamily = SKIN.ui.font || "";
 }
 const S = { rp: null, fi: 0, playing: false, last: 0, acc: 0, sel: null,
@@ -1215,6 +1257,12 @@ function renderSettingsPanel() {
         "cell grid + dashed territory borders") +
     tog("sharp", S.quality !== "standard", "Sharp rendering",
         "match display resolution — turn Off on slow machines") +
+    tog("sound", audioActive(), "🔊 Sound effects",
+        "skin-shipped stingers on the big beats (this repo ships none). " +
+        "Browsers need one click to allow audio — Play counts. Remembered " +
+        "in this browser; it overrides the skin's own default." +
+        (Object.keys(audioClips()).length
+          ? "" : " The current skin ships no sounds, so this stays silent.")) +
     `<div style="display:flex;align-items:center;gap:6px;margin-bottom:6px">` +
     `<label class="dim" for="skinsel">🎨 skin</label>` +
     `<select id="skinsel">` + Object.keys(SKINS).map(k =>
@@ -1571,6 +1619,117 @@ function fxEdgePoint(sx, sy, w, h, m) {
   return { x: cx + dx * t, y: cy + dy * t, ang: Math.atan2(dy, dx) };
 }
 
+// ---- audio stingers (docs/SPECTATOR.md §4) ----
+// The engine narrates FORWARD playback only: loop() fires the beats whose
+// ticks the playhead just crossed, and seek() resets the window, so scrubbing
+// or jumping never replays history as a burst of noise. Browsers refuse audio
+// before a user gesture, so the context arms on any click once the feature is
+// wanted (the ▶ Play click usually is that gesture); until then #audiohint
+// says so — silence with no explanation is the failure mode, especially in a
+// broadcast take where the operator must arm BEFORE recording.
+const AUDIO_MIN_GAP_MS = 150;            // per-kind floor: eight sinks in one
+                                         // tick is ONE stinger, not a burst
+const AUDIO = { ctx: null, gain: null, buffers: {}, last: {} };
+function audioPref() {                   // "on" | "off" | null = follow skin
+  let v = null;
+  try { v = localStorage.getItem("flotilla-audio"); } catch (e) { v = null; }
+  return v === "on" || v === "off" ? v : null;
+}
+function audioClips() {                  // group -> clip URI, empties dropped
+  const out = {};
+  for (const g of Object.values(FX_KIND_CFG)) {
+    const c = (SKIN.audio || {})[g];
+    if (c) out[g] = c;
+  }
+  return out;
+}
+function audioActive() {
+  // policy only (no browser state): the viewer's saved choice outranks the
+  // skin's default, the same precedence as the feed corner — and a skin that
+  // ships no clips is silent no matter what anything says.
+  const pref = audioPref();
+  if (pref === "off") return false;
+  if (pref === null && !(SKIN.audio || {}).enabled) return false;
+  return Object.keys(audioClips()).length > 0;
+}
+function audioVol() {
+  const v = +((SKIN.audio || {}).volume);
+  return Number.isFinite(v) ? Math.min(1, Math.max(0, v)) : 0.7;
+}
+function audioArm() {
+  // must run inside a user gesture or the context starts suspended and stays
+  // there; idempotent, so every pointerdown may call it cheaply
+  if (!audioActive()) return;
+  try {
+    if (!AUDIO.ctx) {
+      const AC = window.AudioContext || window.webkitAudioContext;
+      if (!AC) return;
+      AUDIO.ctx = new AC();
+      AUDIO.gain = AUDIO.ctx.createGain();
+      AUDIO.gain.connect(AUDIO.ctx.destination);
+    }
+    if (AUDIO.ctx.state === "suspended") AUDIO.ctx.resume();
+    AUDIO.gain.gain.value = audioVol();
+    audioDecode();
+    const hint = $("audiohint");
+    if (hint) hint.style.display = "none";
+  } catch (e) { /* no audio is never a fault */ }
+}
+function audioDecode() {                 // data: URI -> AudioBuffer, cached
+  if (!AUDIO.ctx) return;
+  for (const [g, uri] of Object.entries(audioClips())) {
+    if (g in AUDIO.buffers) continue;
+    AUDIO.buffers[g] = null;             // in flight — never refetch per frame
+    fetch(uri).then(r => r.arrayBuffer())
+      .then(ab => AUDIO.ctx.decodeAudioData(ab))
+      .then(buf => { AUDIO.buffers[g] = buf; })
+      .catch(() => {});                  // a bad clip is silence, not a fault
+  }
+}
+function audioSkinChanged() {
+  AUDIO.buffers = {};
+  if (AUDIO.gain) AUDIO.gain.gain.value = audioVol();
+  if (AUDIO.ctx && audioActive()) audioDecode();
+  const hint = $("audiohint");
+  if (hint) hint.style.display =
+    audioActive() && (!AUDIO.ctx || AUDIO.ctx.state === "suspended")
+      ? "" : "none";
+}
+function audioPlay(group) {
+  const buf = AUDIO.ctx && AUDIO.buffers[group];
+  if (!buf) return;
+  try {
+    const src = AUDIO.ctx.createBufferSource();
+    src.buffer = buf;
+    src.connect(AUDIO.gain);
+    src.start();
+  } catch (e) {}
+}
+function audioBeats(prevT, curT, now) {
+  // fire each clip'd beat with a tick in (prevT, curT] — exactly the window
+  // the playhead crossed since the last animation frame. FOG APPLIES, at the
+  // EVENT's frame: a POV listener hears only what that admiral could see, or
+  // a stinger leaks through sound what the display carefully hides. Returns
+  // the fired groups so the logic is testable without a speaker.
+  if (!audioActive()) return [];
+  const fired = [];
+  now = now == null ? performance.now() : now;
+  const fev = (S.rp && S.rp.meta.frame_every) || 2;
+  const nfr = S.frameMaps.length;
+  for (const arr of [S.tl || [], S.parley || []]) for (const e of arr) {
+    if (e.t <= prevT || e.t > curT) continue;
+    const g = FX_KIND_CFG[e.k];
+    if (!g || !(SKIN.audio || {})[g]) continue;
+    const fiE = Math.max(0, Math.min(nfr - 1, Math.floor(e.t / fev)));
+    if (!evVisible(e, fiE)) continue;
+    if (now - (AUDIO.last[g] || -1e9) < AUDIO_MIN_GAP_MS) continue;
+    AUDIO.last[g] = now;
+    fired.push(g);
+    audioPlay(g);
+  }
+  return fired;
+}
+
 // top-bar navigation, one state machine (2026-08-09 spec): watching a replay
 // in a series shows Previous/Next with (x/y) game numbers, Next carries
 // (Live) + red when that game is being played right now; watching live shows
@@ -1709,6 +1868,7 @@ function load(rp) {
     return;
   }
   S.rp = rp; S.fi = 0; S.playing = false; S.acc = 0; S.sel = null;
+  S.audioT = -1;                         // fresh audio window per replay
   S.cat = {}; S.sinkAt = {}; S.byShip = {}; S.heading = {}; S.smooth = {};
   S.pov = -1; S.povCache = null; S.expandedCard = null;
   S.fleetHist = {}; S.nodeHist = {}; S.frameMaps = [];
@@ -3909,6 +4069,9 @@ function seek(fi) {
   $("scrub").value = S.fi;
   const fr = S.rp.frames[S.fi];
   if (!fr) return;                       // live mode starts with zero frames
+  S.audioT = fr.t;                       // a jump RESETS the audio window —
+                                         // scrubbing must never replay
+                                         // history as a burst of stingers
   updatePanels(fr);
   draw(fr, S.rp.frames[S.fi - 1], 1);
 }
@@ -3949,6 +4112,12 @@ function loop(ts) {
   $("scrub").value = S.fi;
   const fr = S.rp.frames[S.fi];
   if (!fr) return;
+  // audio window: the ticks crossed since the last processed frame. Above
+  // the eco gate on purpose — halving the PAINT rate must not drop beats.
+  if (fr.t > (S.audioT ?? -1)) {
+    audioBeats(S.audioT ?? -1, fr.t);
+    S.audioT = fr.t;
+  }
   // economy playback: render at ~30fps instead of every animation frame —
   // playback stays in time (the accumulator above already advanced), only
   // the paint rate halves. Frees GPU/compositor for a video call or webinar
@@ -3973,7 +4142,10 @@ function loop(ts) {
 
 function setPlay(p) {
   S.playing = p;
-  if (p) $("intro").style.display = "none";
+  if (p) {
+    $("intro").style.display = "none";
+    audioArm();                          // Play is a gesture: autoplay unlock
+  }
   $("play").textContent = p ? "⏸ Pause" : "▶ Play";
 }
 
@@ -4553,6 +4725,11 @@ document.addEventListener("click", e => {
     } else if (k === "sharp") {
       S.quality = S.quality === "standard" ? "auto" : "standard";
       localStorage.setItem("flotilla-quality", S.quality);
+    } else if (k === "sound") {
+      // the click that turns it on IS the arming gesture
+      const on = !audioActive();
+      localStorage.setItem("flotilla-audio", on ? "on" : "off");
+      if (on) audioArm(); else audioSkinChanged();   // refresh the hint state
     }
   } catch (e2) {}
   renderSettingsPanel();               // the button relabels itself
@@ -4871,6 +5048,11 @@ $("dl").addEventListener("click", async () => {
     blobDl(JSON.stringify(S.rp), base + ".json", "application/json");
   }
 });
+// autoplay unlock: ANY click arms the audio context once stingers are wanted
+// (audioArm is idempotent and returns immediately when audio is off). The
+// #audiohint chip exists for the broadcast operator, who must arm before the
+// take or OBS captures silence — this listener is what the chip points at.
+document.addEventListener("pointerdown", () => audioArm());
 document.body.addEventListener("dragover", e => e.preventDefault());
 document.body.addEventListener("drop", e => {
   e.preventDefault();

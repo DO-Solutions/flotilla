@@ -178,3 +178,49 @@ are unchanged.
 group, and a rank), the ttl conversion, the edge-arrow geometry, token
 sanitation (including the boolean-`"false"` trap and clamp ranges), and a real
 `applySkin` run proving nested fx objects survive the merge as objects.
+
+## Audio stingers
+
+**Off and empty by default — this repo ships no sound.** A skin carries clips
+the way it carries sprites, so there is nothing to license here; whatever a
+skin embeds is that skin's responsibility, and its license belongs next to it.
+
+| token | default | what |
+|---|---|---|
+| `audio.enabled` | `false` | the skin's default stance |
+| `audio.volume` | `0.7` | master gain, 0–1 (a real 0 is honoured) |
+| `audio.sink` `flagSunk` `region` `parley` `signal` | `""` | one clip per beat kind — keys mirror the `fx` effect groups |
+
+Clips are **`data:audio/...` URIs only** (mpeg, ogg, wav, webm, mp4), capped
+at 280k URI chars ≈ **200 KB of decoded audio** each — base64 inflates ~33%,
+so budget accordingly. Remote URLs never load, the same self-contained rule
+as every other skin asset.
+
+### How firing works
+
+The engine narrates **forward playback only**: each animation frame fires the
+beats whose ticks the playhead just crossed, and any seek/scrub resets the
+window — jumping around a replay never replays history as a burst of noise.
+Rules on top:
+
+- **Fog** — a beat passes `evVisible` at the *event's* frame before it
+  sounds. A POV listener hears only what that admiral could see; a stinger
+  for an unseen sink would leak through sound what the display hides.
+- **Coalescing** — 150 ms per-kind floor. A fleet action that lands eight
+  sinks in one tick is one stinger, not a machine gun.
+- **Precedence** — the viewer's 🔊 toggle (settings panel, per-browser)
+  outranks the skin's `enabled`, in both directions — same rule as the feed
+  corner. A skin with no clips is silent regardless of every switch.
+
+### Arming (autoplay policy)
+
+Browsers refuse audio before a user gesture. Any click arms the context —
+▶ Play counts — and until then a small "🔊 click anywhere to enable sound"
+chip shows whenever stingers are wanted but not yet armed. That chip is
+mostly for the **broadcast operator**: arm before the take, or OBS captures
+silence.
+
+`tests/test_audio.py` proves the asset rule, the token merge, the precedence
+table, and the window semantics (forward-only, fog-filtered per event,
+coalesced) — `audioBeats` returns the fired groups precisely so all of it is
+testable without a speaker.
