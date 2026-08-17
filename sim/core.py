@@ -440,6 +440,17 @@ class Engine(SimBase):
             + ("" if c["parley"] else
                "; PARLEY IS DISABLED this match — no admiral-to-admiral messaging, "
                "any parley you send is discarded")
+            + ('; TREATIES: formal PUBLIC pacts. Propose with {"treaty": '
+               '{"propose": <fleet id>, "terms": "..."}} (delivered privately '
+               "to their inbox); they sign with {\"treaty\": {\"accept\": "
+               "<your id>}}; end one openly with {\"treaty\": {\"dissolve\": "
+               "<fleet id>}}. Every formed, dissolved, or BROKEN treaty is "
+               "announced to ALL admirals — damaging a partner voids the pact "
+               "instantly and names you the breaker. state.treaties lists "
+               "every pact in force; state.treaty_offers holds offers made to "
+               "you (they expire after ~6 windows). The game never enforces "
+               "terms — a treaty is worth what its signers are"
+               if c.get("treaties", True) and c["parley"] else "")
             + ("; returning ships file voyage reports — read state.reports each window"
                if c["voyage_reports"] else "")
             + ((f"; CATCH-UP WINDOWS (pipelined): the game does NOT pause while "
@@ -597,6 +608,14 @@ class Engine(SimBase):
         self.region_owner = {}
         self._contest = {}                 # rid -> [fleet, progress ticks]
         self._cellregion = None
+        # official treaties: formal, PUBLIC pacts between two fleets. The game
+        # records and announces them — it never enforces them: rules (damage,
+        # territory, vision) are unchanged, so a treaty is worth exactly what
+        # the other admiral's word is worth. Damaging a partner voids the pact
+        # instantly and brands the aggressor (see _combat_note) — betrayal is
+        # a spectator-visible beat, not a hidden state change.
+        self.treaties = {}                 # frozenset({a,b}) -> {terms, since}
+        self.treaty_offers = {}            # (frm, to) -> {terms, t} (private)
         if self.scenario["win"] == "territory":
             self._gen_regions()
         for f in self.fleets.values():
@@ -1073,6 +1092,19 @@ class Engine(SimBase):
                      and cheb(r["x"], r["y"], fleet.hx, fleet.hy) <= 14])),
             enemies=enemies, nodes=nodes, reports=reports,
             parley_log=fleet.parley_log[-200:],
+            # treaties are PUBLIC by design — every admiral sees every pact
+            # (that is what makes one "official"); offers are private and only
+            # the recipient sees their own
+            **({"treaties": [dict(between=sorted(k), terms=v["terms"],
+                                  since=v["since"])
+                             for k, v in self.treaties.items()],
+                "treaty_offers": [dict(from_fleet=frm, terms=o["terms"],
+                                       age_ticks=self.t - o["t"])
+                                  for (frm, to), o
+                                  in self.treaty_offers.items()
+                                  if to == fleet.id]}
+               if self.cfg.get("treaties", True) and self.cfg["parley"]
+               else {}),
             admirals={f.id: f.name for f in self.fleets.values()},
             scores=(lambda sv:
                     {f.id: f.score() for f in self.fleets.values()}
@@ -1286,7 +1318,7 @@ class Engine(SimBase):
 
     ACTION_FIELDS = ("orders", "programs", "designs", "refit", "reassign",
                      "relocate", "build", "build_yard", "parley", "scuttle",
-                     "signal", "dispatch")
+                     "signal", "dispatch", "treaty")
     META_FIELDS = frozenset(("thoughts", "scratchpad", "_usage"))
 
     def _apply_actions(self, fleet, actions):
@@ -1510,6 +1542,76 @@ class Engine(SimBase):
             self._ev("parley", fleet=fleet.id,
                      to="all" if to == "all" else targets[0].id, text=text)
             sent += 1
+        # official treaties (see the constructor note: recorded and announced,
+        # never enforced). Terms are negotiated over parley; this is the
+        # signature. Offers stay PRIVATE between the two parties; the formed
+        # treaty — and any end of it — is announced to every admiral.
+        treaty_on = self.cfg.get("treaties", True) and self.cfg["parley"]
+        for tm in (self._as_list(actions.get("treaty"))
+                   if isinstance(actions.get("treaty"), list)
+                   else [actions["treaty"]] if isinstance(
+                       actions.get("treaty"), dict) else [])[:4]:
+            if not treaty_on:
+                fleet.warnings.append("⚠ treaty IGNORED: treaties are "
+                                      "disabled this match")
+                break
+            if not isinstance(tm, dict):
+                continue
+            def _fref(v):
+                if isinstance(v, str):
+                    return next((f.id for f in self.fleets.values()
+                                 if f.name == v), None)
+                return v if isinstance(v, int) and v in self.fleets else None
+            if "propose" in tm:
+                to = _fref(tm.get("propose"))
+                if to is None or to == fleet.id or not self.fleets[to].alive:
+                    fleet.warnings.append("⚠ treaty propose IGNORED: unknown "
+                                          "or invalid fleet")
+                    continue
+                if frozenset((fleet.id, to)) in self.treaties:
+                    fleet.warnings.append("⚠ treaty propose IGNORED: you "
+                                          "already have a treaty with "
+                                          f"{self.fleets[to].name}")
+                    continue
+                terms = one_line(tm.get("terms", ""), 140)
+                self.treaty_offers[(fleet.id, to)] = {"terms": terms,
+                                                      "t": self.t}
+                self.fleets[to].inbox.append(dict(
+                    sender=fleet.id,
+                    text=f"[TREATY OFFER] {terms or '(no terms stated)'} — "
+                         f'accept with {{"treaty": {{"accept": {fleet.id}}}}}'
+                         ", or ignore it"))
+            elif "accept" in tm:
+                frm = _fref(tm.get("accept"))
+                off = self.treaty_offers.pop((frm, fleet.id), None) \
+                    if frm is not None else None
+                if off is None:
+                    fleet.warnings.append("⚠ treaty accept IGNORED: no open "
+                                          "offer from that fleet")
+                    continue
+                if self.t - off["t"] > self.cfg["window"] * 6:
+                    fleet.warnings.append("⚠ treaty accept IGNORED: that "
+                                          "offer expired — ask them to "
+                                          "propose again")
+                    continue
+                self.treaties[frozenset((fleet.id, frm))] = {
+                    "terms": off["terms"], "since": self.t}
+                self._ev("treaty", fleet=fleet.id, other=frm,
+                         terms=off["terms"])
+            elif "dissolve" in tm:
+                oth = _fref(tm.get("dissolve"))
+                if oth is None or \
+                        frozenset((fleet.id, oth)) not in self.treaties:
+                    fleet.warnings.append("⚠ treaty dissolve IGNORED: no "
+                                          "treaty with that fleet")
+                    continue
+                self.treaties.pop(frozenset((fleet.id, oth)))
+                self._ev("treaty_end", fleet=fleet.id, other=oth,
+                         cause="dissolved")
+            else:
+                fleet.warnings.append('⚠ treaty IGNORED: use {"propose": '
+                                      '<fleet>, "terms": "..."}, {"accept": '
+                                      '<fleet>} or {"dissolve": <fleet>}')
         if self.cfg["scuttle"]:
             for sid in self._as_list(actions.get("scuttle"))[:20]:
                 try:
@@ -2118,6 +2220,19 @@ class Engine(SimBase):
         rec["dealt"] += dealt
         rec["taken"] += taken
         rec["x"], rec["y"] = x, y
+        # every damage event in the game flows through here exactly once with
+        # dealt>0 from the AGGRESSOR's side — the single choke point where a
+        # treaty betrayal is detected. The pact voids instantly; the breaker
+        # is named in the public record and both admirals are told.
+        if dealt > 0 and frozenset((fid, other)) in self.treaties:
+            self.treaties.pop(frozenset((fid, other)))
+            self._ev("treaty_end", fleet=fid, other=other, cause="aggression")
+            self.fleets[fid].warnings.append(
+                f"⚠ you FIRED ON {self.fleets[other].name} under a treaty — "
+                "the pact is void and every admiral heard you broke it")
+            self.fleets[other].warnings.append(
+                f"⚠ TREATY BROKEN: {self.fleets[fid].name} fired on you "
+                "under your pact — it is void")
 
     def _hostile(self, fa, fb):
         """Team-aware enmity: same team (default: own id) = never hostile."""
@@ -2651,6 +2766,14 @@ class Engine(SimBase):
                         g._bel_v = getattr(g, "_bel_v", 0) + 1
                 self._ev("flag_sunk", fleet=f.id,
                          by=best.fleet if best is not None else None)
+                # a dead fleet's pacts and offers dissolve silently — the
+                # elimination itself is the announcement, and a "treaty ended"
+                # beat on top of a flagship kill would be noise
+                self.treaties = {k: v for k, v in self.treaties.items()
+                                 if f.id not in k}
+                self.treaty_offers = {k: v for k, v
+                                      in self.treaty_offers.items()
+                                      if f.id not in k}
         if self.regions and self.cfg.get("territory_capture_ticks", 0) > 0:
             self._capture_tick()               # per-tick capture clocks
         if self.regions and t % self.cfg['territory_tick'] == 0:
@@ -2872,6 +2995,9 @@ class Engine(SimBase):
             regions=self.regions,
             region_owner={str(k): v for k, v in self.region_owner.items()},
             contest={str(k): v for k, v in self._contest.items()},
+            treaties=[[sorted(k), v] for k, v in self.treaties.items()],
+            treaty_offers=[[list(k), v]
+                           for k, v in self.treaty_offers.items()],
             nodes=[dict(id=n.id, x=n.x, y=n.y, kind=n.kind,
                         remaining=n.remaining, cap=n.cap,
                         regen_acc=n.regen_acc, name=n.name)
@@ -2939,6 +3065,12 @@ class Engine(SimBase):
             eng._island_pool = list(data["island_pool"])
         eng._outage_streak = int(data.get("outage_streak", 0))
         eng._outage_eval_t = eng.t         # the pre-pause window is spent
+        # treaties: absent in pre-treaty checkpoints — an old run resumes with
+        # none in force, which is exactly what was true when it froze
+        eng.treaties = {frozenset(k): dict(v)
+                        for k, v in data.get("treaties", [])}
+        eng.treaty_offers = {tuple(k): dict(v)
+                             for k, v in data.get("treaty_offers", [])}
         if "regions" in data:
             eng.regions = data["regions"] or []
             eng.region_owner = {int(k): v

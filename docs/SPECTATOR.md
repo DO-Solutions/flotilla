@@ -128,6 +128,8 @@ a **painter on that same rail**, keyed by event kind:
 | `region` | color wash over the territory's cells as it flips | `S.cellRegion` (the ownership-tint cell map) |
 | `parley` | dashed link line between the two flagships | both fleets' current flagship positions (broadcast `to:"all"` draws nothing — no single far end) |
 | `signal` | dashed pulse ring at the harbor | flagship history |
+| `treaty` | SOLID link line + rings at both flagships — official, steadier than the parley whisper | both signatories' flagship positions |
+| `treaty_end` | the line snaps: two halves retract from a widening middle gap; red on betrayal, dashed on an open dissolution | both flagship positions |
 
 Three of the five kinds carry no coordinates in the event record — positions
 resolve through caches the viewer already keeps for hit-testing, which is why
@@ -166,6 +168,8 @@ story-time at any playback speed.
 | `fx.region` | on, 4s | `enabled` `color` `ttlS` `alpha` (0.02–1) |
 | `fx.parley` | **off** | `enabled` `color` `ttlS` `width` (0.5–6) |
 | `fx.signal` | **off** | `enabled` `color` `ttlS` `scale` |
+| `fx.treaty` | on, 4s | `enabled` `color` `ttlS` `width` |
+| `fx.treatyEnd` | on, 3s | `enabled` `color` `ttlS` `width` |
 | `fx.flash` | on, 1.2s | `enabled` `color` `ttlS` |
 | `fx.edgeArrow` | on | `enabled` `color` `size` (4–40) |
 

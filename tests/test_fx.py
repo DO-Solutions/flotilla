@@ -95,10 +95,9 @@ ok(par["flash"]["enabled"] and par["edge"]["enabled"],
 
 # the rail feeds from S.tl + S.parley, so every non-parley FX kind must be in
 # the S.tl filter list or its beats never reach a painter
-tl_line = [ln for ln in src.splitlines()
-           if "S.tl = rp.events.filter" in ln]
-ok(len(tl_line) == 1 and
-   all(k in tl_line[0] for k in par["kinds"] if k != "parley"),
+tl_at = src.index("S.tl = rp.events.filter")
+tl_stmt = src[tl_at:src.index(";", tl_at)]
+ok(all(k in tl_stmt for k in par["kinds"] if k != "parley"),
    "every non-parley FX kind is captured by the S.tl index the rail reads")
 ok('fxToken(base.fx' in src,
    "applySkin routes nested fx objects through fxToken — the generic token "

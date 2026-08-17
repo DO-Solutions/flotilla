@@ -425,6 +425,14 @@
    "t": "bool",
    "doc": "Admiral-to-admiral messaging (diplomacy). Off = no communication between fleets: pure play skill, no negotiation."
   },
+  "treaties": {
+   "d": true,
+   "t": "bool",
+   "show_if": {
+    "parley": true
+   },
+   "doc": "Official treaties: formal, PUBLIC pacts between two fleets \u2014 proposed and signed as actions, listed in every admiral's state.treaties, announced to all when formed, dissolved, or BROKEN (damaging a partner voids the pact instantly and names the breaker). The game records and announces treaties but never enforces their terms \u2014 negotiation happens over parley; this is the signature. Needs parley on."
+  },
   "voyage_reports": {
    "d": true,
    "t": "bool",

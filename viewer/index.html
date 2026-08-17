@@ -627,7 +627,11 @@ const SKIN_DEFAULT = {
         parley:    { enabled: false, color: "", ttlS: 2,   width: 1.5 },
         signal:    { enabled: false, color: "", ttlS: 2.5, scale: 1 },
         flash:     { enabled: true,  color: "", ttlS: 1.2 },
-        edgeArrow: { enabled: true,  color: "", size: 10 } },
+        edgeArrow: { enabled: true,  color: "", size: 10 },
+        // treaties are the diplomacy beats Design asked for: a link line
+        // when one forms, and the line SNAPPING red when it breaks
+        treaty:    { enabled: true,  color: "", ttlS: 4, width: 2 },
+        treatyEnd: { enabled: true,  color: "", ttlS: 3, width: 2 } },
   minimap: { bg: "#0a1b33", frame: "#24304d", cursor: "#e6edf7" },
   // the event feed (docs/SPECTATOR.md). Appearance + density only: WHAT is
   // worth saying lives in the shared vocabulary, not in a skin.
@@ -643,7 +647,8 @@ const SKIN_DEFAULT = {
   // sprites. data:audio URIs only, ~200 KB decoded per clip (base64 inflates
   // ~33%, so the URI cap is 280k chars). Keys mirror the fx effect groups.
   audio: { enabled: false, volume: 0.7,
-           sink: "", flagSunk: "", region: "", parley: "", signal: "" },
+           sink: "", flagSunk: "", region: "", parley: "", signal: "",
+           treaty: "", treatyEnd: "" },
 };
 const SKINS = {
   flotilla: {},
@@ -1431,7 +1436,7 @@ function fmtTime(t) {
 // a new engine event is silent until someone gives it a voice here.
 const EV_RANK = {
   flag_sunk: 3,
-  sink: 2, region: 2,
+  sink: 2, region: 2, treaty: 2, treaty_end: 2,
   signal: 1, parley: 1, design: 1, yard_built: 1, courier: 1,
   spawn: 0, deposit: 0, build_start: 0, repair_start: 0, repaired: 0,
   refit: 0, refit_start: 0, reassign: 0, program: 0, program_rejected: 0,
@@ -1439,7 +1444,8 @@ const EV_RANK = {
   relocate_order: 0, flag_arrive: 0,
 };
 const EV_ICON = {flag_sunk: "☠", sink: "✖", region: "▣", signal: "⚑",
-                 parley: "✉", design: "⚙", yard_built: "⚓", courier: "✎"};
+                 parley: "✉", design: "⚙", yard_built: "⚓", courier: "✎",
+                 treaty: "🤝", treaty_end: "⚔"};
 
 function evFleet(id) {                   // fleet id -> the admiral's label
   const n = S.rp && S.rp.result && S.rp.result.names;
@@ -1498,6 +1504,15 @@ function describeEvent(e) {
     case "parley":
       text = `${evFleet(e.fleet)} → ${evFleet(e.to)}`;
       break;
+    case "treaty":
+      text = `${evFleet(e.fleet)} and ${evFleet(e.other)} signed a treaty`
+             + (e.terms ? ` — “${String(e.terms).slice(0, 80)}”` : "");
+      break;
+    case "treaty_end":
+      text = e.cause === "aggression"
+        ? `${evFleet(e.fleet)} BROKE the treaty with ${evFleet(e.other)}`
+        : `${evFleet(e.fleet)} dissolved the treaty with ${evFleet(e.other)}`;
+      break;
     case "design":
       text = `${evFleet(e.fleet)} designed the ${e.name}`;
       break;
@@ -1522,6 +1537,7 @@ function describeEvent(e) {
 const FX_KIND_CFG = {                    // event kind -> its SKIN.fx group
   sink: "sink", flag_sunk: "flagSunk", region: "region",
   parley: "parley", signal: "signal",
+  treaty: "treaty", treaty_end: "treatyEnd",
 };
 // Painters draw in WORLD space at an already-resolved position. g carries the
 // draw() geometry ({cw, ch, colors}), k is age 0..1 (fresh..gone). Positions
@@ -1600,6 +1616,41 @@ const FX_PAINTERS = {
     ctx.setLineDash([2, 3]);
     ctx.beginPath(); ctx.arc(x, y, (2 + k * 6) * s, 0, 7); ctx.stroke();
     ctx.setLineDash([]);
+    ctx.globalAlpha = 1;
+  },
+  treaty(ctx, g, e, k, cfg, x, y, x2, y2) {
+    // a SOLID line between the signatories' flagships, ringed at both ends —
+    // deliberately steadier than the dashed parley whisper: this one is
+    // official, and everyone saw it
+    const col = cfg.color || "#e5eceb";
+    ctx.strokeStyle = col;
+    ctx.globalAlpha = 0.8 * (1 - k);
+    ctx.lineWidth = cfg.width || 2;
+    ctx.beginPath(); ctx.moveTo(x, y); ctx.lineTo(x2, y2); ctx.stroke();
+    const r = Math.min(g.cw, g.ch) * 1.2;
+    ctx.beginPath(); ctx.arc(x, y, r, 0, 7); ctx.stroke();
+    ctx.beginPath(); ctx.arc(x2, y2, r, 0, 7); ctx.stroke();
+    ctx.lineWidth = 1;
+    ctx.globalAlpha = 1;
+  },
+  treaty_end(ctx, g, e, k, cfg, x, y, x2, y2) {
+    // the line SNAPS: two halves retract from a widening gap at the middle.
+    // Red by default — Design's "line snapping red when it breaks", verbatim
+    const col = cfg.color || "#ff5d5d";
+    ctx.strokeStyle = col;
+    ctx.globalAlpha = 0.85 * (1 - k);
+    ctx.lineWidth = cfg.width || 2;
+    const mx = (x + x2) / 2, my = (y + y2) / 2;
+    const pull = 0.5 * (1 - k * 0.9);            // halves shrink toward ends
+    ctx.setLineDash(e.cause === "dissolved" ? [5, 5] : []);
+    ctx.beginPath();
+    ctx.moveTo(x, y);
+    ctx.lineTo(x + (mx - x) * pull * 2 * (1 - k), y + (my - y) * pull * 2 * (1 - k));
+    ctx.moveTo(x2, y2);
+    ctx.lineTo(x2 + (mx - x2) * pull * 2 * (1 - k), y2 + (my - y2) * pull * 2 * (1 - k));
+    ctx.stroke();
+    ctx.setLineDash([]);
+    ctx.lineWidth = 1;
     ctx.globalAlpha = 1;
   },
 };
@@ -1915,7 +1966,8 @@ function load(rp) {
       (S.byShip[e.ship] = S.byShip[e.ship] || []).push(e);
     }
   }
-  S.tl = rp.events.filter(e => ["sink", "flag_sunk", "signal", "region"].includes(e.k));
+  S.tl = rp.events.filter(e => ["sink", "flag_sunk", "signal", "region",
+                              "treaty", "treaty_end"].includes(e.k));
   S.cellRegion = null;
   S.borderPath = null;
   S.gridPaths = null;                    // map size may differ game to game
@@ -3790,6 +3842,10 @@ function draw(fr, prev, alpha) {
         const pa = S.flagPos[e.fleet], pb = S.flagPos[e.to];
         return pa && pb ? [pa[0], pa[1], pb[0], pb[1]] : null;
       }
+      case "treaty": case "treaty_end": {
+        const ta = S.flagPos[e.fleet], tb = S.flagPos[e.other];
+        return ta && tb ? [ta[0], ta[1], tb[0], tb[1]] : null;
+      }
     }
     return null;
   };
@@ -4810,6 +4866,7 @@ function evVisible(e, fi) {
     }
     case "parley": return mine || povAlly(e.to);
     case "region": return true;
+    case "treaty": case "treaty_end": return true;   // announced to ALL
     default: return mine;
   }
 }
@@ -5238,7 +5295,8 @@ function liveAppend(p) {
     if (e.k === "intent" || e.k === "orders") {
       (S.byShip[e.ship] = S.byShip[e.ship] || []).push(e);
     }
-    if (["sink", "flag_sunk", "signal", "region"].includes(e.k)) S.tl.push(e);
+    if (["sink", "flag_sunk", "signal", "region",
+         "treaty", "treaty_end"].includes(e.k)) S.tl.push(e);
     if (e.k === "parley") S.parley.push(e);
     if ((EV_RANK[e.k] ?? 0) > 0) (S.feedEvents = S.feedEvents || []).push(e);
   }
