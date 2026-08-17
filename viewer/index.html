@@ -606,7 +606,19 @@ const SKIN_DEFAULT = {
            // re-rendered in the fleet color at the same brightness — one PNG
            // serves all eight teams. "" disables the swap.
            spriteKey: "#ff00ff" },
-  fx: { fog: "rgba(3,8,18,.62)", tail: 14 },
+  fx: { fog: "rgba(3,8,18,.62)", tail: 14,
+        // on-map VFX (docs/SPECTATOR.md §3): one nested object per effect,
+        // each independently disableable — a busy 8-fleet match with all of
+        // them on is noise. color "" = derive (the fleet's color, or the
+        // stock ripple ink). ttlS is GAME seconds (scaled by tick_hz), so an
+        // effect lasts the same story-time at any playback speed.
+        sink:      { enabled: true,  color: "", ttlS: 3,   scale: 1 },
+        flagSunk:  { enabled: true,  color: "", ttlS: 6,   scale: 1.6 },
+        region:    { enabled: true,  color: "", ttlS: 4,   alpha: 0.25 },
+        parley:    { enabled: false, color: "", ttlS: 2,   width: 1.5 },
+        signal:    { enabled: false, color: "", ttlS: 2.5, scale: 1 },
+        flash:     { enabled: true,  color: "", ttlS: 1.2 },
+        edgeArrow: { enabled: true,  color: "", size: 10 } },
   minimap: { bg: "#0a1b33", frame: "#24304d", cursor: "#e6edf7" },
   // the event feed (docs/SPECTATOR.md). Appearance + density only: WHAT is
   // worth saying lives in the shared vocabulary, not in a skin.
@@ -735,6 +747,38 @@ function feedToken(feed, k, v) {
     // stream by volume) and bury everything worth reading, so the floor is 1
     case "minRank":  feed.minRank = Math.round(num(1, 3, feed.minRank)); break;
     case "bg": case "ink": case "accent": feed[k] = String(v); break;
+  }
+}
+function fxToken(fx, k, v) {
+  // The nested fx.<effect> objects would be flattened to strings by the
+  // generic token path, and booleans have the same "false" trap the feed hit.
+  // Merge onto the DEFAULT effect object key by key so a skin that sets only
+  // {color} keeps the stock ttl/scale, and an unknown subkey is ignored.
+  const base = fx[k];
+  if (typeof base !== "object" || !base ||
+      typeof v !== "object" || !v || Array.isArray(v)) return;
+  const num = (cur, lo, hi) => {
+    const n = +v[sub];
+    return Number.isFinite(n) ? Math.min(hi, Math.max(lo, n)) : cur;
+  };
+  let sub;
+  for (sub of Object.keys(v)) {
+    if (!(sub in base)) continue;
+    switch (sub) {
+      case "enabled":
+        base.enabled = !(v.enabled === false || v.enabled === "false" ||
+                         v.enabled === 0);
+        break;
+      // any CSS color works (canvas ignores an invalid one — it just keeps
+      // the previous style, which reads as "effect in the wrong color", not
+      // an injection surface). Length-capped like every skin string.
+      case "color": base.color = String(v.color).slice(0, 48); break;
+      case "ttlS":  base.ttlS = num(base.ttlS, 0.2, 30); break;
+      case "scale": base.scale = num(base.scale, 0.25, 4); break;
+      case "alpha": base.alpha = num(base.alpha, 0.02, 1); break;
+      case "width": base.width = num(base.width, 0.5, 6); break;
+      case "size":  base.size = num(base.size, 4, 40); break;
+    }
   }
 }
 function cleanRadius(v) {
@@ -951,6 +995,9 @@ function applySkin(spec) {
         }
         if (k === "texture") { base[sec][k] = cleanTexture(v); continue; }
         if (sec === "feed") { feedToken(base.feed, k, v); continue; }
+        if (sec === "fx" && typeof base.fx[k] === "object" && base.fx[k]) {
+          fxToken(base.fx, k, v); continue;
+        }
         if (sec === "ui" && k === "radius") {
           // appearance only — a bare number means px, a string carries its own
           // unit. Anything else keeps the default rather than emitting a var
@@ -1418,6 +1465,112 @@ function describeEvent(e) {
   return text ? {t: e.t, rank, icon, fleet: e.fleet, text} : null;
 }
 
+// ---- on-map VFX (docs/SPECTATOR.md §3) ----
+// Generalized from the sink ripples: every effect is a time-indexed transient
+// on ONE rail inside draw() — `age = fr.t - e.t`, faded over a skin-set TTL,
+// POV-filtered through evVisible (the same fog contract as the feed). A skin
+// tunes color/ttl/scale per effect or disables it; it never adds kinds — WHAT
+// is worth marking lives here, in the shared vocabulary.
+const FX_KIND_CFG = {                    // event kind -> its SKIN.fx group
+  sink: "sink", flag_sunk: "flagSunk", region: "region",
+  parley: "parley", signal: "signal",
+};
+// Painters draw in WORLD space at an already-resolved position. g carries the
+// draw() geometry ({cw, ch, colors}), k is age 0..1 (fresh..gone). Positions
+// are resolved by the rail, not here, because three of the five kinds carry
+// no coordinates and lean on the viewer's own caches (flagship history,
+// territory seats) — see fxWorldPos in draw().
+const FX_PAINTERS = {
+  sink(ctx, g, e, k, cfg, x, y) {
+    // the original ripple, verbatim at defaults — an expanding fading circle
+    // (alpha lives in globalAlpha ONLY: a color carrying its own alpha would
+    // compound with it and dim the stock look)
+    const r = (3 + k * 24) * (cfg.scale || 1);
+    ctx.strokeStyle = cfg.color || "#e6edf7";
+    ctx.globalAlpha = 0.5 * (1 - k);
+    ctx.beginPath(); ctx.arc(x, y, r, 0, 7); ctx.stroke();
+    ctx.globalAlpha = 1;
+  },
+  flag_sunk(ctx, g, e, k, cfg, x, y) {
+    // the biggest beat in the game: a double ring + core glow in the SUNK
+    // fleet's color, larger and longer than any ship loss
+    const col = cfg.color || g.colors[e.fleet % g.colors.length];
+    const s = (cfg.scale || 1.6) * Math.min(g.cw, g.ch);
+    ctx.strokeStyle = col;
+    ctx.globalAlpha = 0.85 * (1 - k);
+    ctx.lineWidth = 2.5 * (1 - k) + 0.5;
+    ctx.beginPath(); ctx.arc(x, y, (2 + k * 14) * s * 0.5, 0, 7); ctx.stroke();
+    ctx.globalAlpha = 0.45 * (1 - k);
+    ctx.beginPath(); ctx.arc(x, y, (1 + k * 22) * s * 0.5, 0, 7); ctx.stroke();
+    ctx.lineWidth = 1;
+    ctx.fillStyle = col;
+    ctx.globalAlpha = 0.35 * (1 - k) * (1 - k);
+    ctx.beginPath(); ctx.arc(x, y, s * 1.2 * (1 - k * 0.5), 0, 7); ctx.fill();
+    ctx.globalAlpha = 1;
+  },
+  region(ctx, g, e, k, cfg, x, y) {
+    // color wash over the territory's cells as it flips — the Civ city-flip
+    // read. Cells come from S.cellRegion (already computed for the ownership
+    // tint); outside territory mode there are no region events to paint.
+    const col = cfg.color || g.colors[e.fleet % g.colors.length];
+    ctx.fillStyle = col;
+    ctx.globalAlpha = (cfg.alpha || 0.25) * (1 - k);
+    const cm = S.cellRegion;
+    if (cm) {
+      for (let cx = 0; cx < cm.length; cx++) {
+        const colm = cm[cx];
+        for (let cy = 0; cy < colm.length; cy++) {
+          if (colm[cy] === e.region)
+            ctx.fillRect(cx * g.cw, cy * g.ch, g.cw + .5, g.ch + .5);
+        }
+      }
+    } else if (x != null) {              // no cell map: mark the seat instead
+      ctx.beginPath(); ctx.arc(x, y, 3 * Math.min(g.cw, g.ch), 0, 7); ctx.fill();
+    }
+    ctx.globalAlpha = 1;
+  },
+  parley(ctx, g, e, k, cfg, x, y, x2, y2) {
+    // link line between the two fleets' flagships for the message's life.
+    // Broadcast parleys (to === "all") have no single far end — skipped by
+    // the rail. Dashed so it never reads as a wake or an order.
+    const col = cfg.color || g.colors[e.fleet % g.colors.length];
+    ctx.strokeStyle = col;
+    ctx.globalAlpha = 0.6 * (1 - k);
+    ctx.lineWidth = cfg.width || 1.5;
+    ctx.setLineDash([6, 5]);
+    ctx.beginPath(); ctx.moveTo(x, y); ctx.lineTo(x2, y2); ctx.stroke();
+    ctx.setLineDash([]);
+    ctx.lineWidth = 1;
+    ctx.globalAlpha = 1;
+  },
+  signal(ctx, g, e, k, cfg, x, y) {
+    // pulse ring at the harbor: the hoist is visible from the mast
+    const col = cfg.color || g.colors[e.fleet % g.colors.length];
+    const s = (cfg.scale || 1) * Math.min(g.cw, g.ch);
+    ctx.strokeStyle = col;
+    ctx.globalAlpha = 0.7 * (1 - k);
+    ctx.setLineDash([2, 3]);
+    ctx.beginPath(); ctx.arc(x, y, (2 + k * 6) * s, 0, 7); ctx.stroke();
+    ctx.setLineDash([]);
+    ctx.globalAlpha = 1;
+  },
+};
+function fxTtlTicks(cfg, hz) {           // skin seconds -> sim ticks
+  return Math.max(1, Math.round((cfg.ttlS || 3) * (hz || 10)));
+}
+function fxEdgePoint(sx, sy, w, h, m) {
+  // Clamp an OFF-SCREEN point to the viewport edge along the ray from the
+  // screen center, inset by margin m — where the edge indicator sits, plus
+  // the angle it points (toward the beat). Pure math, unit-tested; returns
+  // null for a point already on screen so callers can gate on it.
+  if (sx >= 0 && sx <= w && sy >= 0 && sy <= h) return null;
+  const cx = w / 2, cy = h / 2;
+  const dx = sx - cx, dy = sy - cy;
+  const t = Math.min(dx ? (cx - m) / Math.abs(dx) : Infinity,
+                     dy ? (cy - m) / Math.abs(dy) : Infinity);
+  return { x: cx + dx * t, y: cy + dy * t, ang: Math.atan2(dy, dx) };
+}
+
 // top-bar navigation, one state machine (2026-08-09 spec): watching a replay
 // in a series shows Previous/Next with (x/y) game numbers, Next carries
 // (Live) + red when that game is being played right now; watching live shows
@@ -1609,13 +1762,12 @@ function load(rp) {
   S.hoverEnt = null;
   S.flagPos = {}; S.regionPos = {};
   S.parley = rp.events.filter(e => e.k === "parley");
-  // sink ripples index: draw() used to scan ALL events (~75k, 98% intents)
-  // every animation frame to find ~77 sinks — measured 2.7ms/frame of the
-  // 16ms budget on desktop, the whole budget on a phone
-  S.sinks = rp.events.filter(e => e.k === "sink");
-  // feed index, same reason as the sink index above: the feed needs a handful
-  // of beats per frame out of tens of thousands of events, and rank is static,
-  // so filter ONCE here rather than scanning the stream every animation frame.
+  // NOTE the VFX rail in draw() reads S.tl + S.parley, never rp.events:
+  // scanning the raw stream (~75k rows, 98% intents) every animation frame
+  // once cost 2.7ms/frame of the 16ms budget on desktop, the whole budget on
+  // a phone. Any new per-frame consumer gets its own filtered index here.
+  // feed index, same reason: the feed needs a handful of beats per frame out
+  // of tens of thousands of events, and rank is static, so filter ONCE.
   S.feedEvents = rp.events.filter(e => (EV_RANK[e.k] ?? 0) > 0);
   rp.frames.forEach((fr, fi) => ingestFrame(fr, fi));
   // the in-memory replay is now canonical v3 — stamp it so ⬇ download and the
@@ -3431,19 +3583,64 @@ function draw(fr, prev, alpha) {
   }
   }                                      // end !S.eco (wake layer)
 
-  for (const e of (S.sinks || [])) {                 // sink ripples
-    const age = fr.t - e.t;
-    if (age < 0 || age > 30) continue;
-    if (PV && e.fleet !== S.pov) {                   // only ripples the admiral saw
-      const fiE = Math.max(0, Math.min(S.frameMaps.length - 1,
-        Math.floor(e.t / (rp.meta.frame_every || 2))));
-      if (!PV.vis[fiE].has(e.ship) && !(PV.vis[fiE - 1] && PV.vis[fiE - 1].has(e.ship))) {
-        continue;
+  // ---- on-map VFX rail (docs/SPECTATOR.md §3) ----
+  // One pass over the beat indexes (S.tl + S.parley — a few hundred rows,
+  // never the raw event stream). Each beat inside its TTL resolves a
+  // position, passes the fog contract (evVisible at the EVENT's frame — the
+  // same test the old sink ripples ran by hand), and hands off to its
+  // painter. Flash beats collect here too and paint at the END of draw(),
+  // over the ships, so the attention ring is never buried under a hull.
+  const hz = rp.meta.tick_hz || 10;
+  const fev = rp.meta.frame_every || 2;
+  const fxg = { cw, ch, colors: COLORS };
+  const fxFlashCfg = SKIN.fx.flash || {};
+  const fxFlashTtl = fxTtlTicks(fxFlashCfg, hz);
+  const fxFlash = [];                    // [e, x, y, age] — rank>=2, in window
+  const fxWorldPos = (e) => {
+    // -> [x, y] world px (parley: [x, y, x2, y2]) or null to skip. Three of
+    // the five kinds carry no coordinates — they resolve through the caches
+    // the viewer already keeps for hit-testing.
+    switch (e.k) {
+      case "sink": return [(e.x + .5) * cw, (e.y + .5) * ch];
+      case "flag_sunk": case "signal": {
+        const st = fleetStatic(Math.max(0, Math.floor(e.t / fev)), e.fleet);
+        const f3 = rp.fleets.find(f4 => f4.id === e.fleet);
+        const hb = st && st[3] != null ? [st[3], st[4]] : (f3 && f3.harbor);
+        return hb ? [(hb[0] + .5) * cw, (hb[1] + .5) * ch] : null;
+      }
+      case "region": {
+        // the wash paints from S.cellRegion; the seat is only the flash
+        // anchor, so a missing seat still washes (x stays null)
+        const seat = (rp.meta.regions || []).find(r3 => r3.id === e.region);
+        return seat ? [(seat.x + .5) * cw, (seat.y + .5) * ch] : [null, null];
+      }
+      case "parley": {
+        if (typeof e.to !== "number") return null;   // broadcast: no far end
+        const pa = S.flagPos[e.fleet], pb = S.flagPos[e.to];
+        return pa && pb ? [pa[0], pa[1], pb[0], pb[1]] : null;
       }
     }
-    const x = (e.x + .5) * cw, y = (e.y + .5) * ch;
-    ctx.strokeStyle = `rgba(230,237,247,${.5 * (1 - age / 30)})`;
-    ctx.beginPath(); ctx.arc(x, y, 3 + age * .8, 0, 7); ctx.stroke();
+    return null;
+  };
+  for (const arr of [S.tl || [], S.parley || []]) for (const e of arr) {
+    const cfg = SKIN.fx[FX_KIND_CFG[e.k]];
+    if (!cfg) continue;
+    const age = fr.t - e.t;
+    if (age < 0) continue;
+    const ttl = fxTtlTicks(cfg, hz);
+    const flashing = fxFlashCfg.enabled && (EV_RANK[e.k] ?? 0) >= 2 &&
+                     age <= fxFlashTtl;
+    if (!flashing && (!cfg.enabled || age > ttl)) continue;
+    const fiE = Math.max(0, Math.min(S.frameMaps.length - 1,
+      Math.floor(e.t / fev)));
+    if (!evVisible(e, fiE)) continue;                // fog is a contract
+    const pos = fxWorldPos(e);
+    if (!pos) continue;
+    if (cfg.enabled && age <= ttl) {
+      FX_PAINTERS[e.k](ctx, fxg, e, age / ttl, cfg,
+                       pos[0], pos[1], pos[2], pos[3]);
+    }
+    if (flashing && pos[0] != null) fxFlash.push([e, pos[0], pos[1], age]);
   }
 
   const drawn = PV ? fr.s.filter(s => !povHidden(s[0], shipFleet(s[0]), S.fi)) : fr.s;
@@ -3661,7 +3858,45 @@ function draw(fr, prev, alpha) {
     ctx.setLineDash([]);
     ctx.lineWidth = 1;
   }
+  // event flash (§3): a bright contracting ring at any big beat the playhead
+  // just crossed — painted LAST in world space so it sits over the ships.
+  // The eye goes where the ring is; that is its whole job.
+  for (const [ef, fx3, fy3, fage] of fxFlash) {
+    const k3 = fage / fxFlashTtl;
+    ctx.strokeStyle = fxFlashCfg.color ||
+      COLORS[ef.fleet % COLORS.length];
+    ctx.globalAlpha = 0.9 * (1 - k3);
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.arc(fx3, fy3, (2.4 - k3 * 0.8) * Math.min(cw, ch), 0, 7);
+    ctx.stroke();
+    ctx.lineWidth = 1;
+    ctx.globalAlpha = 1;
+  }
   ctx.setTransform(RS, 0, 0, RS, 0, 0);
+  const eCfg = SKIN.fx.edgeArrow || {};
+  if (eCfg.enabled && (S.zoom || 1) > 1 && fxFlash.length) {
+    // a flashing beat outside the zoomed viewport still deserves the eye: an
+    // arrow on the screen edge points at it. This is the "minimap ping" —
+    // there is no spatial minimap to ping (the minimap tokens paint the
+    // timeline), and at zoom 1 nothing is ever off-screen.
+    const sz = eCfg.size || 10;
+    for (const [ef, wx3, wy3, fage] of fxFlash) {
+      const ep = fxEdgePoint(wx3 * (S.zoom || 1) + (S.panX || 0),
+                             wy3 * (S.zoom || 1) + (S.panY || 0),
+                             LW, LH, sz * 1.6);
+      if (!ep) continue;
+      ctx.save();
+      ctx.translate(ep.x, ep.y); ctx.rotate(ep.ang);
+      ctx.fillStyle = eCfg.color || COLORS[ef.fleet % COLORS.length];
+      ctx.globalAlpha = 0.9 * (1 - fage / fxFlashTtl);
+      ctx.beginPath();
+      ctx.moveTo(sz, 0); ctx.lineTo(-sz * 0.6, -sz * 0.6);
+      ctx.lineTo(-sz * 0.6, sz * 0.6); ctx.closePath(); ctx.fill();
+      ctx.restore();
+      ctx.globalAlpha = 1;
+    }
+  }
   if ((S.zoom || 1) > 1) {                       // zoom badge: you are navigating
     ctx.fillStyle = SKIN.nodes.label; ctx.font = "11px sans-serif";
     ctx.fillText(`🔍 ${S.zoom.toFixed(1)}× — double-click to reset`, 10, 16);
@@ -4803,10 +5038,7 @@ function liveAppend(p) {
     if (e.k === "reassign" && S.cat[e.ship]) {
       (S.cat[e.ship].moves = S.cat[e.ship].moves || []).push([e.t, e.squad]);
     }
-    if (e.k === "sink") {
-      S.sinkAt[e.ship] = e.t;
-      (S.sinks = S.sinks || []).push(e);
-    }
+    if (e.k === "sink") S.sinkAt[e.ship] = e.t;
     if (e.k === "intent" || e.k === "orders") {
       (S.byShip[e.ship] = S.byShip[e.ship] || []).push(e);
     }

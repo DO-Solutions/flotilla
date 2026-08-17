@@ -110,3 +110,71 @@ it and the skin's own choice returns.
 > the wording without a code change. Deferred deliberately until there is real
 > copy to build against — inventing a placeholder vocabulary before anyone has
 > written a line would almost certainly invent the wrong one.
+
+## On-map VFX + event flash
+
+"Stuff happens on the map" has a second half: even with the feed telling you
+*what*, your eye still has to find *where*. The VFX rail marks the spot.
+
+It is the sink ripples, generalized. The ripples were already the right
+pattern — a time-indexed transient (`age = playhead − event tick`) fading over
+a TTL, POV-filtered, drawn inside the one draw loop — so every new effect is
+a **painter on that same rail**, keyed by event kind:
+
+| kind | effect | position source |
+|---|---|---|
+| `sink` | the stock expanding ripple | the event's own `x,y` |
+| `flag_sunk` | double ring + core glow, fleet-colored, biggest + longest | the fleet's flagship history at that tick |
+| `region` | color wash over the territory's cells as it flips | `S.cellRegion` (the ownership-tint cell map) |
+| `parley` | dashed link line between the two flagships | both fleets' current flagship positions (broadcast `to:"all"` draws nothing — no single far end) |
+| `signal` | dashed pulse ring at the harbor | flagship history |
+
+Three of the five kinds carry no coordinates in the event record — positions
+resolve through caches the viewer already keeps for hit-testing, which is why
+this lives in `draw()` and not in the shared vocabulary.
+
+**Event flash**: any rank ≥ 2 beat the playhead just crossed gets a short
+bright contracting ring, painted *after* the ships so it can't be buried under
+a hull. The eye goes where the ring is; that is its whole job.
+
+**Edge indicator**: when the map is zoomed and a flashing beat is off-screen,
+an arrow sits on the screen edge (along the ray from screen center, so it
+reads as "over there") pointing at the beat. This is the "minimap ping"
+without a minimap — the `minimap` skin tokens paint the *timeline*; there is
+no spatial overview map to ping. At zoom 1 nothing is ever off-screen, so the
+indicator only exists while navigating.
+
+### Fog, again
+
+Every effect passes `evVisible` **at the event's frame** before painting —
+the same per-kind contract the feed enforces, and the same test the old
+ripple block ran by hand. A POV view that flashed an enemy sink the admiral
+never saw would leak through motion what the feed carefully refuses to say.
+
+### Skin tokens
+
+One nested object per effect under `fx`; each key optional, each effect
+independently disableable — a busy 8-fleet match with everything on is noise.
+`color: ""` derives (the fleet's color, or the stock ripple ink). `ttlS` is
+**game seconds** (scaled by `tick_hz`), so an effect lasts the same
+story-time at any playback speed.
+
+| token | default | keys |
+|---|---|---|
+| `fx.sink` | on, 3s | `enabled` `color` `ttlS` (0.2–30) `scale` (0.25–4) |
+| `fx.flagSunk` | on, 6s | `enabled` `color` `ttlS` `scale` |
+| `fx.region` | on, 4s | `enabled` `color` `ttlS` `alpha` (0.02–1) |
+| `fx.parley` | **off** | `enabled` `color` `ttlS` `width` (0.5–6) |
+| `fx.signal` | **off** | `enabled` `color` `ttlS` `scale` |
+| `fx.flash` | on, 1.2s | `enabled` `color` `ttlS` |
+| `fx.edgeArrow` | on | `enabled` `color` `size` (4–40) |
+
+Defaults are deliberately conservative: the two rank-1 chatter kinds (parley,
+signal) ship **off**; Design turns knobs from here — their visual language
+lands as token values, not code changes. The flat `fx.fog` / `fx.tail` tokens
+are unchanged.
+
+`tests/test_fx.py` covers the table parity (every kind has a painter, a skin
+group, and a rank), the ttl conversion, the edge-arrow geometry, token
+sanitation (including the boolean-`"false"` trap and clamp ranges), and a real
+`applySkin` run proving nested fx objects survive the merge as objects.
