@@ -1,20 +1,20 @@
 #!/usr/bin/env python3
-"""Official treaties: recorded and announced, never enforced.
+"""Official treaties v2: negotiated inside parley, two typed pacts.
 
-The design brief asked for "an alliance forming or breaking" as a spectator
-beat. The engine's answer is a formal PUBLIC pact: proposed and signed as
-actions, listed in everyone's state, announced to all when formed, dissolved,
-or broken. The rules of the game do not change — damage, territory, and
-vision are treaty-blind — so the ONE enforcement is informational: damaging a
-partner voids the pact instantly, and the aggressor is named in the public
-record. What can rot here:
+The redesign (2026-08-17, after operator review of v1):
+  * treaty verbs ride INSIDE parley messages — one diplomacy channel, and
+    the transcript carries the proposal and the signature
+  * NON-AGGRESSION breaks only when one side SINKS the other's ship. Ships
+    fire automatically on adjacency, so v1's damage trigger made every pact
+    a time bomb; a sinking is deliberate enough to mean betrayal
+  * BORDER: an agreed x/y line neither side crosses — broken only when a
+    signer SEES the other's ship beyond it (fog applies; an unseen crossing
+    is deniable, which is what makes scouts matter)
 
-  * the offer/accept handshake (including expiry and unknown-fleet junk)
-  * the betrayal choke point — every damage path flows through _combat_note,
-    so a treaty must break on ANY partner damage, with cause and culprit
-  * publicity — every admiral sees every pact; offers stay private
-  * survival through freeze/thaw (a resumed match must keep its pacts)
-  * the off switch, and old configs that predate the knob
+What can rot: the parley-carried handshake and its transcript markers, the
+two break rules (including what must NOT break them), the flagship-side
+guard on borders, publicity vs private offers, expiry, the off switch, and
+freeze/thaw with typed records.
 """
 import os
 import sys
@@ -53,7 +53,7 @@ class Scripted:
         return self.queue.pop(0) if self.queue else {}
 
 
-SCN = {"width": 48, "height": 32, "max_ticks": 800, "warmup": False,
+SCN = {"width": 48, "height": 32, "max_ticks": 900, "warmup": False,
        "start_cargo": 100, "window": 100}
 
 
@@ -71,107 +71,172 @@ def evs(eng, kind):
     return [e for e in eng.events if e["k"] == kind]
 
 
-# ---- the handshake ----
-eng = mk([{"treaty": {"propose": "B", "terms": "no raids on trawlers"}}],
-         [{}, {"treaty": {"accept": 0}}], ticks=350, third=True)
-formed = evs(eng, "treaty")
-ok(len(formed) == 1 and formed[0]["fleet"] == 1 and formed[0]["other"] == 0
-   and formed[0]["terms"] == "no raids on trawlers",
-   f"propose -> accept forms ONE treaty with the terms on record ({formed})")
-ok(frozenset((0, 1)) in eng.treaties, "the pact is in force in engine state")
-b_bot = eng.fleets[1].bot
-offer_seen = any(o.get("from_fleet") == 0
-                 for st in b_bot.states for o in st.get("treaty_offers", []))
-ok(offer_seen, "the recipient sees the offer in state.treaty_offers")
-inbox_note = any("[TREATY OFFER]" in m.get("text", "")
-                 for st in b_bot.states for m in st.get("messages", []))
-ok(inbox_note, "…and as a message in the diplomacy inbox it cannot miss")
-c_bot = eng.fleets[2].bot
-c_sees = any(sorted(t.get("between", [])) == [0, 1]
-             for st in c_bot.states for t in st.get("treaties", []))
-c_offer = any(st.get("treaty_offers") for st in c_bot.states)
-ok(c_sees, "a THIRD fleet sees the formed pact — treaties are public")
-ok(not c_offer, "…but never the private offer")
+def pmsg(to, text=None, treaty=None):
+    m = {"to": to}
+    if text is not None:
+        m["text"] = text
+    if treaty is not None:
+        m["treaty"] = treaty
+    return {"parley": [m]}
 
-# ---- betrayal: damage through the choke point breaks it, names the breaker.
-# EVERY damage site in the engine reports through _combat_note (assault-flag
-# hits, ship-vs-ship, flagship adjacency, flagship guns), so the break is
-# tested at that choke point — with dealt>0 exactly as the aggressor's side
-# of a real hit reports it.
-eng = mk([{"treaty": {"propose": "B", "terms": "peace"}}],
-         [{}, {"treaty": {"accept": 0}}], ticks=350)
-ok(frozenset((0, 1)) in eng.treaties, "pact formed (betrayal setup)")
-eng._combat_note(0, 5, 1, 3, 0, 10, 10)      # A's ship deals 3 to B
+
+NA = {"type": "non_aggression"}
+
+# ---- the handshake rides parley ----
+eng = mk([pmsg("B", "let us fish in peace", NA)],
+         [{}, pmsg(0, treaty="accept")], ticks=350, third=True)
+formed = evs(eng, "treaty")
+ok(len(formed) == 1 and formed[0]["type"] == "non_aggression"
+   and formed[0]["fleet"] == 1 and formed[0]["other"] == 0,
+   f"a parley-carried proposal, accepted in parley, forms the pact ({formed})")
+par = [e["text"] for e in evs(eng, "parley")]
+ok(any("[TREATY PROPOSAL" in t and "non-aggression" in t for t in par),
+   "the proposal is a real parley message that announces itself")
+ok(any("[TREATY SIGNED]" in t for t in par),
+   "the signature lands in the same transcript")
+b = eng.fleets[1].bot
+ok(any(o.get("type") == "non_aggression"
+       for st in b.states for o in st.get("treaty_offers", [])),
+   "the recipient sees the typed offer in state.treaty_offers")
+c = eng.fleets[2].bot
+ok(any(t.get("type") == "non_aggression"
+       for st in c.states for t in st.get("treaties", [])),
+   "a third fleet sees the formed pact — treaties are public")
+ok(not any(st.get("treaty_offers") for st in c.states),
+   "…but never the private offer")
+
+# ---- non-aggression: damage is NOT betrayal, sinking is ----
+eng = mk([pmsg("B", "peace", NA)], [{}, pmsg(0, treaty="accept")], ticks=350)
+ok(frozenset((0, 1)) in eng.treaties, "NA pact formed (break setup)")
+eng._combat_note(0, 5, 1, 3, 0, 10, 10)      # a stray adjacency shot
+ok(frozenset((0, 1)) in eng.treaties and not evs(eng, "treaty_end"),
+   "DAMAGE does not break a non-aggression pact — passing fire is automatic, "
+   "not betrayal (the v1 rule made every pact a time bomb)")
+eng._treaty_sunk(0, 1)                        # the sink path's hook
 broken = evs(eng, "treaty_end")
 ok(len(broken) == 1 and broken[0]["cause"] == "aggression"
-   and broken[0]["fleet"] == 0 and broken[0]["other"] == 1,
-   f"damage to a partner voids the pact and NAMES the aggressor ({broken})")
-ok(frozenset((0, 1)) not in eng.treaties, "the pact is gone from state")
-ok(any("FIRED ON" in w for w in eng.fleets[0].warnings)
+   and broken[0]["fleet"] == 0 and broken[0]["type"] == "non_aggression",
+   f"a SINKING voids the pact and names the aggressor ({broken})")
+ok(any("SANK" in w for w in eng.fleets[0].warnings)
    and any("TREATY BROKEN" in w for w in eng.fleets[1].warnings),
-   "both sides are told in words, not just events")
-eng._combat_note(0, 5, 1, 3, 0, 10, 10)      # hitting again after the break
-ok(len(evs(eng, "treaty_end")) == 1,
-   "…and further damage is just war, not a second break event")
-# the VICTIM's side of the same hit (taken>0, dealt=0) must never re-brand
-eng2 = mk([{"treaty": {"propose": "B", "terms": "p"}}],
-         [{}, {"treaty": {"accept": 0}}], ticks=350)
-eng2._combat_note(1, 7, 0, 0, 3, 10, 10)     # B RECORDS taking damage
-ok(not evs(eng2, "treaty_end") and frozenset((0, 1)) in eng2.treaties,
-   "the victim-side combat record (taken>0, dealt=0) does not break the pact")
+   "both admirals are told in words")
+src = open(os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                        "..", "sim", "core.py")).read()
+ok("self._treaty_sunk(by, s.fleet)" in src,
+   "the combat-sink path calls the hook (source anchor); the scuttle path, "
+   "with by=None, cannot")
 
-# ---- honorable exit ----
-eng = mk([{"treaty": {"propose": "B", "terms": "t"}}, {},
-          {"treaty": {"dissolve": 1}}],
-         [{}, {"treaty": {"accept": 0}}], ticks=450)
-ended = evs(eng, "treaty_end")
-ok(len(ended) == 1 and ended[0]["cause"] == "dissolved"
-   and ended[0]["fleet"] == 0,
-   f"dissolve ends the pact openly, cause=dissolved ({ended})")
+# ---- border: geometry, the flagship-side guard, and the sighting break ----
+probe = Engine([("A", Idle()), ("B", Idle())], seed=9, scenario=SCN)
+ax, bx = probe.fleets[0].hx, probe.fleets[1].hx
+line = (ax + bx) // 2
+a_side = "low" if ax < bx else "high"
+BORDER = {"type": "border", "axis": "x", "line": line, "my_side": a_side}
 
-# ---- junk + guard rails ----
-eng = mk([{"treaty": {"propose": "Nobody"}},
-          {"treaty": {"accept": 1}},                 # no offer exists
-          {"treaty": "not a dict"},
-          {"treaty": {"weird": 1}}],
-         [{}], ticks=550)
-ok(not evs(eng, "treaty") and not evs(eng, "treaty_end"),
-   "junk treaty actions form nothing and end nothing")
+eng = mk([pmsg("B", "stay on your side", BORDER)],
+         [{}, pmsg(0, treaty="accept")], ticks=350)
+formed = evs(eng, "treaty")
+ok(len(formed) == 1 and formed[0]["type"] == "border"
+   and formed[0]["line"] == line
+   and {formed[0]["low"], formed[0]["high"]} == {0, 1},
+   f"a border pact records its line and which fleet holds which side "
+   f"({formed})")
+rec = eng.treaties[frozenset((0, 1))]
+violator = rec["high"]                       # the fleet that must stay high
+watcher = 1 - violator
+wf = eng.fleets[watcher]
+ship = next(s for s in eng.ships.values() if s.fleet == violator)
+ship.x, ship.y = wf.hx + 1, wf.hy            # across the line, in plain sight
+eng.tick()
+broken = evs(eng, "treaty_end")
+ok(len(broken) == 1 and broken[0]["cause"] == "border"
+   and broken[0]["fleet"] == violator and broken[0]["type"] == "border",
+   f"a SIGHTED crossing voids the border pact and names the crosser "
+   f"({broken})")
+
+# an UNSEEN crossing does not break it — fog is the whole point
+eng = mk([pmsg("B", "", BORDER)], [{}, pmsg(0, treaty="accept")], ticks=350)
+rec = eng.treaties[frozenset((0, 1))]
+violator = rec["high"]
+ship = next(s for s in eng.ships.values() if s.fleet == violator)
+ship.x, ship.y = max(0, line - 1) if violator == rec["high"] else line + 1, 0
+# across the line but in the empty far corner, away from every eye
+for _ in range(30):
+    eng.tick()
+ok(frozenset((0, 1)) in eng.treaties and not evs(eng, "treaty_end"),
+   "an UNSEEN crossing goes unpunished — a border breaks on sight, not on "
+   "trespass")
+
+# the guard: a border whose line a flagship already violates is refused
+bad = {"type": "border", "axis": "x",
+       "line": (ax - 2) if a_side == "low" else (ax + 2), "my_side": a_side}
+eng = mk([pmsg("B", "bad line", bad)], [{}], ticks=250)
+ok(not eng.treaty_offers and any(
+    "flagship" in w for d in eng.decisions if d["fleet"] == 0
+    for w in (d.get("warns") or [])),
+   "a border a flagship already violates is refused at proposal — it would "
+   "break on first sight")
+
+# border needs the contact plot
+eng = mk([pmsg("B", "", BORDER)], [{}],
+         scn=dict(SCN, contact_ttl=0), ticks=250)
+ok(not eng.treaty_offers and any(
+    "contact" in w for d in eng.decisions if d["fleet"] == 0
+    for w in (d.get("warns") or [])),
+   "no contact plot (contact_ttl=0) = no border treaties: a crossing could "
+   "never be seen")
+
+# ---- guard rails shared by both types ----
+eng = mk([pmsg("all", "hello", NA),                 # treaty to "all"
+          pmsg("B", treaty="accept"),               # no offer
+          pmsg("B", "x", {"type": "friendship"})],  # unknown type
+         [{}], ticks=450)
+ok(not evs(eng, "treaty") and not eng.treaty_offers,
+   "junk verbs form nothing: 'all' target, ghost accept, unknown type")
 ok(any("treaty" in w for d in eng.decisions if d["fleet"] == 0
        for w in (d.get("warns") or [])),
-   "…and the admiral is told why, not silently ignored (decision forensics)")
+   "…each refusal warns the sender")
+ok(any("hello" in e["text"] for e in evs(eng, "parley")),
+   "…and a refused verb never eats the plain words riding with it")
 
-# ---- offer expiry ----
-eng = mk([{"treaty": {"propose": "B", "terms": "old offer"}}],
-         [{}] * 7 + [{"treaty": {"accept": 0}}],
+# expiry
+eng = mk([pmsg("B", "old", NA)],
+         [{}] * 7 + [pmsg(0, treaty="accept")],
          scn=dict(SCN, max_ticks=1200), ticks=1000)
 ok(not evs(eng, "treaty")
    and any("expired" in w for d in eng.decisions if d["fleet"] == 1
            for w in (d.get("warns") or [])),
-   "a stale offer (>6 windows) cannot be accepted — the acceptor is told")
+   "a stale offer (>6 windows) cannot be signed")
 
-# ---- the off switch, and configs that predate the knob ----
-eng = mk([{"treaty": {"propose": "B"}}], [{}],
+# dissolve, in the transcript
+eng = mk([pmsg("B", "", NA), {}, pmsg("B", "it served us", treaty="dissolve")],
+         [{}, pmsg(0, treaty="accept")], ticks=450)
+ended = evs(eng, "treaty_end")
+ok(len(ended) == 1 and ended[0]["cause"] == "dissolved",
+   f"dissolve ends the pact openly ({ended})")
+ok(any("[TREATY DISSOLVED]" in e["text"] for e in evs(eng, "parley")),
+   "…and says so in the transcript")
+
+# the off switch
+eng = mk([pmsg("B", "try", NA)], [{}],
          scn=dict(SCN, treaties=False), ticks=250)
-ok(not eng.treaty_offers and not evs(eng, "treaty")
+ok(not eng.treaty_offers
    and any("disabled" in w for d in eng.decisions if d["fleet"] == 0
            for w in (d.get("warns") or [])),
-   "treaties=false ignores the action loudly")
-eng = Engine([("A", Idle()), ("B", Idle())], seed=3, scenario=SCN)
-ok(eng.cfg.get("treaties", True) is True,
-   "the knob defaults ON (and cfg.get guards configs that predate it)")
+   "treaties=false refuses the verb loudly")
 
-# ---- freeze/thaw carries pacts; old checkpoints thaw to none ----
-eng = mk([{"treaty": {"propose": "B", "terms": "carry me"}}],
-         [{}, {"treaty": {"accept": 0}}], ticks=350)
+# ---- freeze/thaw with typed records ----
+eng = mk([pmsg("B", "", BORDER)], [{}, pmsg(0, treaty="accept")], ticks=350)
 data = eng.freeze()
 eng2 = Engine.thaw(data, [("A", Idle()), ("B", Idle())])
-ok(eng2.treaties.get(frozenset((0, 1)), {}).get("terms") == "carry me",
-   "a thawed match keeps its pacts")
-del data["treaties"], data["treaty_offers"]          # a pre-treaty checkpoint
+rec2 = eng2.treaties.get(frozenset((0, 1)), {})
+ok(rec2.get("type") == "border" and rec2.get("line") == line
+   and "low" in rec2,
+   f"a thawed match keeps its typed pact ({rec2})")
+del data["treaties"], data["treaty_offers"]
 eng3 = Engine.thaw(data, [("A", Idle()), ("B", Idle())])
 ok(eng3.treaties == {} and eng3.treaty_offers == {},
-   "a checkpoint from before the feature thaws clean")
+   "a pre-treaty checkpoint thaws clean")
 
 print(f"FAILURES: {len(FAILS)}")
 sys.exit(1 if FAILS else 0)

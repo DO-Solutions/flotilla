@@ -404,6 +404,13 @@
   #parleyfeed .hd { font-size: 11px; color: var(--dim); margin-bottom: 1px; }
   #parleyfeed .hd b { font-weight: 600; }
   #parleyfeed .empty { color: var(--dim); font-size: 12px; }
+  #parleyfeed .pacthead { font-size: 10px; letter-spacing: .12em;
+    text-transform: uppercase; color: var(--dim); margin-bottom: 4px; }
+  #parleyfeed .pact { border: 1px solid var(--line); border-radius: 8px;
+    padding: 6px 9px; margin-bottom: 6px; font-size: 12px;
+    background: var(--bg); }
+  #parleyfeed .pact .pnote { color: var(--dim); font-size: 11px;
+    margin-top: 1px; }
   #memofeed { background: var(--card); border: 1px solid var(--line);
               border-radius: var(--radius); padding: 8px 10px; max-height: 560px;
               overflow-y: auto; }
@@ -627,11 +634,7 @@ const SKIN_DEFAULT = {
         parley:    { enabled: false, color: "", ttlS: 2,   width: 1.5 },
         signal:    { enabled: false, color: "", ttlS: 2.5, scale: 1 },
         flash:     { enabled: true,  color: "", ttlS: 1.2 },
-        edgeArrow: { enabled: true,  color: "", size: 10 },
-        // treaties are the diplomacy beats Design asked for: a link line
-        // when one forms, and the line SNAPPING red when it breaks
-        treaty:    { enabled: true,  color: "", ttlS: 4, width: 2 },
-        treatyEnd: { enabled: true,  color: "", ttlS: 3, width: 2 } },
+        edgeArrow: { enabled: true,  color: "", size: 10 } },
   minimap: { bg: "#0a1b33", frame: "#24304d", cursor: "#e6edf7" },
   // the event feed (docs/SPECTATOR.md). Appearance + density only: WHAT is
   // worth saying lives in the shared vocabulary, not in a skin.
@@ -1505,12 +1508,20 @@ function describeEvent(e) {
       text = `${evFleet(e.fleet)} → ${evFleet(e.to)}`;
       break;
     case "treaty":
-      text = `${evFleet(e.fleet)} and ${evFleet(e.other)} signed a treaty`
-             + (e.terms ? ` — “${String(e.terms).slice(0, 80)}”` : "");
+      text = e.type === "border"
+        ? `${evFleet(e.fleet)} and ${evFleet(e.other)} agreed a border at `
+          + `${e.axis}=${e.line}`
+        : `${evFleet(e.fleet)} and ${evFleet(e.other)} signed a `
+          + `non-aggression pact`
+          + (e.terms ? ` — “${String(e.terms).slice(0, 80)}”` : "");
       break;
     case "treaty_end":
       text = e.cause === "aggression"
-        ? `${evFleet(e.fleet)} BROKE the treaty with ${evFleet(e.other)}`
+        ? `${evFleet(e.fleet)} BROKE the pact with ${evFleet(e.other)} — `
+          + `sank a ship under it`
+        : e.cause === "border"
+        ? `${evFleet(e.fleet)} crossed the agreed border — `
+          + `${evFleet(e.other)} saw it; the treaty is void`
         : `${evFleet(e.fleet)} dissolved the treaty with ${evFleet(e.other)}`;
       break;
     case "design":
@@ -1537,8 +1548,12 @@ function describeEvent(e) {
 const FX_KIND_CFG = {                    // event kind -> its SKIN.fx group
   sink: "sink", flag_sunk: "flagSunk", region: "region",
   parley: "parley", signal: "signal",
-  treaty: "treaty", treaty_end: "treatyEnd",
 };
+// stingers cover MORE kinds than the painters: treaty beats have no map
+// effect (their standing state lives in the Parley tiles and the border
+// line), but "chime = alliance" was the original audio brief
+const AUDIO_KIND_CFG = { ...FX_KIND_CFG,
+                         treaty: "treaty", treaty_end: "treatyEnd" };
 // Painters draw in WORLD space at an already-resolved position. g carries the
 // draw() geometry ({cw, ch, colors}), k is age 0..1 (fresh..gone). Positions
 // are resolved by the rail, not here, because three of the five kinds carry
@@ -1618,42 +1633,23 @@ const FX_PAINTERS = {
     ctx.setLineDash([]);
     ctx.globalAlpha = 1;
   },
-  treaty(ctx, g, e, k, cfg, x, y, x2, y2) {
-    // a SOLID line between the signatories' flagships, ringed at both ends —
-    // deliberately steadier than the dashed parley whisper: this one is
-    // official, and everyone saw it
-    const col = cfg.color || "#e5eceb";
-    ctx.strokeStyle = col;
-    ctx.globalAlpha = 0.8 * (1 - k);
-    ctx.lineWidth = cfg.width || 2;
-    ctx.beginPath(); ctx.moveTo(x, y); ctx.lineTo(x2, y2); ctx.stroke();
-    const r = Math.min(g.cw, g.ch) * 1.2;
-    ctx.beginPath(); ctx.arc(x, y, r, 0, 7); ctx.stroke();
-    ctx.beginPath(); ctx.arc(x2, y2, r, 0, 7); ctx.stroke();
-    ctx.lineWidth = 1;
-    ctx.globalAlpha = 1;
-  },
-  treaty_end(ctx, g, e, k, cfg, x, y, x2, y2) {
-    // the line SNAPS: two halves retract from a widening gap at the middle.
-    // Red by default — Design's "line snapping red when it breaks", verbatim
-    const col = cfg.color || "#ff5d5d";
-    ctx.strokeStyle = col;
-    ctx.globalAlpha = 0.85 * (1 - k);
-    ctx.lineWidth = cfg.width || 2;
-    const mx = (x + x2) / 2, my = (y + y2) / 2;
-    const pull = 0.5 * (1 - k * 0.9);            // halves shrink toward ends
-    ctx.setLineDash(e.cause === "dissolved" ? [5, 5] : []);
-    ctx.beginPath();
-    ctx.moveTo(x, y);
-    ctx.lineTo(x + (mx - x) * pull * 2 * (1 - k), y + (my - y) * pull * 2 * (1 - k));
-    ctx.moveTo(x2, y2);
-    ctx.lineTo(x2 + (mx - x2) * pull * 2 * (1 - k), y2 + (my - y2) * pull * 2 * (1 - k));
-    ctx.stroke();
-    ctx.setLineDash([]);
-    ctx.lineWidth = 1;
-    ctx.globalAlpha = 1;
-  },
 };
+// ---- treaties: standing state at a playhead ----
+// Derived from the same event stream everything else reads: the latest
+// treaty / treaty_end per pair, up to the playhead. Scrubbing backwards must
+// show the pacts as they stood at that moment, so this is playhead-pure.
+function activeTreaties(tl, upTo) {
+  const by = {};
+  for (const e of tl || []) {
+    if (e.t > upTo) continue;
+    if (e.k !== "treaty" && e.k !== "treaty_end") continue;
+    const key = Math.min(e.fleet, e.other) + "-" + Math.max(e.fleet, e.other);
+    if (e.k === "treaty") by[key] = e;
+    else delete by[key];
+  }
+  return Object.values(by);
+}
+
 function fxTtlTicks(cfg, hz) {           // skin seconds -> sim ticks
   return Math.max(1, Math.round((cfg.ttlS || 3) * (hz || 10)));
 }
@@ -1688,7 +1684,7 @@ function audioPref() {                   // "on" | "off" | null = follow skin
 }
 function audioClips() {                  // group -> clip URI, empties dropped
   const out = {};
-  for (const g of Object.values(FX_KIND_CFG)) {
+  for (const g of Object.values(AUDIO_KIND_CFG)) {
     const c = (SKIN.audio || {})[g];
     if (c) out[g] = c;
   }
@@ -1769,7 +1765,7 @@ function audioBeats(prevT, curT, now) {
   const nfr = S.frameMaps.length;
   for (const arr of [S.tl || [], S.parley || []]) for (const e of arr) {
     if (e.t <= prevT || e.t > curT) continue;
-    const g = FX_KIND_CFG[e.k];
+    const g = AUDIO_KIND_CFG[e.k];
     if (!g || !(SKIN.audio || {})[g]) continue;
     const fiE = Math.max(0, Math.min(nfr - 1, Math.floor(e.t / fev)));
     if (!evVisible(e, fiE)) continue;
@@ -3118,15 +3114,31 @@ function updatePanels(fr) {
   if (S.pmode === "parley") {
     const feed = $("parleyfeed");
     const seen = (S.parley || []).filter(e => e.t <= fr.t);
-    if (feed.dataset.n !== String(seen.length)) {
-      feed.dataset.n = String(seen.length);
+    // treaties in force at the playhead sit as tiles ABOVE the transcript —
+    // standing diplomatic state next to the negotiation that produced it
+    // (this replaced the on-map flagship link line, which covered the board)
+    const pacts = activeTreaties(S.tl, fr.t);
+    const pkey = seen.length + "|" + pacts.map(p => p.t).join(",");
+    if (feed.dataset.n !== pkey) {
+      feed.dataset.n = pkey;
       const nm = i => `<b style="color:${COLORS[i % COLORS.length]}">${escHtml(S.rp.result.names[i] || i)}</b>`;
-      feed.innerHTML = seen.length ? seen.map(e => {
+      const tiles = pacts.map(p => {
+        const what = p.type === "border"
+          ? `border — neither fleet crosses ${escHtml(p.axis)}=${escHtml(p.line)}`
+          : `non-aggression — neither fleet sinks the other's ships`;
+        const note = p.terms
+          ? `<div class="pnote">“${escHtml(String(p.terms).slice(0, 90))}”</div>` : "";
+        return `<div class="pact">🤝 ${nm(p.fleet)} ⇄ ${nm(p.other)}` +
+               `<div class="pnote">${what}</div>${note}</div>`;
+      }).join("");
+      const head = tiles
+        ? `<div class="pacthead">treaties in force</div>` + tiles : "";
+      feed.innerHTML = head + (seen.length ? seen.map(e => {
         const to = e.to === "all" ? "<b>all</b>" : nm(e.to);
         return `<div class="msg" style="--mc:${COLORS[e.fleet % COLORS.length]}">` +
                `<div class="hd"><span>${fmtTime(e.t)}</span> ${nm(e.fleet)} → ${to}</div>` +
                `${linkify(escHtml(e.text), e.fleet)}</div>`;
-      }).join("") : `<div class="empty">(no parley messages in this match)</div>`;
+      }).join("") : `<div class="empty">(no parley messages in this match)</div>`);
       feed.scrollTop = feed.scrollHeight;
     }
   }
@@ -3806,6 +3818,26 @@ function draw(fr, prev, alpha) {
   }
   }                                      // end !S.eco (wake layer)
 
+  // an ACTIVE border treaty's agreed line is drawn on the chart — this is
+  // the one treaty visual that IS the treaty (the map's standing geometry,
+  // like region borders); everything else about pacts lives in the Parley
+  // panel tiles and the feed
+  for (const tr of activeTreaties(S.tl, fr.t)) {
+    if (tr.type !== "border") continue;
+    ctx.strokeStyle = withA(SKIN.ships.detail, "55");
+    ctx.setLineDash([8, 6]);
+    ctx.beginPath();
+    if (tr.axis === "x") {
+      const lx = (tr.line + .5) * cw;
+      ctx.moveTo(lx, 0); ctx.lineTo(lx, LH);
+    } else {
+      const ly = (tr.line + .5) * ch;
+      ctx.moveTo(0, ly); ctx.lineTo(LW, ly);
+    }
+    ctx.stroke();
+    ctx.setLineDash([]);
+  }
+
   // ---- on-map VFX rail (docs/SPECTATOR.md §3) ----
   // One pass over the beat indexes (S.tl + S.parley — a few hundred rows,
   // never the raw event stream). Each beat inside its TTL resolves a
@@ -3841,10 +3873,6 @@ function draw(fr, prev, alpha) {
         if (typeof e.to !== "number") return null;   // broadcast: no far end
         const pa = S.flagPos[e.fleet], pb = S.flagPos[e.to];
         return pa && pb ? [pa[0], pa[1], pb[0], pb[1]] : null;
-      }
-      case "treaty": case "treaty_end": {
-        const ta = S.flagPos[e.fleet], tb = S.flagPos[e.other];
-        return ta && tb ? [ta[0], ta[1], tb[0], tb[1]] : null;
       }
     }
     return null;
