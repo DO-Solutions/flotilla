@@ -264,6 +264,19 @@ def main():
                         sent.discard(fn)
                 except (ValueError, KeyError, OSError):
                     pass
+            if '"series_saved"' in line:
+                # a matchup's series.json just landed on disk — its memos,
+                # sim_feedback and historic_moments exist NOWHERE else, and
+                # this box is disposable. Ship it now; top-level series.json
+                # (series-mode) still travels in the final "done" payload,
+                # and the server refuses it as a game file anyway.
+                try:
+                    d = json.loads(line)
+                    fn = os.path.relpath(d["file"], outdir)
+                    if "/" in fn and not fn.startswith(".."):
+                        post_game(fn, os.path.join(outdir, fn), None)
+                except (ValueError, KeyError, OSError):
+                    pass
             if '"debrief"' in line:
                 # the just-debriefed game file gained embedded memos — resend
                 for fn in sorted(sent):
@@ -309,11 +322,14 @@ def main():
         if os.path.exists(sj):
             series = json.load(open(sj))
         # final sweep: every game file (incl. matchup subdirs), memos and all
+        # — plus each MATCHUP's series.json (rel carries a subdir): the
+        # last matchup of a tournament has no later "winner" line to ride
         for root, _dirs, files in os.walk(outdir):
             for fn in sorted(files):
                 rel = os.path.relpath(os.path.join(root, fn), outdir)
                 if (fn.startswith("g") and fn.endswith(".json")) \
-                        or fn == "match.json":
+                        or fn == "match.json" \
+                        or (fn == "series.json" and "/" in rel):
                     try:
                         post_game(rel, os.path.join(root, fn), None)
                     except (ValueError, OSError):

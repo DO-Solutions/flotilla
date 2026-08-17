@@ -764,8 +764,13 @@ def _publish_partial_tournament(job, outdir):
         os.makedirs(dst, exist_ok=True)
         for root, _dirs, files in os.walk(outdir):
             for fn in files:
+                # series.json rides too (2026-08-17): each matchup's memos,
+                # sim_feedback and historic_moments live ONLY there — skipping
+                # it stranded them in the run dir, where the backup mirror and
+                # the tournament page's story chip could never see them
                 if not ((fn.startswith("g") and fn.endswith(".json"))
-                        or fn == "tournament.json"):
+                        or fn == "tournament.json"
+                        or (fn == "series.json" and root != outdir)):
                     continue
                 rel = os.path.relpath(os.path.join(root, fn), outdir)
                 if rel.startswith(".."):
@@ -3269,6 +3274,13 @@ class H(BaseHTTPRequestHandler):
                             args=(j["name"], fn, blob), daemon=True).start()
                         return self._send(200, {"ok": True})
                     if j["mode"] == "series":
+                        if fn == "series.json":
+                            # the series LEDGER is _update_series_json's —
+                            # locked and meta-preserving; a raw worker
+                            # overwrite would clobber display_name & friends.
+                            # (Workers never send it; belt and suspenders.)
+                            return self._send(400, {"error": "series.json "
+                                                    "is server-managed"})
                         dst = os.path.join(LIB, "series", j["name"])
                         os.makedirs(dst, exist_ok=True)
                         blob = json.dumps(rp, separators=(",", ":")).encode()
