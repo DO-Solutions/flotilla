@@ -392,7 +392,8 @@ fetch("api/site-skin").then(r => r.ok ? r.json() : null).then(d => {
   </div>
   <div id="cform"></div>
   <div style="margin-top:12px;display:flex;align-items:center;gap:10px;flex-wrap:wrap">
-    <span>run name: <input id="cname" class="sname" style="width:220px" placeholder="my-experiment"></span>
+    <span>run name: <input id="cname" class="sname" style="width:220px" placeholder="my-experiment">
+      <span id="cnamewarn" class="st-failed" style="display:none;font-size:12px"></span></span>
     <label id="auxwrap" style="display:none" title="run this job on a disposable
       worker droplet — the site stays free while it sails">
       <input type="checkbox" id="cauxec"> ⚓ run on a fleet auxiliary
@@ -1570,6 +1571,31 @@ function playerSpec(p) {
 }
 
 // ---- Configure tab: form generated from the schema (never drifts from the engine) ----
+// ---- run-name collision check (Chart a Course) ----
+// A run name is a DIRECTORY. Two runs sharing one write into the same place and
+// blend their games — which is how a cancelled cup's results ended up mixed
+// with the run that replaced it. The server is the gate (submit_run refuses);
+// this just tells the operator while they are still typing.
+let NAME_CLASH = null;
+let _nameCheckSeq = 0;
+async function checkRunName() {
+  const el = $("cname"), warn = $("cnamewarn");
+  if (!el || !warn) return;
+  const nm = el.value.trim();
+  const seq = ++_nameCheckSeq;
+  if (!nm) {                               // blank = the server auto-names it
+    NAME_CLASH = null; warn.style.display = "none"; return;
+  }
+  let d = null;
+  try {
+    d = await (await fetch("api/name-check?name=" + encodeURIComponent(nm))).json();
+  } catch (e) { return; }                  // offline: let the server decide
+  if (seq !== _nameCheckSeq) return;       // a newer keystroke already answered
+  NAME_CLASH = d && d.conflict ? d.conflict : null;
+  warn.textContent = NAME_CLASH ? "✗ " + NAME_CLASH : "";
+  warn.style.display = NAME_CLASH ? "" : "none";
+}
+
 let CSCHEMA = null;
 const SECTION_MODE = { world: null, economy: null, combat: null, pacing: null,
                        scenario: null, admirals: null,
@@ -1692,6 +1718,9 @@ function syncLinkedDefaults() {
   }
 }
 document.addEventListener("input", e => onKnobEdit(e));
+document.addEventListener("input", e => {
+  if (e.target && e.target.id === "cname") checkRunName();
+});
 document.addEventListener("change", e => onKnobEdit(e));
 function onKnobEdit(e) {
   const el = e.target;
@@ -2393,6 +2422,14 @@ document.addEventListener("click", e => {
   }
   if (e.target.id === "claunch") {
     e.preventDefault();
+    // a name is a DIRECTORY: two runs sharing one write into the same place and
+    // blend their games. The server refuses too — this just says so before the
+    // operator has filled in a whole config.
+    if (NAME_CLASH) {
+      $("cmsg").textContent = "✗ " + NAME_CLASH;
+      $("cname").focus();
+      return;
+    }
     const cfg = buildConfig();
     if ($("cname").value.trim()) cfg.name = $("cname").value.trim();
     if ($("cauxec") && $("cauxec").checked) {
