@@ -67,12 +67,19 @@ def _ev_line(e, names):
     if k == "yard_built":
         return f"{nm(e['fleet'])} opened a yard slot"
     if k == "treaty":
+        if e.get("type") == "border":
+            return (f"{nm(e['fleet'])} and {nm(e['other'])} agreed a border "
+                    f"at {e.get('axis')}={e.get('line')}")
         t = str(e.get("terms") or "")[:80]
-        return (f"{nm(e['fleet'])} and {nm(e['other'])} signed a treaty"
-                + (f' — "{t}"' if t else ""))
+        return (f"{nm(e['fleet'])} and {nm(e['other'])} signed a "
+                "non-aggression pact" + (f' — "{t}"' if t else ""))
     if k == "treaty_end":
         if e.get("cause") == "aggression":
-            return f"{nm(e['fleet'])} BROKE the treaty with {nm(e['other'])}"
+            return (f"{nm(e['fleet'])} BROKE the pact with {nm(e['other'])} "
+                    "— sank a ship under it")
+        if e.get("cause") == "border":
+            return (f"{nm(e['fleet'])} crossed the agreed border and "
+                    f"{nm(e['other'])} saw it — treaty void")
         return f"{nm(e['fleet'])} dissolved the treaty with {nm(e['other'])}"
     return None
 

@@ -431,7 +431,7 @@
    "show_if": {
     "parley": true
    },
-   "doc": "Official treaties: formal, PUBLIC pacts between two fleets \u2014 proposed and signed as actions, listed in every admiral's state.treaties, announced to all when formed, dissolved, or BROKEN (damaging a partner voids the pact instantly and names the breaker). The game records and announces treaties but never enforces their terms \u2014 negotiation happens over parley; this is the signature. Needs parley on."
+   "doc": "Official treaties: formal, PUBLIC pacts negotiated and signed INSIDE parley (a treaty field on a parley message). Two types \u2014 non_aggression (broken only when one side SINKS the other's ship; stray adjacency fire is not betrayal) and border (an agreed x/y line neither fleet crosses; broken when a signer SEES the other's ship beyond it, fog applies). Every pact is public in state.treaties; forming, dissolving, and breaking are announced to all admirals with the breaker named. The game records pacts, it never enforces conduct in advance. Needs parley on; border treaties also need contact_ttl > 0."
   },
   "voyage_reports": {
    "d": true,

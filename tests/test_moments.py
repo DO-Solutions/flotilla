@@ -62,9 +62,9 @@ def mk_replay():
              "name": "Foo Waters", "prev": None},
             {"k": "flag_sunk", "t": 90, "fleet": 1, "by": 0},
             {"k": "treaty", "t": 30, "fleet": 1, "other": 0,
-             "terms": "no raids"},
+             "type": "non_aggression", "terms": "no raids"},
             {"k": "treaty_end", "t": 70, "fleet": 0, "other": 1,
-             "cause": "aggression"},
+             "cause": "aggression", "type": "non_aggression"},
         ],
         "memos": {"Alpha": {"memo": "keep the pressure on"},
                   "Beta": {"memo": "avoid the trap next time"}},
@@ -81,8 +81,8 @@ ok(any("Alpha sank Beta's raider" in ln for ln in lines),
    f"anchor lines read like the record ({[l for l in lines if 't40' in l]})")
 ok(any("ELIMINATED" in ln for ln in lines),
    "a flagship kill is named for what it is")
-ok(any("signed a treaty" in ln for ln in lines)
-   and any("BROKE the treaty" in ln for ln in lines),
+ok(any("non-aggression pact" in ln for ln in lines)
+   and any("BROKE the pact" in ln for ln in lines),
    "treaty beats are citable anchors — formed and broken both")
 
 # ---- material: the player's OWN words only ----

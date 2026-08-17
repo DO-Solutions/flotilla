@@ -38,7 +38,7 @@ def ok(cond, msg):
 src = open(VIEWER, encoding="utf-8").read()
 NEEDED = ["cleanAudioClip", "audioToken", "audioPref", "audioClips",
           "audioActive", "audioVol", "audioBeats", "AUDIO_MIN_GAP_MS",
-          "FX_KIND_CFG", "SKIN_DEFAULT"]
+          "FX_KIND_CFG", "AUDIO_KIND_CFG", "SKIN_DEFAULT"]
 parts = {n: extract(src, n) for n in NEEDED}
 missing = [n for n, v in parts.items() if not v]
 ok(not missing, f"the audio substrate is still extractable from the viewer "
@@ -131,7 +131,8 @@ POLICY_STUBS = """
 let SKIN = null, store = {};
 const localStorage = {getItem: k => (k in store ? store[k] : null)};
 """
-p = node_eval(POLICY_STUBS + parts["FX_KIND_CFG"] + ";" + parts["audioPref"]
+p = node_eval(POLICY_STUBS + parts["FX_KIND_CFG"] + ";"
+              + parts["AUDIO_KIND_CFG"] + ";" + parts["audioPref"]
               + ";" + parts["audioClips"] + ";" + parts["audioActive"] + f"""
 const CLIP = {json.dumps(CLIP)};
 function run(pref, skinOn, withClip) {{
@@ -159,7 +160,8 @@ ok(p["junkPrefFollowsSkin"] is False,
    "a junk localStorage value counts as no preference")
 
 # ---- the fire window: forward-only, fog-checked, coalesced ----
-w = node_eval(POLICY_STUBS + parts["FX_KIND_CFG"] + ";" + parts["audioPref"]
+w = node_eval(POLICY_STUBS + parts["FX_KIND_CFG"] + ";"
+              + parts["AUDIO_KIND_CFG"] + ";" + parts["audioPref"]
               + ";" + parts["audioClips"] + ";" + parts["audioActive"] + ";"
               + parts["AUDIO_MIN_GAP_MS"] + ";" + f"""
 const CLIP = {json.dumps(CLIP)};
