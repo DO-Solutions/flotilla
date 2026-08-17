@@ -234,6 +234,24 @@
   #bar { margin-bottom: 10px; background: var(--card); border: 1px solid var(--line);
          border-radius: var(--radius); padding: 8px 12px; }
   #timeline { width: 100%; height: 34px; display: block; cursor: pointer; margin-bottom: 6px; }
+  /* ---- event feed (docs/SPECTATOR.md) ----
+     Lives INSIDE #seawrap, so it rides the map in every mode — windowed,
+     fullscreen theater, and broadcast — without a second set of rules. It is
+     deliberately visible in a capture: a viewer who is not staring at the right
+     patch of sea otherwise never learns that anything happened. */
+  #feed { position: absolute; z-index: 6; pointer-events: none;
+          display: flex; flex-direction: column; gap: 3px; max-width: 42%; }
+  #feed.tl { top: 10px; left: 10px; }
+  #feed.tr { top: 10px; right: 10px; align-items: flex-end; }
+  #feed.bl { bottom: 10px; left: 10px; justify-content: flex-end; }
+  #feed.br { bottom: 10px; right: 10px; align-items: flex-end; }
+  #feed .fl { background: var(--feed-bg, #0b1220cc); color: var(--feed-ink, var(--ink));
+              border: 1px solid var(--line); border-left: 3px solid var(--fc, var(--accent));
+              border-radius: var(--radius); padding: 3px 9px; font-size: 13px;
+              line-height: 1.3; white-space: nowrap; overflow: hidden;
+              text-overflow: ellipsis; backdrop-filter: blur(3px);
+              transition: opacity .4s ease; }
+  #feed .fl .fi { opacity: .85; margin-right: 5px; }
   /* timeline tooltip: the marks already said WHEN and clicking already jumped
      there — this says WHAT, which is the whole question a spectator has. */
   #tltip { position: fixed; z-index: 30; pointer-events: none; display: none;
@@ -470,6 +488,7 @@ at your own pace, then jump to the one being played now"></button>
       </div>
     </div>
     <button id="fsmap" title="fullscreen — panel + bar become overlays (P and B toggle them, Esc exits)">⛶</button>
+    <div id="feed" class="tl"></div>
     <canvas id="sea" width="1152" height="648"></canvas>
     <div id="becalmed" style="display:none;position:absolute;top:12px;left:50%;
          transform:translateX(-50%);background:#0a1b33ee;border:1px solid var(--line);
@@ -589,6 +608,15 @@ const SKIN_DEFAULT = {
            spriteKey: "#ff00ff" },
   fx: { fog: "rgba(3,8,18,.62)", tail: 14 },
   minimap: { bg: "#0a1b33", frame: "#24304d", cursor: "#e6edf7" },
+  // the event feed (docs/SPECTATOR.md). Appearance + density only: WHAT is
+  // worth saying lives in the shared vocabulary, not in a skin.
+  feed: { enabled: true,
+          position: "tl",              // tl | tr | bl | br
+          maxLines: 5,                 // lines on screen at once
+          ttlS: 8,                     // game-seconds a line lingers
+          scale: 1,                    // 1080p vs 4K capture
+          minRank: 2,                  // 2 = the big beats; 1 adds context
+          bg: "", ink: "", accent: "" },   // "" = follow the ui palette
 };
 const SKINS = {
   flotilla: {},
@@ -684,6 +712,30 @@ function cleanShapes(v) {
     if (cl.length >= 3) out[k] = cl;
   }
   return Object.keys(out).length ? out : null;
+}
+function feedToken(feed, k, v) {
+  // The generic token path coerces by the DEFAULT's type, which would turn a
+  // boolean into the string "false" (truthy — the feed would refuse to switch
+  // off) and would swallow a legitimate 0 via `+v || default`. The feed's
+  // tokens are few and each has a real range, so validate them explicitly.
+  const num = (lo, hi, d) => {
+    const n = +v;
+    return Number.isFinite(n) ? Math.min(hi, Math.max(lo, n)) : d;
+  };
+  switch (k) {
+    case "enabled": feed.enabled = !(v === false || v === "false" || v === 0);
+      break;
+    case "position":
+      if (["tl", "tr", "bl", "br"].includes(String(v))) feed.position = String(v);
+      break;
+    case "maxLines": feed.maxLines = Math.round(num(1, 12, feed.maxLines)); break;
+    case "ttlS":     feed.ttlS = num(1, 60, feed.ttlS); break;
+    case "scale":    feed.scale = num(0.5, 4, feed.scale); break;
+    // rank 0 would admit the muted kinds (intents/orders are ~95% of the
+    // stream by volume) and bury everything worth reading, so the floor is 1
+    case "minRank":  feed.minRank = Math.round(num(1, 3, feed.minRank)); break;
+    case "bg": case "ink": case "accent": feed[k] = String(v); break;
+  }
 }
 function cleanRadius(v) {
   // ui.radius: a bare number is px (0-64, the useful range for cards/buttons);
@@ -898,6 +950,7 @@ function applySkin(spec) {
           continue;
         }
         if (k === "texture") { base[sec][k] = cleanTexture(v); continue; }
+        if (sec === "feed") { feedToken(base.feed, k, v); continue; }
         if (sec === "ui" && k === "radius") {
           // appearance only — a bare number means px, a string carries its own
           // unit. Anything else keeps the default rather than emitting a var
@@ -925,6 +978,15 @@ function applySkin(spec) {
   // chart, so it needs the sea colors the canvas is using
   rt.setProperty("--sea-top", SKIN.sea.top);
   rt.setProperty("--sea-bottom", SKIN.sea.bottom);
+  // feed colors are optional: unset means "follow the ui palette", which the
+  // stylesheet expresses as the var()'s own fallback — so REMOVE rather than
+  // set empty, or the fallback never fires
+  for (const k of ["bg", "ink"]) {
+    const v = (SKIN.feed || {})[k];
+    if (v) rt.setProperty("--feed-" + k, v);
+    else rt.removeProperty("--feed-" + k);
+  }
+  applyFeedPref();                 // the viewer's corner choice outranks the skin's
   document.body.style.fontFamily = SKIN.ui.font || "";
 }
 const S = { rp: null, fi: 0, playing: false, last: 0, acc: 0, sel: null,
@@ -1116,7 +1178,25 @@ function renderSettingsPanel() {
     `<span class="info">i<span class="pop">appearance only — palette, ` +
     `type, silhouettes, motion. Never touches the match, the fog rules, ` +
     `or the data. ?skin= and ?skinurl= (same-origin JSON) work too — ` +
-    `see docs/SKINS.md</span></span></div>`;
+    `see docs/SKINS.md</span></span></div>` +
+    // The feed corner is a skin token, but which corner is FREE depends on
+    // where the fleets happen to be on this map — that is a per-match, even
+    // per-moment call, and nobody should have to edit a skin JSON to stop the
+    // feed sitting on top of a flagship. Per-browser, like the other toggles.
+    `<div style="display:flex;align-items:center;gap:6px;margin-bottom:6px">` +
+    `<label class="dim" for="feedpos">📰 feed corner</label>` +
+    `<select id="feedpos">` +
+    [["tl", "top left"], ["tr", "top right"],
+     ["bl", "bottom left"], ["br", "bottom right"], ["off", "hidden"]]
+      .map(([v, lbl]) => {
+        const cur = SKIN.feed && SKIN.feed.enabled === false
+          ? "off" : ((SKIN.feed || {}).position || "tl");
+        return `<option value="${v}"${cur === v ? " selected" : ""}>${lbl}</option>`;
+      }).join("") + `</select>` +
+    `<span class="info">i<span class="pop">where the event feed sits — move ` +
+    `it off whichever corner the action is in. Remembered in this browser and ` +
+    `it overrides the skin's own choice; the skin default returns if you ` +
+    `clear it.</span></span></div>`;
   const sec = (title, body, note) =>
     `<details><summary>${title}` +
     (note ? ` <span class="dim">${note}</span>` : "") +
@@ -1533,6 +1613,10 @@ function load(rp) {
   // every animation frame to find ~77 sinks — measured 2.7ms/frame of the
   // 16ms budget on desktop, the whole budget on a phone
   S.sinks = rp.events.filter(e => e.k === "sink");
+  // feed index, same reason as the sink index above: the feed needs a handful
+  // of beats per frame out of tens of thousands of events, and rank is static,
+  // so filter ONCE here rather than scanning the stream every animation frame.
+  S.feedEvents = rp.events.filter(e => (EV_RANK[e.k] ?? 0) > 0);
   rp.frames.forEach((fr, fi) => ingestFrame(fr, fi));
   // the in-memory replay is now canonical v3 — stamp it so ⬇ download and the
   // showcase EMBED path serialize a coherent v3 file
@@ -2672,6 +2756,7 @@ function updatePanels(fr) {
     }
   }
   drawTimeline(fr);
+  renderFeed(fr);
   // only when the Stats panel is the visible mode — setMode() re-seeks on
   // switch so it paints current the instant it opens. (Gate on pmode, NOT
   // CSS visibility: the fullscreen auto-panel returns on hover w/o a seek.)
@@ -3930,6 +4015,16 @@ document.addEventListener("mouseout", e => {
   if (S.rp && !S.playing) seek(S.fi);
 });
 document.addEventListener("change", e => {
+  if (e.target && e.target.id === "feedpos") {
+    // a per-browser override of the skin's feed corner: "" means defer to the
+    // skin again. Stored, then re-applied by applyFeedPref() on every skin
+    // change so switching skins cannot silently move the feed back.
+    const v = e.target.value;
+    try { localStorage.setItem("flotilla-feedpos", v); } catch (err) {}
+    applyFeedPref();
+    if (S.rp) seek(S.fi);                // repaint at the current frame
+    return;
+  }
   if (e.target && e.target.id === "skinsel") {
     const k = e.target.value;
     if (SKINS[k] || !SKIN_NAME_RE.test(k)) applySkin(SKINS[k] || {});
@@ -4260,6 +4355,93 @@ tlc.addEventListener("click", e => {
   if (!r.width) return;
   seekFrac((e.clientX - r.left) / r.width);
 });
+
+// ---- event feed (docs/SPECTATOR.md) ----
+// "stuff happens on the map and unless you're staring at the right spot you'd
+// never know" — the feed is the fix. Text comes from describeEvent, so a beat
+// reads identically here, in the timeline tooltip, and in anything built later.
+//
+// FOG IS A CONTRACT, NOT A PREFERENCE. In a POV view the feed may only report
+// what that admiral could actually know, or the POV view stops meaning
+// anything. The rules, per kind:
+//   sink / flag_sunk  own or allied always; otherwise only if the ship was
+//                     VISIBLE at that frame — the same test the sink ripples
+//                     use, including the previous frame, because the ship is
+//                     already gone from the frame it sinks in
+//   parley            only the two fleets on the wire
+//   signal            own/allied only: a hoist is your own fleet's business
+//   region            public — territory ownership is in state.regions for
+//                     every admiral, so reporting it leaks nothing
+//   everything else   own/allied (a rival infers yard work by scouting, not
+//                     by being told)
+function evVisible(e, fi) {
+  if (!S.povCache || S.pov < 0) return true;          // all-seeing
+  const mine = povAlly(e.fleet);
+  switch (e.k) {
+    case "sink": case "flag_sunk": {
+      if (mine || povAlly(e.by)) return true;
+      const v = S.povCache.vis, i = Math.min(fi, v.length - 1);
+      if (e.ship == null) return false;               // flagship: no ship id
+      return !!((v[i] && v[i].has(e.ship))
+                || (v[i - 1] && v[i - 1].has(e.ship)));
+    }
+    case "parley": return mine || povAlly(e.to);
+    case "region": return true;
+    default: return mine;
+  }
+}
+
+function applyFeedPref() {
+  // The viewer's own corner choice wins over the skin's, because which corner
+  // is free depends on where the fleets happen to be on THIS map at THIS
+  // moment — that is not a branding decision, and nobody should have to edit a
+  // skin JSON to stop the feed sitting on top of a flagship. Re-applied after
+  // every applySkin so switching skins cannot quietly move the feed back.
+  let v = null;
+  try { v = localStorage.getItem("flotilla-feedpos"); } catch (e) { v = null; }
+  if (!v || !SKIN.feed) return;                 // no preference: the skin decides
+  if (v === "off") { SKIN.feed.enabled = false; return; }
+  if (["tl", "tr", "bl", "br"].includes(v)) SKIN.feed.position = v;
+}
+
+function renderFeed(fr) {
+  const el = $("feed");
+  if (!el) return;
+  const cfg = SKIN.feed || {};
+  if (!cfg.enabled || !S.rp || !S.feedEvents) { el.style.display = "none"; return; }
+  el.style.display = "";
+  el.className = cfg.position || "tl";
+  const hz = S.rp.meta.tick_hz || 10;
+  const now = fr.t, from = now - (cfg.ttlS || 8) * hz;
+  const rows = [];
+  // events are recorded in tick order, so walk BACKWARD from the playhead and
+  // stop as soon as we fall out of the window — the loop touches the handful of
+  // beats on screen, never the whole stream
+  const ev = S.feedEvents;
+  let i = ev.length - 1;
+  while (i >= 0 && ev[i].t > now) i--;                // skip the future
+  for (; i >= 0 && ev[i].t > from; i--) {
+    const e = ev[i];
+    if ((EV_RANK[e.k] ?? 0) < (cfg.minRank || 2)) continue;
+    if (!evVisible(e, S.fi)) continue;
+    const d = describeEvent(e);
+    if (!d) continue;
+    rows.push(d);
+    if (rows.length >= (cfg.maxLines || 5)) break;
+  }
+  if (!rows.length) { el.innerHTML = ""; return; }
+  const style = (cfg.scale && cfg.scale !== 1)
+    ? ` style="font-size:${(13 * cfg.scale).toFixed(1)}px"` : "";
+  // oldest at the top so new lines arrive at the bottom edge, the direction
+  // every kill feed has trained people to read
+  el.innerHTML = rows.reverse().map(d => {
+    const age = (now - d.t) / ((cfg.ttlS || 8) * hz);
+    const fade = age > 0.75 ? (1 - (age - 0.75) / 0.25).toFixed(2) : 1;
+    const col = COLORS[d.fleet % COLORS.length];
+    return `<div class="fl" style="--fc:${col};opacity:${fade}"${style}>`
+      + `<span class="fi">${escHtml(d.icon)}</span>${escHtml(d.text)}</div>`;
+  }).join("");
+}
 
 // ---- timeline hover: what happened here? (docs/SPECTATOR.md) ----
 // The marks and click-to-jump already existed; the missing half was WHAT a
@@ -4630,6 +4812,7 @@ function liveAppend(p) {
     }
     if (["sink", "flag_sunk", "signal", "region"].includes(e.k)) S.tl.push(e);
     if (e.k === "parley") S.parley.push(e);
+    if ((EV_RANK[e.k] ?? 0) > 0) (S.feedEvents = S.feedEvents || []).push(e);
   }
   for (const d of p.decisions || []) rp.decisions.push(d);
   povExtend();                           // fog view stays valid as frames land

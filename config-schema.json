@@ -719,9 +719,10 @@
    "opts": [
     "round_robin",
     "random_pairs",
-    "single_elim"
+    "single_elim",
+    "swiss"
    ],
-   "doc": "Bracket structure. round_robin: every combination plays. random_pairs: seeded random pairings per round. single_elim: knockout bracket (2-player matchups, participants must be a power of 2)."
+   "doc": "Bracket structure. round_robin: every combination plays. random_pairs: seeded random pairings per round. single_elim: knockout bracket (2-player matchups, participants must be a power of 2). swiss: fixed number of rounds, nobody eliminated \u2014 each round pairs admirals on similar records (leaders meet leaders), rematches avoided where possible, and with an odd field the bye goes to whoever has had fewest. Best when you want a ranking from every participant without the N-squared cost of a full round robin."
   },
   "players_per_match": {
    "d": 2,
@@ -733,10 +734,13 @@
    ],
    "show_if": {
     "format": {
-     "not": "single_elim"
+     "not": [
+      "single_elim",
+      "swiss"
+     ]
     }
    },
-   "doc": "Fleets per matchup (single_elim is always 2)."
+   "doc": "Fleets per matchup (single_elim and swiss are always 2)."
   },
   "games_per_match": {
    "d": 1,
@@ -756,9 +760,12 @@
    "lo": 1,
    "hi": 10,
    "show_if": {
-    "format": "random_pairs"
+    "format": [
+     "random_pairs",
+     "swiss"
+    ]
    },
-   "doc": "random_pairs only: how many rounds of fresh pairings."
+   "doc": "random_pairs / swiss: how many rounds to play. random_pairs reshuffles each round; swiss pairs on the standings so far. A useful swiss default is ceil(log2(participants)) \u2014 3 rounds separates 8 admirals, 4 separates 16."
   },
   "memo_policy": {
    "d": "per_series",

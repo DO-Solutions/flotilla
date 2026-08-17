@@ -120,6 +120,77 @@ def mdir_name(group, midx):
     return f"m{midx:02d}_" + tag
 
 
+def swiss_standings(names, matchups, before_round):
+    """The table as it stood BEFORE `before_round`, built only from matchups
+    recorded in EARLIER rounds.
+
+    The "before" is the whole point. Pairing must never see a later round's
+    results: a resumed tournament replays the pairing logic for rounds already
+    played, and if it read the final table it would pair round 2 differently
+    from the round 2 that actually happened — inventing matchups that contradict
+    the record it just restored."""
+    st = {n: {"series_wins": 0, "wins": 0, "score": 0} for n in names}
+    for m in matchups:
+        if int(m.get("round") or 0) >= before_round:
+            continue
+        w = m.get("winner")
+        if w in st:
+            st[w]["series_wins"] += 1
+        for g in (m.get("games") or []):
+            if g.get("winner") in st:
+                st[g["winner"]]["wins"] += 1
+            for n, sc in (g.get("scores") or {}).items():
+                if n in st:
+                    st[n]["score"] += sc
+    return st
+
+
+def swiss_pairs(names, matchups, rnd):
+    """Pairings for Swiss round `rnd`: sort by record, pair down the table,
+    avoid rematches, and hand any bye to the player who has had fewest.
+
+    Deterministic by construction — the sort falls back to the name and there
+    is no rng anywhere, so the same record always yields the same pairing. That
+    is what makes a resumed run re-derive the rounds it already played instead
+    of forking a different bracket.
+
+    Swiss keeps everyone playing: nobody is knocked out, and after a couple of
+    rounds the leaders are meeting each other rather than farming the tail."""
+    st = swiss_standings(names, matchups, rnd)
+    prior = [m for m in matchups if int(m.get("round") or 0) < rnd]
+    met, appearances = set(), {n: 0 for n in names}
+    for m in prior:
+        ps = [p for p in (m.get("players") or []) if p in appearances]
+        for i, a in enumerate(ps):
+            appearances[a] += 1
+            for b in ps[i + 1:]:
+                met.add(frozenset((a, b)))
+    # strongest first; name breaks every tie so the order is total
+    order = sorted(names, key=lambda n: (-st[n]["series_wins"], -st[n]["wins"],
+                                         -st[n]["score"], n))
+    pool = list(order)
+    if len(pool) % 2:
+        # odd field: someone sits out. Give it to whoever has sat out least,
+        # then to the weakest of those — the same instinct as the chess rule,
+        # without inventing a free win for a series that was never sailed.
+        byes = {n: (rnd - 1) - appearances[n] for n in names}
+        rank = {n: i for i, n in enumerate(order)}
+        sit = min(pool, key=lambda n: (byes[n], -rank[n], n))
+        pool.remove(sit)
+    pairs, used = [], set()
+    for i, a in enumerate(pool):
+        if a in used:
+            continue
+        opp = next((b for b in pool[i + 1:]
+                    if b not in used and frozenset((a, b)) not in met), None)
+        if opp is None:                    # everyone left has already been met:
+            opp = next((b for b in pool[i + 1:] if b not in used), None)
+        if opp is None:                    # a rematch beats not playing
+            break
+        used.add(a); used.add(opp)
+        pairs.append([a, opp])
+    return pairs
+
 # Every top-level key a run config may carry. Knobs INSIDE the four schema
 # sections are already validated by config_schema.resolve() — an unknown one
 # raises "unknown config key 'x'". A whole unknown SECTION had no such check:
@@ -173,13 +244,13 @@ def schedule_preview(cfg):
     """Every matchup a tournament WILL play — [{"dir", "players"}], computed
     exactly the way run_tournament builds its schedule (deterministic from
     cfg, same rng consumption order). Lets the bracket page show scheduled
-    lanes before a single game lands. single_elim pairs later rounds off
-    results, so its schedule is unknowable up front: []."""
+    lanes before a single game lands. single_elim and swiss pair later rounds
+    off results, so their schedules are unknowable up front: []."""
     if config_schema is None:
         contract.game()                    # bind the registered game's schema
     t = config_schema.section_resolve("tournament", cfg.get("tournament"))
     names = dedupe([spec_name(s) for s in cfg["participants"]])
-    ppm = 2 if t["format"] == "single_elim" else int(t["players_per_match"])
+    ppm = 2 if t["format"] in ("single_elim", "swiss") else int(t["players_per_match"])
     rng = random.Random(cfg.get("seed", 42))
     if t["format"] == "round_robin":
         rounds = [[list(c) for c in itertools.combinations(names, ppm)]]
@@ -588,7 +659,7 @@ def run_tournament(cfg, adm, scenario, outdir, prov=None, resume_ck=None):
     names = dedupe([spec_name(s) for s in specs])
     bots = {n: make_bot(s, adm) for n, s in zip(names, specs)}
     rng = random.Random(cfg.get("seed", 42))
-    ppm = 2 if t["format"] == "single_elim" else int(t["players_per_match"])
+    ppm = 2 if t["format"] in ("single_elim", "swiss") else int(t["players_per_match"])
 
     if t["format"] == "round_robin":
         schedule = [list(c) for c in itertools.combinations(names, ppm)]
@@ -599,6 +670,10 @@ def run_tournament(cfg, adm, scenario, outdir, prov=None, resume_ck=None):
             order = names[:]
             rng.shuffle(order)
             rounds.append([order[i:i + ppm] for i in range(0, len(order) - ppm + 1, ppm)])
+    elif t["format"] == "swiss":
+        # pairings come from the standings before each round, so like ELIM the
+        # bracket is discovered as it plays rather than laid out up front
+        rounds = "SWISS"
     else:                                              # single_elim
         n = len(names)
         if n & (n - 1):
@@ -677,7 +752,7 @@ def run_tournament(cfg, adm, scenario, outdir, prov=None, resume_ck=None):
     # rides every tournament.json write so the bracket page can show
     # scheduled lanes before their first game lands
     schedule_meta = []
-    if rounds != "ELIM":
+    if rounds not in ("ELIM", "SWISS"):
         _mi = 0
         for _rg in rounds:
             for _g in _rg:
@@ -955,6 +1030,25 @@ def run_tournament(cfg, adm, scenario, outdir, prov=None, resume_ck=None):
             pairs = [[alive[i], alive[i + 1]] for i in range(0, len(alive), 2)]
             alive = play_round(pairs, rnd)   # round barrier: winners pair next
         champion = alive[0]
+    elif rounds == "SWISS":
+        # Every round is paired off the table as it stood BEFORE that round, so
+        # a resumed run re-derives the rounds it already played (play_round then
+        # skips them by name) instead of forking a different bracket. Nobody is
+        # eliminated: the field stays whole and the leaders find each other.
+        nrounds = max(1, int(t.get("rounds", 1) or 1))
+        for rnd in range(1, nrounds + 1):
+            pairs = swiss_pairs(names, matchups, rnd)
+            if not pairs:                    # fewer than two players: nothing to play
+                break
+            play_round(pairs, rnd)
+        played = [n for n in names if standings[n]["games"] > 0]
+        if not played:
+            raise SystemExit("no games were played — refusing to name a champion")
+        # same rule as round_robin: series won first, game wins and score only
+        # break ties (12 game wins across 4 lost series must not outrank 4-0)
+        champion = max(played, key=lambda n: (standings[n]["series_wins"],
+                                              standings[n]["wins"],
+                                              standings[n]["score"]))
     else:
         if not any(groups for groups in rounds):
             # e.g. players_per_match > participant count: zero matchups would

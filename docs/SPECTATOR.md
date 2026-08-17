@@ -51,3 +51,62 @@ name** and runs it in node against the engine's real event shapes — a copy wou
 keep passing after the viewer changed. It covers the phrasing of every surfaced
 kind, the muting of the high-volume ones, place naming with and without seats,
 and the tooltip's tick→pixel hit-test including the spoiler rule.
+
+## Event feed
+
+The answer to *"stuff happens on the map and unless you're staring at the right
+spot you'd never know."* A compact strip on the map logging the big beats as
+they happen — FPS kill feed, strategy flavoured.
+
+It renders from `describeEvent`, so a beat reads identically in the feed, in the
+tooltip, and in anything built later. It is **deliberately visible in a
+capture**: a viewer not staring at the right patch of sea otherwise never learns
+that anything happened.
+
+The window is derived from the playhead — beats within `ttlS` game-seconds
+*behind* it — so scrubbing backwards shows what the feed said at that moment
+rather than an append-only log that only makes sense played forward.
+
+### Fog is a contract, not a preference
+
+In a POV view the feed may only report what that admiral could know. Get this
+wrong and it narrates the other fleet's private business over the top of a
+fog-of-war display.
+
+| kind | rule |
+|---|---|
+| `sink` / `flag_sunk` | own or allied always; otherwise only if the ship was VISIBLE at that frame — including the **previous** frame, because a ship is already gone from the frame it sinks in |
+| `parley` | only the two fleets on the wire |
+| `signal` | own/allied — a hoist is your own fleet's business |
+| `region` | public: territory ownership is in `state.regions` for every admiral, so reporting it leaks nothing |
+| everything else | own/allied (a rival infers yard work by scouting, not by being told) |
+
+### Skin tokens
+
+| token | default | what |
+|---|---|---|
+| `feed.enabled` | `true` | off entirely |
+| `feed.position` | `tl` | `tl` \| `tr` \| `bl` \| `br` |
+| `feed.maxLines` | `5` | lines on screen (1–12) |
+| `feed.ttlS` | `8` | game-seconds a line lingers (1–60) |
+| `feed.scale` | `1` | font scale for 1080p vs 4K capture (0.5–4) |
+| `feed.minRank` | `2` | `2` = the big beats, `1` adds context. Floored at 1 — rank 0 is the muted kinds and would bury everything worth reading |
+| `feed.bg` `feed.ink` `feed.accent` | `""` | `""` follows the `ui` palette |
+
+Appearance and density only. **What is worth saying lives in the shared
+vocabulary, not in a skin** — a skin can restyle the feed, never rewrite the
+match.
+
+### Moving it out of the way
+
+Which corner is free depends on where the fleets happen to be on this map at
+this moment — that is not a branding decision, so the viewer's settings tab has
+its own **📰 feed corner** picker (four corners, or hidden). It is per-browser
+and it **outranks the skin's choice**, re-applied after every skin change so
+switching skins cannot quietly slide the feed back on top of a flagship. Clear
+it and the skin's own choice returns.
+
+> Not built yet: per-kind copy overrides (`feed.templates`), so Design can own
+> the wording without a code change. Deferred deliberately until there is real
+> copy to build against — inventing a placeholder vocabulary before anyone has
+> written a line would almost certainly invent the wrong one.

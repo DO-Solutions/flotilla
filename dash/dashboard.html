@@ -895,7 +895,10 @@ function renderSeriesTable() {
         (tjob ? `<a class="btn btn-dl scancel" href="#" style="color:#ff5d5d" ` +
           `data-job="${esc(tjob.id)}" data-label="${esc(t.name)}" ` +
           `data-tourn="1" title="cancel the whole tournament (asks first)">` +
-          `✖ Cancel</a>` : "") +
+          // bare ✖, matching the series and game rows — the word made this the
+          // widest control in the row for no extra meaning (the title says it,
+          // and it asks for confirmation anyway)
+          `✖</a>` : "") +
         (SERVER ? `<a class="btn btn-dl tarch" href="#" data-t="${esc(t.name)}" ` +
           `data-arch="${t.archived ? 0 : 1}" title="${t.archived
             ? "unarchive the tournament and all its series"
@@ -1659,7 +1662,12 @@ function applyShowIf() {
       for (const [ck, cond] of Object.entries(s.show_if)) {
         const v = effKnob(KNOB_SEC[ck] || sec, ck);
         if (cond && typeof cond === "object" && "not" in cond) {
-          if (String(v) === String(cond.not)) show = false;
+          // {"not": x} or {"not": [x, y]} — the array form is "none of these",
+          // which players_per_match needs now that BOTH single_elim and swiss
+          // fix it at 2. Without it the array stringifies and never matches, so
+          // the row shows a knob the runner is quietly ignoring.
+          const banned = Array.isArray(cond.not) ? cond.not : [cond.not];
+          if (banned.map(String).includes(String(v))) show = false;
         } else if (Array.isArray(cond)) {
           if (!cond.map(String).includes(String(v))) show = false;
         } else if (String(v) !== String(cond)) show = false;
