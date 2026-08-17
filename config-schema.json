@@ -710,6 +710,39 @@
    "d": true,
    "t": "bool",
    "doc": "After the final memo, ask each admiral \u2014 as a playtester, out of character \u2014 how to improve Flotilla itself (unclear rules, missing actions, degenerate strategies, conn friction, bugs). One call per LLM admiral at series end; collected in series.json under sim_feedback for human review."
+  },
+  "historic_moments": {
+   "d": false,
+   "t": "bool",
+   "doc": "At series end, a NARRATOR model writes each LLM admiral's story through the series \u2014 key decisions, turning points, and where the admiral's own words show it surprised, frustrated, triumphant or resigned. Grounded in the record (the admiral's journal, memos, parley, and the event log): every beat must cite a real {game, tick} anchor or it is dropped before it renders. One narrator call per LLM admiral; collected in series.json under historic_moments. Costs count against the pre-flight estimate and the per-run ceiling. SPOILERS by construction \u2014 rendered behind the spoiler shield."
+  },
+  "historic_moments_model": {
+   "d": "",
+   "t": "str",
+   "show_if": {
+    "historic_moments": true
+   },
+   "doc": "Which model narrates, independent of who played. Empty = the server's default narrator (Server tab); a config submitted through the dashboard gets that default injected. A bare runner config with historic_moments on must set this explicitly \u2014 validation refuses the silent alternative."
+  },
+  "historic_moments_timeout_s": {
+   "d": 300,
+   "t": "int",
+   "lo": 30,
+   "hi": 900,
+   "show_if": {
+    "historic_moments": true
+   },
+   "doc": "Seconds per narrator call. Mirrors debrief_timeout_s \u2014 care beats speed here."
+  },
+  "historic_moments_chars": {
+   "d": 2500,
+   "t": "int",
+   "lo": 500,
+   "hi": 8000,
+   "show_if": {
+    "historic_moments": true
+   },
+   "doc": "Cap on each admiral's rendered story text (the beat list is capped separately). Mirrors memo_chars."
   }
  },
  "tournament": {
@@ -800,6 +833,11 @@
     }
    },
    "doc": "Parallel matchups only: minimum seconds between the STARTS of two concurrent matchups. The default 480 matches the longest decision-window wait, so parallel games don't all slam the model APIs in the same instant. 0 = launch together."
+  },
+  "historic_moments": {
+   "d": false,
+   "t": "bool",
+   "doc": "At tournament end, the narrator writes each participant's arc across the WHOLE bracket \u2014 synthesized from the per-series stories (series.historic_moments controls those and is REQUIRED for this \u2014 the finale synthesizes from the series stories, so validation refuses this switch alone). Beats cite {matchup, game, tick} anchors drawn from the already-validated series beats. One narrator call per participant, into tournament.json under historic_moments. Uses the series section's narrator model/timeout/chars knobs."
   }
  }
 }

@@ -2008,6 +2008,17 @@ function load(rp) {
     cards.appendChild(d);
   }
   seek(0);
+  if (START_T != null && Number.isFinite(START_T) && S.rp.frames.length) {
+    // ?t=<tick> deep link (a Historic Moments anchor): open ON the moment —
+    // no intro, playhead parked at the first frame at/after the cited tick.
+    // One-shot: bundle game navigation must not keep yanking the playhead.
+    const tt = START_T;
+    START_T = null;
+    $("intro").style.display = "none";
+    let fi = S.rp.frames.findIndex(f => f.t >= tt);
+    if (fi < 0) fi = S.rp.frames.length - 1;
+    seek(fi);
+  }
 }
 
 function lastEvt(shipId, kind, t) {
@@ -5078,6 +5089,9 @@ if (!location.protocol.startsWith("http")) {   // downloaded bundle: no home to 
   $("homelink").removeAttribute("href");
 }
 const qs = new URLSearchParams(location.search);
+// ?t=<tick> — start-at deep link (Historic Moments anchors; consumed by the
+// first load(), see there for the one-shot rule)
+let START_T = qs.get("t") != null ? +qs.get("t") : null;
 // broadcast mode is switched on by the head script (before first paint); this
 // is just the read-side flag for behavior that can't be expressed in CSS.
 const BROADCAST = document.documentElement.classList.contains("broadcast");

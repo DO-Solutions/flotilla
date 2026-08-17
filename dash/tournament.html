@@ -63,6 +63,19 @@
   th,td { text-align:left; padding:5px 10px 5px 0; border-bottom:1px solid var(--line); }
   th { color:var(--dim); font-weight:500; font-size:12px; }
   .shield { filter:blur(6px); user-select:none; pointer-events:none; }
+  /* Historic Moments: per-admiral stories with anchored, clickable beats */
+  .mom { margin:8px 0 12px; }
+  .mom .story { color:var(--ink); font-size:13px; margin:4px 0 6px;
+                line-height:1.45; }
+  .beat { display:flex; gap:8px; align-items:baseline; font-size:12.5px;
+          margin:3px 0; }
+  .beat a { color:var(--accent); text-decoration:none; white-space:nowrap; }
+  .beat a:hover { text-decoration:underline; }
+  .beat .emo { border:1px solid var(--line); border-radius:8px; padding:0 7px;
+               font-size:11px; color:var(--dim); white-space:nowrap; }
+  .beat .bn { color:var(--dim); }
+  .momentsbox { margin-top:8px; border-top:1px dashed var(--line);
+                padding-top:6px; }
 </style>
 <script>
 // Site chrome follows the operator's default skin (Server tab -> Viewer skins).
@@ -91,6 +104,7 @@ fetch("api/site-skin").then(r => r.ok ? r.json() : null).then(d => {
 <div id="tmeta"></div>
 <div id="bracket" class="rounds"></div>
 <div id="standings"></div>
+<div id="moments"></div>
 <div id="tstats" style="display:none"></div>
 <script>
 "use strict";
@@ -142,6 +156,87 @@ function playerColor(names, n) {
   const i = names.indexOf(n);
   return COLORS[(i >= 0 ? i : 0) % COLORS.length];
 }
+
+// ---- Historic Moments (docs/SPECTATOR.md §5) ----
+// Narrated per-admiral stories. SPOILERS BY CONSTRUCTION — nothing renders
+// until Reveal. Every beat carries a {game, tick} anchor that survived the
+// runner's validation against the real event record, so each one is a LINK
+// into the replay at that moment (the viewer's ?t= deep link).
+let NAMES = [];
+function beatHtml(b, dir) {
+  const tn = TNAME || (TJ && TJ.config && TJ.config.name) || "";
+  const d = dir || b.matchup || "";
+  const href = `player.html?series=${encodeURIComponent(tn + "/" + d)}` +
+    `&g=${encodeURIComponent(b.game)}&t=${encodeURIComponent(b.tick)}`;
+  return `<div class="beat">` +
+    `<a target="_blank" href="${href}" ` +
+    `title="jump into the replay at this moment">▶ g${esc(b.game)} ` +
+    `t${esc(b.tick)}</a>` +
+    `<span><b>${esc(b.title || "")}</b>` +
+    (b.note ? ` <span class="bn">${esc(b.note)}</span>` : "") + `</span>` +
+    (b.emotion ? `<span class="emo">${esc(b.emotion)}</span>` : "") +
+    `</div>`;
+}
+function momentsHtml(hm, dir) {
+  let h = "";
+  for (const [p, rec] of Object.entries(hm || {})) {
+    if (p === "_meta" || !rec || typeof rec !== "object") continue;
+    if (!rec.story && !(rec.beats || []).length) continue;
+    h += `<div class="mom"><b style="color:${playerColor(NAMES, p)}">` +
+      `${esc(p)}</b>` +
+      (rec.story ? `<div class="story">${esc(rec.story)}</div>` : "") +
+      (rec.beats || []).map(b => beatHtml(b, dir)).join("") + `</div>`;
+  }
+  return h;
+}
+function renderMoments() {
+  const el = $("moments");
+  if (!el) return;
+  const hm = TJ && TJ.historic_moments;
+  if (!hm || STATSOPEN) { el.innerHTML = ""; return; }
+  if (!REVEAL) {
+    el.innerHTML = `<div class="card"><h3 style="color:var(--accent);` +
+      `font-size:14px;margin-bottom:6px">📜 Historic Moments</h3>` +
+      `<div class="stat">hidden — the stories reveal the outcome. ` +
+      `Use Reveal above.</div></div>`;
+    return;
+  }
+  const body = momentsHtml(hm, null);
+  const meta = hm._meta || {};
+  el.innerHTML = body
+    ? `<div class="card"><h3 style="color:var(--accent);font-size:14px;` +
+      `margin-bottom:6px">📜 Historic Moments — the tournament arcs</h3>` +
+      body +
+      (meta.model ? `<div class="stat">narrated by ${esc(meta.model)}` +
+        (meta.cost ? ` · $${(+meta.cost).toFixed(2)}` : "") + `</div>` : "") +
+      `</div>` : "";
+}
+// per-matchup stories live in each series.json — fetched only on demand
+// (REVEAL-gated chip on a completed card), never as part of page load
+document.addEventListener("click", async e => {
+  const a = e.target.closest && e.target.closest(".mstory");
+  if (!a) return;
+  e.preventDefault();
+  const dir = a.dataset.dir || "";
+  const box = document.querySelector(`.momentsbox[data-dir="${dir}"]`);
+  if (!box) return;
+  if (box.dataset.loaded) {
+    box.style.display = box.style.display === "none" ? "" : "none";
+    return;
+  }
+  box.dataset.loaded = "1";
+  box.style.display = "";
+  box.innerHTML = `<span class="stat">loading…</span>`;
+  let hm = null;
+  try {
+    const base = TNAME ? `tournaments/${encodeURIComponent(TNAME)}/` : "./";
+    const sj = await (await fetch(base + dir + "/series.json")).json();
+    hm = sj.historic_moments;
+  } catch (err) { /* missing file reads as "no story" below */ }
+  const body = hm ? momentsHtml(hm, dir) : "";
+  box.innerHTML = body ||
+    `<span class="stat">no story recorded for this series</span>`;
+});
 
 function matchupCards() {
   // decided matchups come from tournament.json; IN-FLIGHT ones (games on
@@ -250,6 +345,7 @@ function render() {
   document.title = `Flotilla — ${tname}`;
   $("ttitle").textContent = tname;
   const { names, mus } = matchupCards();
+  NAMES = names;                        // the color map the moments share
   const liveN = mus.filter(m => m.live).length;
   $("tmeta").innerHTML =
     `${esc(cfg.format || "round_robin")} · best of ${esc(cfg.games_per_match || 1)}` +
@@ -344,8 +440,18 @@ function render() {
     h += `<div class="gchips">` + (REVEAL ? (m.games || []).map((g, i) =>
       `<a class="btn btn-dl" target="_blank" href="${gameHref(m, g, i + 1)}">` +
       `▶ g${esc(g.game)}</a>`).join("") : "") +
+      // the story chip is REVEAL-gated like the game chips: a narrated
+      // series' story is the outcome, told well
+      (REVEAL && st === "done" && m.dir
+        ? `<a class="btn btn-dl mstory" href="#" data-dir="${esc(m.dir)}"` +
+          ` title="the narrated per-admiral stories of this series">📜 story</a>`
+        : "") +
       (st === "live" ? `<span class="stat live" style="align-self:center">` +
-        `next game playing…</span>` : "") + `</div></div>`;
+        `next game playing…</span>` : "") + `</div>` +
+      (REVEAL && st === "done" && m.dir
+        ? `<div class="momentsbox" data-dir="${esc(m.dir)}"` +
+          ` style="display:none"></div>` : "") +
+      `</div>`;
     return h;
   };
   // round_robin reads as a pipeline: Scheduled | Live | Completed. A real
@@ -408,6 +514,7 @@ function render() {
           + (liveW[n] ? ` (+${liveW[n]} at sea)` : ""))}</td>` +
         `<td>${sh(esc(s.score))}</td></tr>`).join("") +
       `</tbody></table></div>` : "";
+  renderMoments();
 }
 
 // ---- tournament-level per-agent stats (completed tournaments) ----

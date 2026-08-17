@@ -457,6 +457,18 @@ fetch("api/site-skin").then(r => r.ok ? r.json() : null).then(d => {
     <span>Chart a Course warns within 25% of this and blocks a run whose
       high-side estimate is over it.</span>
   </div>
+  <h3 style="color:var(--accent);font-size:13px;margin:16px 0 6px">Historic Moments narrator</h3>
+  <div style="display:flex; flex-direction:column; gap:8px; align-items:flex-start" class="dim">
+    <label>default narrator model
+      <select id="narr_model" class="sname" style="min-width:220px"></select></label>
+    <a class="btn btn-dl" id="narr_save" href="#">Save</a>
+    <span id="narr_msg"></span>
+    <span>Which model writes each admiral's story when a run has
+      <code>series.historic_moments</code> on and names no model itself —
+      independent of who played. Narration calls count against the pre-flight
+      estimate and the cost ceiling above. Empty = no default: such a run is
+      refused at submit until a model is named here or in the config.</span>
+  </div>
   <div class="dim" style="margin-top:6px">A 429 falls back immediately. If NO
     fallback serves a model, the run's own circuit breaker still applies: when
     every admiral is erroring for <code>outage_pause_windows</code> straight
@@ -1735,6 +1747,12 @@ function onKnobEdit(e) {
   if (el.dataset.k === "win") syncLinkedDefaults();
   if (["design_points", "flex_design", "design_points_max"]
       .includes(el.dataset.k)) renderShipWidget();
+  // knobs that move the $ estimate keep it live — the pre-flight number is a
+  // gate (lim_cost), so a stale one is a lie in either direction
+  if (["games", "games_per_match", "players_per_match", "format", "rounds",
+       "max_ticks", "window", "domination_cap", "clock_jitter", "memos",
+       "warmup", "win", "historic_moments", "historic_moments_model"]
+      .includes(el.dataset.k)) estimateCost();
   applyShowIf();
 }
 
@@ -2285,14 +2303,36 @@ function estimateCost() {
     box.title = ""; box.style.color = ""; COST_EST = 0; return;
   }
   let cost;
+  // Historic Moments narration rides the same estimate (and the ceiling —
+  // the server enforces the mirror of this): one narrator call per player
+  // per series, plus one per participant when the tournament switch is on.
+  // Fallback token profile MUST match the server's _NARR_TIN/_NARR_TOUT.
+  let perNarr = 0;
+  if (mode !== "match" && effKnob("series", "historic_moments") === true) {
+    const nm = String(effKnob("series", "historic_moments_model") || "").trim()
+               || MODELS.narrator_model || "";
+    const npr = prices[nm];
+    if (npr) {
+      const nc = cal.narrator || {};
+      perNarr = ((nc.tin || 12000) * npr[0]
+                 + (nc.tout || 1600) * npr[1]) / 1e6;
+    }
+  }
   if (mode === "tournament") {
     const t = tournamentGameTotal();
     // total = per-matchup (avg admiral × ppm) × games × matchups
     const avg = costs.reduce((a, b) => a + b, 0) / costs.length;
     cost = avg * t.ppm * t.totalGames;
+    if (perNarr) {
+      cost += perNarr * t.ppm * t.matchups;
+      if (effKnob("tournament", "historic_moments") === true) {
+        cost += perNarr * PLAYERS.length;
+      }
+    }
   } else {
     const games = mode === "series" ? (effKnob("series", "games") || 3) : 1;
-    cost = costs.reduce((a, b) => a + b, 0) * games;
+    cost = costs.reduce((a, b) => a + b, 0) * games
+           + perNarr * costs.length;
   }
   cost = Math.ceil(cost * 100) / 100;       // round UP to the cent
   COST_EST = cost;
@@ -2552,6 +2592,16 @@ async function renderProviders() {
   }
   COST_MAX = +(lim.max_series_cost || 0);       // keep the launch guard in sync
   applyCostCeiling();
+  // Historic Moments default narrator: every priced model + "no default"
+  const nsel = $("narr_model");
+  if (nsel && document.activeElement !== nsel) {
+    const cur = (d.narrator || {}).model || "";
+    const ids = [...new Set([...(MODELS.models || []), cur].filter(Boolean))];
+    nsel.innerHTML = `<option value="">— no default —</option>` + ids.map(m =>
+      `<option value="${esc(m)}"${m === cur ? " selected" : ""}>${esc(m)}</option>`
+    ).join("");
+    if (MODELS) MODELS.narrator_model = cur;    // estimate uses the live value
+  }
   const ax = d.aux || {};
   // rotation controls: never clobber an edit in progress (same rule as the
   // fallback fields above)
@@ -2727,6 +2777,15 @@ document.addEventListener("click", async e => {
     estimateCost();
     $("lim_msg").textContent = "saved ✓";
     setTimeout(() => { $("lim_msg").textContent = ""; }, 2500);
+  }
+  if (t.id === "narr_save") {
+    e.preventDefault();
+    await provOp({ op: "narrator", fallback: {},
+                   narrator: { model: $("narr_model").value || "" } });
+    if (MODELS) MODELS.narrator_model = $("narr_model").value || "";
+    estimateCost();                       // the default narrator moves the $
+    $("narr_msg").textContent = "saved ✓";
+    setTimeout(() => { $("narr_msg").textContent = ""; }, 2500);
   }
 });
 async function pollJobs() {

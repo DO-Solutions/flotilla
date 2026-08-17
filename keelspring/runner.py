@@ -220,11 +220,24 @@ def validate_config(cfg):
     had."""
     if not isinstance(cfg, dict):
         return ["config must be a JSON object"]
+    out = []
+    # historic moments (moments.py): both of these fail LOUDLY at submit
+    # rather than silently skipping at the end of an hours-long run
+    ser = cfg.get("series") if isinstance(cfg.get("series"), dict) else {}
+    tt = cfg.get("tournament") if isinstance(cfg.get("tournament"), dict) else {}
+    if ser.get("historic_moments") and \
+            not str(ser.get("historic_moments_model") or "").strip():
+        out.append("series.historic_moments is on but historic_moments_model "
+                   "is empty — set it (the dashboard injects the Server tab's "
+                   "default narrator; a bare config must name one)")
+    if tt.get("historic_moments") and not ser.get("historic_moments"):
+        out.append("tournament.historic_moments synthesizes from the "
+                   "per-series stories, so it requires "
+                   "series.historic_moments=true as well")
     unknown = sorted(set(cfg) - CONFIG_TOP_KEYS)
     if not unknown:
-        return []
+        return out
     schema_sections = set(SCHEMA or {})
-    out = []
     for k in unknown:
         # the trap that actually bit: a real SCHEMA section name (pacing, world,
         # economy, combat) used as an envelope section. Say exactly where it goes.
@@ -629,13 +642,64 @@ def run_series(named_bots, seed, scenario, ser, outdir, label="series", prov=Non
             sim_feedback[name] = {"feedback": fb.get("feedback", ""),
                                   "err": fb.get("err")}
             _emit({"sim_feedback": name, "err": fb.get("err")})
+    doc = {"games": [dict(game=r["game"], seed=r["seed"],
+                          file=os.path.basename(r["file"]),
+                          winner=r["winner"]) for r in games],
+           "memos": final_memos,
+           "sim_feedback": sim_feedback}
+    if ser.get("historic_moments"):
+        doc["historic_moments"] = _series_moments(named_bots, games, ser)
     with open(os.path.join(outdir, "series.json"), "w") as fh:
-        json.dump({"games": [dict(game=r["game"], seed=r["seed"],
-                                  file=os.path.basename(r["file"]),
-                                  winner=r["winner"]) for r in games],
-                   "memos": final_memos,
-                   "sim_feedback": sim_feedback}, fh, indent=1)
+        json.dump(doc, fh, indent=1)
     return games
+
+
+def _series_moments(named_bots, games, ser):
+    """Narrate a finished series (keelspring/moments.py). Reads the games
+    back off disk — narration is post-hoc by design, and it must NEVER take
+    down a finished run: any failure is recorded in the output, not raised."""
+    from . import moments
+    try:
+        replays = []
+        for r in games:
+            with open(r["file"]) as fh:
+                replays.append(json.load(fh))
+        players = [(n, fid) for fid, (n, b) in enumerate(named_bots)
+                   if isinstance(b, LLMAdmiral)]
+        return moments.narrate_series(
+            replays, players,
+            str(ser.get("historic_moments_model") or "").strip(),
+            ser.get("historic_moments_timeout_s", 300),
+            int(ser.get("historic_moments_chars", 2500)), emit=_emit)
+    except Exception as e:
+        return {"_meta": {"err": f"{type(e).__name__}: {e}"}}
+
+
+def _tournament_moments(outdir, matchups, standings, champion, cfg):
+    """The bracket-wide pass: synthesize each participant's tournament arc
+    from the per-series stories already on disk (validate_config guarantees
+    series.historic_moments was on). Same never-raise posture."""
+    from . import moments
+    ser = {**section_defaults("series"), **(cfg.get("series") or {})}
+    sm = []
+    for m in matchups:
+        try:
+            with open(os.path.join(outdir, m["dir"], "series.json")) as fh:
+                sj = json.load(fh)
+        except (OSError, ValueError):
+            continue
+        if sj.get("historic_moments"):
+            sm.append({"dir": m["dir"], "players": m["players"],
+                       "winner": m.get("winner"),
+                       "moments": sj["historic_moments"]})
+    try:
+        return moments.narrate_tournament(
+            sm, standings, champion,
+            str(ser.get("historic_moments_model") or "").strip(),
+            ser.get("historic_moments_timeout_s", 300),
+            int(ser.get("historic_moments_chars", 2500)), emit=_emit)
+    except Exception as e:
+        return {"_meta": {"err": f"{type(e).__name__}: {e}"}}
 
 
 def matchup_winner(rows, names):
@@ -650,7 +714,10 @@ def run_tournament(cfg, adm, scenario, outdir, prov=None, resume_ck=None):
                     "games": t["games_per_match"],
                     **{k: v for k, v in cfg.get("series", {}).items()
                        if k in ("vary_seeds", "debrief_timeout_s",
-                                "memo_history", "debrief_full_info")}}
+                                "memo_history", "debrief_full_info",
+                                "historic_moments", "historic_moments_model",
+                                "historic_moments_timeout_s",
+                                "historic_moments_chars")}}
     ser_defaults["memos"] = t["memo_policy"] != "none"
     # default: a matchup stops once it's mathematically decided; "full_series"
     # plays every game out regardless
@@ -1075,6 +1142,9 @@ def run_tournament(cfg, adm, scenario, outdir, prov=None, resume_ck=None):
           "champion": champion, "schedule": schedule_meta,
           "memos_final": {n: bots[n].notes for n in names
                           if isinstance(bots[n], LLMAdmiral) and bots[n].notes}}
+    if t.get("historic_moments"):
+        tj["historic_moments"] = _tournament_moments(
+            outdir, matchups, standings, champion, cfg)
     with open(os.path.join(outdir, "tournament.json"), "w") as fh:
         json.dump(tj, fh, indent=1)
     print(json.dumps({"tournament_done": True, "champion": champion,

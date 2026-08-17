@@ -179,6 +179,10 @@ def _keystore():
                                "timeout_streak_pipelined": 5,
                                "error_streak": 2, "canary_minutes": 10})
     st.setdefault("limits", {"max_series_cost": 0})   # 0 = no ceiling
+    # the site's default narrator for Historic Moments — injected into a
+    # submitted config when series.historic_moments is on and the config
+    # names no model itself ("" = no default: such a submit is refused loud)
+    st.setdefault("narrator", {"model": ""})
     if not any(p.get("id") == "digitalocean" for p in st["providers"]):
         st["providers"].insert(0, {
             "id": "digitalocean", "label": "DigitalOcean GenAI",
@@ -220,6 +224,14 @@ def _cfg_models(cfg):
             parts = spec.split(":")
             if len(parts) >= 2 and parts[1]:
                 out.add(parts[1])
+    # the Historic Moments narrator is a model the job CALLS even though
+    # nobody plays it — leave it out and the aux worker's least-privilege
+    # provider scoping strips exactly the key narration needs
+    ser = cfg.get("series")
+    if isinstance(ser, dict) and ser.get("historic_moments"):
+        m = str(ser.get("historic_moments_model") or "").strip()
+        if m:
+            out.add(m)
     return out
 
 
@@ -248,6 +260,36 @@ def _cal_tokens(model, think):
     tout = m.get(key) or d.get(key) or \
         (_EST_TOUT_THINK if think else _EST_TOUT_FLAT)
     return tin, tout
+
+
+# Historic Moments narrator profile: one call reads a whole series' material
+# (journal excerpts + memos + the anchor list, capped at 30k chars in
+# keelspring/moments.py) — nothing like a decision window, so it gets its own
+# calibration key. High-side fallbacks until scripts/calibrate_costs.py has
+# real narrations to measure.
+_NARR_TIN, _NARR_TOUT = 12000, 1600
+
+
+def _narr_tokens():
+    n = _CALIBRATION.get("narrator") or {}
+    return n.get("tin") or _NARR_TIN, n.get("tout") or _NARR_TOUT
+
+
+def _narr_call_cost(cfg):
+    """$ per narrator call for this config, 0.0 when narration is off or the
+    model is unpriced. The model falls back to the Server-tab default exactly
+    like submit-time injection does."""
+    import llm as _llm
+    ser = cfg.get("series") if isinstance(cfg.get("series"), dict) else {}
+    if not ser.get("historic_moments"):
+        return 0.0
+    m = str(ser.get("historic_moments_model") or "").strip() \
+        or str(_keystore().get("narrator", {}).get("model", "") or "")
+    pr = _llm.PRICES.get(m)
+    if not pr:
+        return 0.0
+    tin, tout = _narr_tokens()
+    return (tin * pr[0] + tout * pr[1]) / 1e6
 
 
 def _cfg_players(cfg):
@@ -309,9 +351,18 @@ def _estimate_cost(cfg):
             matchups = int(t.get("rounds", 1)) * max(1, n // ppm)
         avg = sum(percosts) / len(percosts)
         cost = avg * ppm * matchups * gpm
+        # Historic Moments: one narrator call per player per SERIES, plus one
+        # per participant for the bracket-wide arc when the tournament switch
+        # is on — this is what makes narration count against lim_cost
+        narr = _narr_call_cost(cfg)
+        if narr:
+            cost += narr * ppm * matchups
+            if t.get("historic_moments"):
+                cost += narr * n
     elif mode == "series":
         ser = config_schema.section_resolve("series", cfg.get("series"))
         cost = sum(percosts) * int(ser.get("games", 3))
+        cost += _narr_call_cost(cfg) * len(percosts)
     else:
         cost = sum(percosts)
     return math.ceil(cost * 100) / 100
@@ -417,6 +468,11 @@ def _providers_op(d):
                         0.0, float(lim["max_series_cost"]))
                 except (TypeError, ValueError):
                     pass
+        elif op == "narrator":
+            nr = d.get("narrator") or {}
+            if "model" in nr:
+                st.setdefault("narrator", {})["model"] = \
+                    str(nr["model"] or "")[:80]
         else:
             return 400, {"error": f"unknown op {op!r}"}
         for i2, p in enumerate(st["providers"]):
@@ -879,6 +935,17 @@ def submit_run(cfg):
     mode = cfg.get("mode", "match")
     if mode not in ("match", "series", "tournament"):
         raise ValueError(f"mode must be match|series|tournament, got {mode!r}")
+    # server-default narrator: a dashboard submit leaves the model empty and
+    # takes the Server tab's choice. Injection runs BEFORE validation, so the
+    # loud "no narrator model" complaint fires only when NEITHER place names
+    # one — and the injected model then rides the config into the worker's
+    # provider scoping and the run's own record.
+    ser_cfg = cfg.get("series")
+    if isinstance(ser_cfg, dict) and ser_cfg.get("historic_moments") and \
+            not str(ser_cfg.get("historic_moments_model") or "").strip():
+        _nm = str(_keystore().get("narrator", {}).get("model", "") or "")
+        if _nm:
+            ser_cfg["historic_moments_model"] = _nm
     # unknown top-level sections are silently ignored downstream, so catch them
     # HERE — before a droplet is provisioned and hours of games run under a
     # configuration nobody asked for (see run_config.validate_config)
@@ -2635,7 +2702,9 @@ class H(BaseHTTPRequestHandler):
                                                in _llm.PRICES.items()},
                                     "calibration": _CALIBRATION,
                                     "max_series_cost": _keystore().get(
-                                        "limits", {}).get("max_series_cost", 0)})
+                                        "limits", {}).get("max_series_cost", 0),
+                                    "narrator_model": _keystore().get(
+                                        "narrator", {}).get("model", "")})
         if path == "/api/prompts":
             return self._send(200, _load_prompts())
         if path == "/api/presets":
@@ -3878,6 +3947,8 @@ class H(BaseHTTPRequestHandler):
                 return self._send(200, {"providers": masked,
                                         "fallback": st["fallback"],
                                         "limits": st.get("limits", {}),
+                                        "narrator": st.get(
+                                            "narrator", {"model": ""}),
                                         "aux": {"configured": bool(ax),
                                                 "region": ax.get("region"),
                                                 "size": ax.get("size"),

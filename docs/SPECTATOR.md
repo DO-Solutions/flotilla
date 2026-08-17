@@ -224,3 +224,61 @@ silence.
 table, and the window semantics (forward-only, fog-filtered per event,
 coalesced) — `audioBeats` returns the fired groups precisely so all of it is
 testable without a speaker.
+
+## Historic Moments
+
+A **narrator model** — independent of who played — writes each LLM admiral's
+story through a series, and separately across a whole tournament: key
+decisions, turning points, and where the admiral's own words show it
+surprised, frustrated, triumphant or resigned. Lives in
+`keelspring/moments.py`, invoked from `run_series`/`run_tournament` as a
+sibling of the debrief and `sim_feedback` passes.
+
+### The anchor rule
+
+Every beat must cite `{game, tick}` copied exactly from the anchor list the
+narrator was shown (the big-beat event record); tournament beats cite
+`{matchup, game, tick}` drawn from the already-validated series beats. A beat
+that cites any other moment is **dropped mechanically** before it renders,
+and the drop is counted (`dropped_beats`). The payoff runs both ways: no
+hallucinated drama survives, and every surviving beat renders as a **link
+into the replay at that moment** (the viewer's `?t=` deep link) — the
+jump-to-the-key-moment tool for cutting video.
+
+### Grounding
+
+A player's narration material is its **own** campaign journal excerpts, its
+memos, parley it was party to, and the public event record. A rival's
+thoughts never enter. The emotional read comes from the admiral's own words
+or is omitted — the prompt forbids inferring feelings from a scoreboard.
+
+### Config + cost
+
+| knob | where | default |
+|---|---|---|
+| `series.historic_moments` | per-run config | **off** |
+| `series.historic_moments_model` | config, else the **Server tab** default (injected at submit) | `""` |
+| `series.historic_moments_timeout_s` / `_chars` | config | 300 / 2500 |
+| `tournament.historic_moments` | per-run config | **off** — requires the series switch (the finale synthesizes from the series stories) |
+
+Validation is loud at the boundary: narration enabled with no model anywhere,
+or the tournament switch without the series one, is refused at submit — not
+skipped silently at the end of an hours-long run.
+
+**Cost is first-class:** narration calls (players × series, + one per
+participant for the bracket arc) ride the pre-flight estimate under a
+dedicated `narrator` calibration profile, count against the Server-tab cost
+ceiling (`lim_cost`), and land in the aux worker's least-privilege provider
+scoping — a narrator nobody plays still ships its provider key.
+
+### Rendering
+
+`dash/tournament.html`: the tournament arcs render in a 📜 card under the
+standings; each completed matchup card gains a REVEAL-gated 📜 story chip
+that lazily fetches its `series.json`. **Everything is behind the spoiler
+shield — a story reveals the outcome by construction.**
+
+`tests/test_moments.py` proves the anchor rule, the material fog, the
+validation caps, both narrate passes over a stubbed transport, the config
+refusals, the estimate math, the provider scoping, the keystore round-trip,
+and an end-to-end scripted series writing the section.
