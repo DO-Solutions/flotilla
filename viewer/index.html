@@ -3819,9 +3819,14 @@ function draw(fr, prev, alpha) {
     const sm = S.smooth[s[0]];
     if (sm) {                                        // wake meets the rendered hull
       const lp = pts[pts.length - 1];
-      if (!lp || (lp[0] - sm.x) ** 2 + (lp[1] - sm.y) ** 2 > .25) {
-        pts.push([sm.x, sm.y]);
-      }
+      const d2 = lp ? (lp[0] - sm.x) ** 2 + (lp[1] - sm.y) ** 2 : Infinity;
+      // >60px from the ship's true position = a STALE smooth from before a
+      // seek jump (the ship pass, which runs after this, hasn't re-snapped
+      // it yet — same 3600 threshold as its own snap guard). Bridging that
+      // gap drew a straight wake from every starting ship back to its
+      // harbor on the first frame after a jump — a screenshot classic.
+      if (lp && d2 > 3600) { /* skip the stale point */ }
+      else if (!lp || d2 > .25) pts.push([sm.x, sm.y]);
     }
     if (pts.length < 2) continue;
     // Fade ALONG THE PATH, not along a single straight gradient: a ship
