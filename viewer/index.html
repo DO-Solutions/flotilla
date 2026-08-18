@@ -636,6 +636,13 @@ const SKIN_DEFAULT = {
         flash:     { enabled: true,  color: "", ttlS: 1.2 },
         edgeArrow: { enabled: true,  color: "", size: 10 } },
   minimap: { bg: "#0a1b33", frame: "#24304d", cursor: "#e6edf7" },
+  // flagship nameplates (Design Handoff Nº2): a card-backed chip with a
+  // fleet-color tab — accessibility chrome, since an 8-fleet palette can't
+  // be fully colorblind-safe and names close that gap. Numbers + colors
+  // only (the generic token path would stringify a boolean): `broadcast` 1
+  // forces plates on in ?broadcast=1 even with the names toggle off, 0
+  // follows the toggle everywhere; back "" derives from ui.card.
+  nameplate: { size: 10, pad: 3, back: "", broadcast: 1 },
   // the event feed (docs/SPECTATOR.md). Appearance + density only: WHAT is
   // worth saying lives in the shared vocabulary, not in a skin.
   feed: { enabled: true,
@@ -692,7 +699,17 @@ const SKINS = {
     nodes: { fish: "#4d716e8c", wreck: "#84632c80", label: "#9db5b2ab" },
     ships: { hullInk: "#000f0f", detail: "#e5eceb", laden: "#deab4f",
              ghost: "#6f908c66" },
-    fx: { fog: "#000a0a99" },
+    // fx pass from Design Handoff Nº2 (2026-08-18): flagSunk gets air+size,
+    // region wash tuned down, parley line ON in brand accent (diplomacy reads
+    // neutral, not either fleet's color), edge arrows = wayfinding chrome.
+    // sink stays fleet-derived (their call: victim's color dissolving IS the
+    // de-res read); signal off + flash stock. v1 deliberately — retuned when
+    // The Lab's ship sprites land.
+    fx: { fog: "#000a0a99",
+          flagSunk: { ttlS: 8, scale: 1.25 },
+          region: { ttlS: 5, alpha: 0.16 },
+          parley: { enabled: true, color: "#1aafbf", width: 1.5, ttlS: 3 },
+          edgeArrow: { color: "#1aafbf" } },
     minimap: { bg: "#000f0f", frame: "#325553", cursor: "#30cbd9" },
   },
 };
@@ -2135,7 +2152,8 @@ double-click resets.</li>
 <li><b>📺 broadcast</b> — add <code>&amp;broadcast=1</code> to this page's URL
 for a capture-ready feed: map only, full-bleed 16:9, no header, scrubber or
 panels baked into the recording (and no scrubber spoiling how much match is
-left). Keyboard transport still works, so you can pause and seek off-camera.</li>
+left). Keyboard transport works off-camera: <b>space</b> play/pause,
+<b>←/→</b> seek 1% (<b>shift</b> for 5%), <b>↑/↓</b> speed.</li>
 <li><b>reading the shapes</b> — custom hulls are drawn FROM their stats:
 length = speed, beam = hold, side gun mounts at 2+ guns (an odd count adds a
 bow chaser), a doubled bright outline = armor 3+, a mast dot = lookout 2+.
@@ -3718,13 +3736,30 @@ function draw(fr, prev, alpha) {
         ctx.strokeStyle = withA(SKIN.ships.detail, "33");
         ctx.strokeRect(x - 7, y - 7, 14, 14);
       }
-      if (S.showNames) {
-        ctx.font = "bold 10px sans-serif";
-        ctx.lineWidth = 3; ctx.strokeStyle = withA(SKIN.ships.hullInk, "cc");
-        ctx.strokeText(`⚓ ${f.name}`, x + 11, y - 10);
+      // nameplates: chip treatment (broadcast-grade, Design Handoff Nº2) —
+      // ink text on a card-backed plate with a fleet-color tab, so the
+      // name↔color pairing survives palettes that can't be colorblind-safe.
+      // Broadcast forces them on (SKIN.nameplate.broadcast) even with the
+      // names toggle off; everywhere else they follow the toggle.
+      if (S.showNames || (BROADCAST && SKIN.nameplate.broadcast)) {
+        const np = SKIN.nameplate;
+        const label = "⚓ " + f.name;   // canvas-only (fillText below) — never HTML
+        ctx.font = `bold ${np.size}px ${SKIN.ui.font || "sans-serif"}`;
+        const tw = ctx.measureText(label).width;
+        const px = x + 11, py = y - 10, p = np.pad;
+        ctx.fillStyle = np.back || withA(SKIN.ui.card, "cc");
+        ctx.beginPath();
+        if (ctx.roundRect)
+          ctx.roundRect(px - p - 1, py - np.size - p + 1,
+                        tw + 2 * p + 4, np.size + 2 * p, 3);
+        else
+          ctx.rect(px - p - 1, py - np.size - p + 1,
+                   tw + 2 * p + 4, np.size + 2 * p);
+        ctx.fill();
         ctx.fillStyle = COLORS[f.id % COLORS.length];
-        ctx.fillText(`⚓ ${f.name}`, x + 11, y - 10);
-        ctx.lineWidth = 1;
+        ctx.fillRect(px - p - 1, py - np.size - p + 1, 2.5, np.size + 2 * p);
+        ctx.fillStyle = SKIN.ui.ink;
+        ctx.fillText(label, px + 3, py);
       }
     }
   }
@@ -4338,6 +4373,37 @@ document.addEventListener("keydown", e => {
   if (!document.body.classList.contains("fsmode")) return;
   if (e.key === "p" || e.key === "P") toggleOverlay("panel");
   if (e.key === "b" || e.key === "B") toggleOverlay("bar");
+});
+// ---- keyboard transport, the standard video idiom (Design Handoff Nº2
+// caught the gap: the help page promised it, no handler existed). Space
+// play/pause · ←/→ seek 1% of the game (Shift: 5%) · ↑/↓ step the speed
+// ladder (numeric rungs only — ⏱ live pace stays a deliberate click; any
+// arrow while on it steps back into the ladder). Active whenever a replay
+// is aboard, including ?broadcast=1, so an OBS operator drives off-camera;
+// typing targets (inputs/selects/textareas) always keep their keys.
+document.addEventListener("keydown", e => {
+  const t = e.target;
+  if (t && (t.tagName === "INPUT" || t.tagName === "SELECT" ||
+            t.tagName === "TEXTAREA" || t.isContentEditable)) return;
+  if (e.metaKey || e.ctrlKey || e.altKey) return;
+  if (!S.rp || !S.rp.frames.length) return;
+  if (e.key === " ") {
+    e.preventDefault();
+    setPlay(!S.playing);
+  } else if (e.key === "ArrowLeft" || e.key === "ArrowRight") {
+    e.preventDefault();
+    const hop = Math.max(1, Math.round(S.rp.frames.length *
+                                       (e.shiftKey ? 0.05 : 0.01)));
+    seek(S.fi + (e.key === "ArrowRight" ? hop : -hop));
+  } else if (e.key === "ArrowUp" || e.key === "ArrowDown") {
+    e.preventDefault();
+    const sel = $("speed");
+    const opts = [...sel.options].map(o => o.value).filter(v => v !== "real");
+    let i = opts.indexOf(sel.value);
+    if (i < 0) i = opts.indexOf("1");    // on ⏱ live pace: re-enter at 1×
+    else i += (e.key === "ArrowUp" ? 1 : -1);
+    sel.value = opts[Math.max(0, Math.min(opts.length - 1, i))];
+  }
 });
 // edge summons for auto mode: the right/bottom 36px of the screen wake the
 // overlays; they stay while the pointer is on them
@@ -5208,12 +5274,20 @@ const BROADCAST = document.documentElement.classList.contains("broadcast");
   } catch (e) { spec = null; }
   if (spec) applySkin(spec);
   else if (imported) fetchImportedSkin(imported);
-  else if (siteDefault && location.protocol.startsWith("http")) {
-    fetch("api/site-skin").then(r => r.ok ? r.json() : null).then(d => {
-      const n = d && d.name;
-      if (!n || !SKIN_NAME_RE.test(n)) return;
-      if (SKINS[n]) applySkin(SKINS[n]); else fetchImportedSkin(n);
-    }).catch(() => {});                 // bundles / file:// have no server
+  else if (siteDefault) {
+    // Compiled-in default is KRAKEN (operator call, 2026-08-18): paint it so
+    // bundles, file:// and public showcase mirrors — which have no server to
+    // ask — land on the brand look instead of stock, with no flash. A served
+    // install's own site-skin still overrides below; an explicit "flotilla"
+    // pick never reaches this branch and keeps stock.
+    applySkin(SKINS.kraken);
+    if (location.protocol.startsWith("http")) {
+      fetch("api/site-skin").then(r => r.ok ? r.json() : null).then(d => {
+        const n = d && d.name;
+        if (!n || !SKIN_NAME_RE.test(n) || n === "kraken") return;
+        if (SKINS[n]) applySkin(SKINS[n]); else fetchImportedSkin(n);
+      }).catch(() => {});               // showcase mirrors 404 here — kraken holds
+    }
   }
   const su = qs.get("skinurl");
   if (su && sameOriginPath(su)) {

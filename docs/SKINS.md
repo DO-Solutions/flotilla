@@ -63,6 +63,7 @@ but only hex gets those alphas).
 | `fx` | `sink` `flagSunk` `region` `parley` `signal` `flash` `edgeArrow` | on-map VFX, one nested object per effect — see `docs/SPECTATOR.md` for the per-effect keys and defaults |
 | `audio` | `enabled` `volume` `sink` `flagSunk` `region` `parley` `signal` `treaty` `treatyEnd` | event stingers, off and empty by default — clips are `data:audio` URIs, ~200 KB decoded each; see `docs/SPECTATOR.md` |
 | `minimap` | `bg` `frame` `cursor` | the overview map |
+| `nameplate` | `size` `pad` `back` `broadcast` | flagship name chips (ink text, card-backed, fleet-color tab). `back ""` derives from `ui.card`; `broadcast` `1` forces plates on in `?broadcast=1` even with the names toggle off (`0` = follow the toggle). Numbers + colors only — no booleans |
 
 ## Shapes & textures
 

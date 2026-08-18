@@ -111,7 +111,9 @@ else:
     # ---- initSkin's resolution chain, including the site-skin fallback ----
     # The fallback must be LAST: a branded install's viewer should match its
     # dashboard, but it may never override a shared ?skin= link or a viewer's
-    # own picker choice — including an explicit choice of stock.
+    # own picker choice — including an explicit choice of stock. Since
+    # 2026-08-18 the no-choice floor is KRAKEN (compiled in, so bundles and
+    # showcase mirrors with no server land branded, not stock).
     INIT_JS = extract(src, "initSkin") or ""
     if not INIT_JS:                              # extract() handles `function
         at = src.find("(function initSkin()")    # name(` / `const name` — this
@@ -143,8 +145,8 @@ function run(sc) {
     cases = [
         ({"saved": None, "server": "kraken"}, "kraken",
          "no choice anywhere -> the viewer adopts the server's site skin"),
-        ({"saved": None, "server": ""}, None,
-         "no site skin set -> the viewer stays stock"),
+        ({"saved": None, "server": ""}, "kraken",
+         "no site skin set -> the compiled-in default (kraken) holds"),
         ({"saved": "flotilla", "server": "kraken"}, None,
          "an EXPLICIT pick of stock is not overridden by the site skin"),
         ({"saved": "daylight", "server": "kraken"}, "daylight",
@@ -153,8 +155,8 @@ function run(sc) {
          "daylight", "a shared ?skin= link beats the site skin"),
         ({"saved": None, "server": "brandy"}, "imported:brandy",
          "a site skin naming an IMPORTED skin resolves through the server"),
-        ({"saved": None, "server": "../evil"}, None,
-         "a malformed site-skin name is refused, not fetched"),
+        ({"saved": None, "server": "../evil"}, "kraken",
+         "a malformed site-skin name is refused — the kraken default holds"),
     ]
     js = ("const INIT_SRC = " + json.dumps(INIT_JS) + ";\n" + CHAIN
           + "(async () => { const out = []; for (const sc of "
@@ -192,6 +194,22 @@ with open(os.path.join(sd, "listy.json"), "w") as fh:
     json.dump({"ui": ["not", "an", "object"]}, fh)
 ok(server._site_skin_ui("listy") == server.SKIN_UI_DEFAULT,
    "a ui block of the wrong TYPE is refused whole")
+
+# ---- Design Handoff Nº2 (2026-08-18): fx pass + nameplates + transport ----
+ok('nameplate: { size: 10, pad: 3, back: "", broadcast: 1 }' in src,
+   "SKIN_DEFAULT carries the nameplate token group (numbers + colors only — "
+   "a boolean would be stringified by the generic token path)")
+ok("BROADCAST && SKIN.nameplate.broadcast" in src,
+   "broadcast plate force-on reads the token, not a hardcode")
+ok('parley: { enabled: true, color: "#1aafbf", width: 1.5, ttlS: 3 }' in src,
+   "built-in kraken carries the fx pass (parley ON, brand accent)")
+ok('flagSunk: { ttlS: 8, scale: 1.25 }' in src,
+   "built-in kraken carries the flagSunk air+size values")
+ok('e.key === "ArrowLeft"' in src and "setPlay(!S.playing)" in src,
+   "the keyboard transport handler exists — the help page no longer promises "
+   "keys nobody wired")
+ok("applySkin(SKINS.kraken)" in src,
+   "the compiled-in kraken default is applied, not merely registered")
 
 print(f"FAILURES: {fails}")
 sys.exit(1 if fails else 0)
