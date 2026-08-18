@@ -210,6 +210,9 @@ ok('e.key === "ArrowLeft"' in src and "setPlay(!S.playing)" in src,
    "keys nobody wired")
 ok("applySkin(SKINS.kraken)" in src,
    "the compiled-in kraken default is applied, not merely registered")
+ok("skip the stale point" in src and "d2 > 3600" in src,
+   "the wake pass guards against a stale smooth position after a seek jump "
+   "(the phantom wake-to-harbor line in posed screenshots)")
 
 print(f"FAILURES: {fails}")
 sys.exit(1 if fails else 0)
