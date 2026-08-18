@@ -525,11 +525,34 @@ let STATSOPEN = false, STATS = null;
 const avg = (a) => a.length ? a.reduce((x, y) => x + y, 0) / a.length : null;
 const mmss = (t) => t == null ? "—"
   : `${Math.floor(t / 600)}:${String(Math.floor((t % 600) / 10)).padStart(2, "0")}`;
+function gamePace(rp) {
+  // Window pacing from a PIPELINED replay: every harvested decision records
+  // t (applied-at) and ot (ordered-at); lag in windows = (t-ot)/window.
+  // Exactly 1 = the admiral answered within its window and decided the very
+  // next boundary ("live"); more = it was catching up. Lockstep replays and
+  // the synchronous t=0 openers carry no ot and produce no rows.
+  const cfg = (rp.meta || {}).config || {};
+  const w = cfg.window || 1;
+  if (!cfg.pipeline_depth) return null;
+  const pace = {};                       // fid -> {n, live, behind, worst}
+  for (const d of rp.decisions || []) {
+    if (d.ot == null) continue;
+    const lagW = Math.round((d.t - d.ot) / w);
+    const p = pace[d.fleet] = pace[d.fleet] ||
+      { n: 0, live: 0, behind: 0, worst: 0 };
+    p.n++;
+    if (lagW <= 1) p.live++;
+    const b = Math.max(0, lagW - 1);
+    p.behind += b;
+    p.worst = Math.max(p.worst, b);
+  }
+  return pace;
+}
 async function buildStats() {
   const agg = {};
   const A = (n) => agg[n] = agg[n] ||
     { sw: 0, gw: 0, gp: 0, score: [], byGame: {}, fk: [], sunk: [],
-      lost: [], cost: [] };
+      lost: [], cost: [], pace: { n: 0, live: 0, behind: 0, worst: 0 } };
   const base = TNAME ? `tournaments/${encodeURIComponent(TNAME)}/` : "./";
   const jobs = [];
   for (const m of TJ.matchups || []) {
@@ -558,9 +581,17 @@ async function buildStats() {
       const u = d2.u || {};
       if (u.cost) cost[d2.fleet] = (cost[d2.fleet] || 0) + u.cost;
     }
+    const pace = gamePace(rp) || {};
     for (const [fid, nm] of Object.entries(names)) {
       const a = A(nm);
       a.gp++;
+      const p = pace[fid];
+      if (p) {
+        a.pace.n += p.n;
+        a.pace.live += p.live;
+        a.pace.behind += p.behind;
+        a.pace.worst = Math.max(a.pace.worst, p.worst);
+      }
       const sc = (g.scores || {})[nm];
       if (sc != null) {
         a.score.push(sc);
@@ -580,13 +611,22 @@ function renderStats() {
     .sort((a, b) => STATS[b].sw - STATS[a].sw || STATS[b].gw - STATS[a].gw);
   const gnums = [...new Set(names.flatMap(n =>
     Object.keys(STATS[n].byGame).map(Number)))].sort((a, b) => a - b);
+  // pacing columns exist only for pipelined cups (lockstep replays carry no ot)
+  const paced = names.some(n => STATS[n].pace.n > 0);
   let h = `<div class="card" style="max-width:none"><h3 style="color:var(--accent);` +
     `font-size:14px;margin-bottom:6px">Per-admiral tournament stats</h3>` +
     `<table><thead><tr><th>admiral</th><th>series won</th><th>games won</th>` +
     `<th>avg score</th><th>avg first kill</th><th>avg ships sunk</th>` +
-    `<th>avg ships lost</th><th>avg $/game</th></tr></thead><tbody>` +
+    `<th>avg ships lost</th><th>avg $/game</th>` +
+    (paced ? `<th title="share of replies that landed within their own decision ` +
+      `window — the rest arrived while the world sailed on">live windows</th>` +
+      `<th title="average windows of world-state the admiral was behind when ` +
+      `its orders applied (0 = always current); worst case in parentheses">` +
+      `avg behind</th>` : "") +
+    `</tr></thead><tbody>` +
     names.map(n => {
       const a = STATS[n];
+      const p = a.pace;
       return `<tr><td style="color:${playerColor(names, n)}">${esc(n)}</td>` +
         `<td>${a.sw}</td><td>${a.gw} / ${a.gp}</td>` +
         `<td>${avg(a.score) != null ? Math.round(avg(a.score)) : "—"}</td>` +
@@ -594,7 +634,12 @@ function renderStats() {
           ? ` <span class="warn" title="games with no kill at all are left out">` +
             `(${a.fk.length}g)</span>` : ""}</td>` +
         `<td>${avg(a.sunk).toFixed(1)}</td><td>${avg(a.lost).toFixed(1)}</td>` +
-        `<td>$${avg(a.cost).toFixed(2)}</td></tr>`;
+        `<td>$${avg(a.cost).toFixed(2)}</td>` +
+        (paced ? (p.n
+          ? `<td>${Math.round(100 * p.live / p.n)}%</td>` +
+            `<td>${(p.behind / p.n).toFixed(1)}w (max ${p.worst})</td>`
+          : `<td>—</td><td>—</td>`) : "") +
+        `</tr>`;
     }).join("") + `</tbody></table></div>`;
   h += `<div class="card" style="max-width:none"><h3 style="color:var(--accent);` +
     `font-size:14px;margin-bottom:6px">Average score by game number</h3>` +
