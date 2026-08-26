@@ -725,6 +725,10 @@ _i = _src.find("def _aux_resume")
 _blk = _src[_i:_i + 1200]
 ok('rec["last_seen"] = time.time()' in _blk,
    "_aux_resume re-arms the worker silence clock, not just the age cap")
+ok("checkpoint is on disk: job back to" in _src,
+   "the silence reap preserves a checkpointed job as PAUSED, never failed")
+ok("startup: failed but a checkpoint is on disk" in _src,
+   "startup reconciles stranded failed-with-checkpoint jobs back to paused")
 
 srv.shutdown()
 import shutil
