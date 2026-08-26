@@ -716,6 +716,16 @@ st, r = req("/api/run", {"mode": "match", "seed": 3, "executor": "auxiliary",
                          "bots": ["merchant", "corsair"], "name": "aux-cap"})
 ok(st == 400 and "capacity" in r["error"], "capacity gate refuses over-provision")
 
+# ---- resume must re-arm the silence clock (2026-08-26 regression) ----
+# _aux_resume re-armed only the age clock; a pause longer than
+# AUX_SILENT_DEAD_S then reaped the resumed job before its fresh worker's
+# first heartbeat. Pin the re-arm at source level next to the pause_by spend.
+_src = open(os.path.join(HERE, "server.py")).read()
+_i = _src.find("def _aux_resume")
+_blk = _src[_i:_i + 1200]
+ok('rec["last_seen"] = time.time()' in _blk,
+   "_aux_resume re-arms the worker silence clock, not just the age cap")
+
 srv.shutdown()
 import shutil
 shutil.rmtree(TMP, ignore_errors=True)
