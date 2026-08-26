@@ -1953,6 +1953,23 @@ def _restore_state():
         if isinstance(rows, list):
             with JOBS_LOCK:
                 JOBS.extend(rows)
+            # startup reconcile, same honesty rule as the runner's finally:
+            # a FAILED job whose checkpoint still lives in _work is not over
+            # — it's paused-with-error. Older fail paths (the aux silence
+            # reap before 2026-08-26) hard-failed such jobs, stranding them
+            # behind /api/resume's paused-only gate; flipping them here means
+            # a deploy heals any already-stranded bracket.
+            with JOBS_LOCK:
+                for _j in JOBS:
+                    if _j.get("state") != "failed":
+                        continue
+                    _wd = os.path.join(LIB, "_work", _j.get("id", ""))
+                    if any(os.path.isfile(os.path.join(_wd, n))
+                           for n in ("checkpoint.json", "checkpoint.json.gz")):
+                        _j["state"] = "paused"
+                        _j.setdefault("log", []).append(
+                            "⚠ startup: failed but a checkpoint is on disk "
+                            "— back to PAUSED (fix the cause and resume)")
     except Exception:
         pass
     try:
@@ -2506,6 +2523,31 @@ def _aux_watch(job, aux):
         if seen:
             quiet = time.time() - seen
             if quiet > AUX_SILENT_DEAD_S:
+                wd2 = os.path.join(LIB, "_work", job["id"])
+                if any(os.path.isfile(os.path.join(wd2, n))
+                       for n in ("checkpoint.json", "checkpoint.json.gz")):
+                    # a dead WORKER is not a dead RUN while its checkpoint
+                    # lives — same honesty rule as the local runner's
+                    # finally. Destroy the droplet but keep the AUX record
+                    # (bearer) and go back to PAUSED: /api/resume gates on
+                    # paused, and the old hard-fail stranded a resumable
+                    # 27-game bracket behind that gate (2026-08-26).
+                    with AUX_LOCK:
+                        rec2 = AUX.get(job["id"])
+                        did = rec2.pop("droplet_id", None) if rec2 else None
+                    if did:
+                        try:
+                            _do(aux, "DELETE", f"/droplets/{did}")
+                        except Exception:
+                            pass           # the tag reaper sweeps stragglers
+                    _persist_aux()
+                    job["state"] = "paused"
+                    job["log"].append(
+                        f"💀 auxiliary silent {int(quiet // 60)} min — worker "
+                        "reaped, but its checkpoint is on disk: job back to "
+                        "PAUSED (fix the cause and resume)")
+                    _persist_jobs()
+                    break
                 job["state"] = "failed"
                 job["error"] = (f"auxiliary went silent for "
                                 f"{int(quiet // 60)} min (no callback, not even "
