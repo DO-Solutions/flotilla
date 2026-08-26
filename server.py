@@ -2275,6 +2275,13 @@ def _aux_resume(job, aux):
         rec = AUX.get(jid)
         bearer = rec["bearer"]
         rec["pause_by"] = None             # this pause is spent
+        # re-arm the SILENCE clock along with the age clock below: last_seen
+        # still holds the pre-pause stamp, so a pause longer than
+        # AUX_SILENT_DEAD_S would reap the freshly-resumed job before its
+        # new worker's first heartbeat (bit august-bounty-cup 2026-08-26:
+        # "silent for 1913 min" one tick after a successful resume). Same
+        # rationale as the restart path's re-arm above.
+        rec["last_seen"] = time.time()
     size = job.get("aux_size") or aux.get("size", "s-1vcpu-2gb")
     job["state"] = "running"
     job["started"] = time.time()           # the age cap re-arms from the thaw
