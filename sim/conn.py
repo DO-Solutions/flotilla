@@ -80,7 +80,7 @@ SENSORS = {
 
 ACTIONS = {
     "goto": (2, "sail toward (x, y)"),
-    "gather": (0, "gather if ON a stocked island (else holds)"),
+    "gather": (0, "gather if standing EXACTLY on a stocked island (dist 0) — anywhere else it just holds, and ships[].doing says so"),
     "attack": (0, "close on the nearest visible enemy SHIP (guns fire automatically in range)"),
     "assault": (0, "close on the nearest hostile FLAGSHIP and batter it — the only way to eliminate a fleet. Flag damage needs adjacency (cheb<=1); the flag's own guns reach 2 cells, so expect to trade hulls. Send mass."),
     "flee": (0, "run directly away from the nearest visible enemy"),

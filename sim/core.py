@@ -102,7 +102,7 @@ class Ship:
                  "program", "pmem",
                  "trip_start", "trip_gathered", "trip_hits", "trip_far",
                  "refit_to", "refit_at", "repair_at", "nav_prev", "moved_t",
-                 "gained_t", "assault_flag", "courier")
+                 "gained_t", "assault_flag", "courier", "stuck_warned")
 
     def __init__(self, sid, fleet, squad, x, y, preset, stats=None):
         self.id = sid
@@ -140,6 +140,7 @@ class Ship:
         self.nav_prev = None                # last cell (islands: no-backtrack steering)
         self.moved_t = 0                    # tick the ship last changed cell
         self.gained_t = 0                   # tick cargo last increased
+        self.stuck_warned = False           # one stuck-warning per episode
 
     @property
     def hold_cap(self):
@@ -991,9 +992,36 @@ class Engine(SimBase):
         for s in self.ships.values():
             if s.fleet != fleet.id:
                 continue
-            own.append(dict(id=s.id, squad=s.squad, preset=s.preset, x=s.x, y=s.y,
-                            hull_pct=(s.hull * 100) // s.hull_max, cargo=s.cargo,
-                            role=s.orders["role"]))
+            # perfect information about YOUR OWN ships (2026-08-28): the
+            # spectator viewer always showed each ship's live intent while
+            # the commanding admiral saw only position/hull/cargo — so a
+            # ship quietly failing its task (off-node gather, pinned against
+            # land) was invisible until the score said so. `doing` is the
+            # same intent string the replay shows; `idle_s` mirrors the
+            # self.stuck sensor (0 inside the harbor circle, where sitting
+            # still is normal).
+            hd2 = cheb(s.x, s.y, fleet.hx, fleet.hy)
+            idle = 0 if hd2 <= self.hr else self.t - s.moved_t
+            row = dict(id=s.id, squad=s.squad, preset=s.preset, x=s.x, y=s.y,
+                       hull_pct=(s.hull * 100) // s.hull_max, cargo=s.cargo,
+                       role=s.orders["role"], doing=s.intent)
+            if idle > 0:
+                row["idle_s"] = round(idle / 10, 1)
+            own.append(row)
+            # a ship that has neither moved nor gained cargo for 30s at sea
+            # is failing its task — tell the admiral ONCE per episode, with
+            # the task text, instead of letting it theorize for 4000 ticks
+            if (idle > 300 and self.t - s.gained_t > 300
+                    and not s.stuck_warned):
+                s.stuck_warned = True
+                fleet.warnings.append(
+                    f"⚠ {s.preset} #{s.id} ({s.squad}) has not moved for "
+                    f"{idle // 10}s at ({s.x},{s.y}) — current task: "
+                    f"'{s.intent}'. It will sit there until its orders "
+                    "change (programs can self-check with "
+                    "`when self.stuck > 150: …`; new squad programs reach "
+                    "ships at sea only by dispatch cutter, recall signal, "
+                    "or when they come home).")
         enemies = []
         if self.cfg["contact_ttl"] > 0:
             # the accumulated plot: live sightings (age_s 0) + stale contacts at
@@ -2027,7 +2055,26 @@ class Engine(SimBase):
             self._intent(ship, f"program L{ln}: hold")
             return None
         if verb == "gather":
-            self._intent(ship, f"program L{ln}: gather")
+            # gather is a no-op unless the ship sits EXACTLY on a stocked
+            # island (loading needs dist 0). That used to read as a bare
+            # "gather" in the intent log while the ship silently held —
+            # an admiral watched trawlers "gather" 5 cells off a node for
+            # 4000 ticks and concluded helm.goto was broken (bounty g5,
+            # 2026-08-28). Say what is actually happening.
+            n2 = next((nn for nn in self.nodes.values()
+                       if nn.x == ship.x and nn.y == ship.y), None)
+            if n2 is None:
+                self._intent(ship, f"program L{ln}: gather — NOT on an "
+                                   "island (loading needs dist 0), holding")
+            elif n2.remaining <= 0:
+                self._intent(ship, f"program L{ln}: gather — {n2.name} is "
+                                   "fished dry, holding")
+            elif ship.cargo >= ship.hold_cap:
+                self._intent(ship, f"program L{ln}: gather — hold already "
+                                   "full, not loading")
+            else:
+                self._intent(ship, f"program L{ln}: gather — loading at "
+                                   f"{n2.name}")
             return None                     # stationary-on-node gathering kicks in
         if verb == "attack":
             if en is not None:
@@ -2397,6 +2444,7 @@ class Engine(SimBase):
                 ship.x = max(0, min(self.W - 1, ship.x + sign(tx - ship.x)))
                 ship.y = max(0, min(self.H - 1, ship.y + sign(ty - ship.y)))
                 ship.moved_t = self.t
+                ship.stuck_warned = False
                 continue
             nx, ny = self._step_cell(ship.x, ship.y, tx, ty, ship.nav_prev)
             if (nx, ny) == (ship.x, ship.y):
@@ -2404,6 +2452,7 @@ class Engine(SimBase):
             ship.nav_prev = (ship.x, ship.y)
             ship.x, ship.y = nx, ny
             ship.moved_t = self.t
+            ship.stuck_warned = False
 
     # ---------- tick ----------
     def tick(self):
