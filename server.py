@@ -1011,6 +1011,16 @@ def submit_run(cfg):
                aux_size=str(cfg.pop("aux_size", "") or "") or None)
     if job["public"] and _showcase_cfg() is None:
         job["public"] = False              # not configured: quietly private
+    # unpriced models are a silent path: every cost field (and the pre-flight
+    # estimate the cost ceiling gates on) reads $0.00 without a word. Say so
+    # where the operator will look. (FLOTILLA_PRICES or keelspring/llm.py
+    # PRICES is the fix.)
+    import llm as _llm
+    unpriced = sorted(m for m in _cfg_models(cfg) if m not in _llm.PRICES)
+    if unpriced:
+        job["log"].append(
+            "⚠ no price on file for " + ", ".join(unpriced) +
+            " — cost fields and the pre-flight estimate will read $0")
     _showcase_job_start(job)
     # an in-flight run is VISIBLE from launch: stub the library entry so the
     # Series/Tournaments views list it as ⏳ live before any game lands

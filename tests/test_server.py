@@ -821,6 +821,25 @@ if r.get("job"):
     req("/api/cancel", {"id": r["job"]["id"]})
 server._providers_op({"op": "limits", "limits": {"max_series_cost": 0}})
 
+# an unpriced model must SAY so in the job log at submit — every cost field
+# (and the ceiling's pre-flight estimate) silently reads $0 otherwise
+st, r = req("/api/run", {"mode": "series", "seed": 9,
+                         "bots": ["llm:not-a-priced-model:X",
+                                  "llm:kimi-k3:K"],
+                         "series": {"games": 2}, "name": "unpriced-warn"})
+ok(st == 202, "unpriced-model run still submits")
+# the submit response blanks `log` by design — read it back off /api/runs
+_st2, _rows = req("/api/runs", None)
+_row = next((j for j in _rows.get("jobs", [])
+             if j.get("id") == r.get("job", {}).get("id")), {})
+_log = " ".join(str(x) for x in _row.get("log", []))
+ok("no price on file" in _log and "not-a-priced-model" in _log,
+   f"submit log flags the unpriced model ({_log[:80]})")
+ok("kimi-k3" not in _log.replace("not-a-priced-model", ""),
+   "priced models are not flagged")
+if r.get("job"):
+    req("/api/cancel", {"id": r["job"]["id"]})
+
 # --- worker-rotation settings: their own endpoint (no DO token re-post),
 # validated, persisted to rotation.json ---
 st, r = req("/api/aux-rotation", {"rotate_enabled": False, "max_age_h": 6})
