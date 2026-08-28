@@ -947,10 +947,12 @@ function renderSeriesTable() {
       (liveJob ? `<a class="btn btn-watch" target="_blank" ` +
         `style="background:#c22432" href="player.html?live=${liveJob.id}"` +
         ` title="jump into the game being played RIGHT NOW">🔴 Live</a><br>` : "") +
-      `<a class="btn ${liveJob ? "btn-dl" : "btn-watch"}" target="_blank" ` +
+      // no replay button before a single game has finished — it opened an
+      // empty player and read as "the series is broken" (2026-08-28)
+      (s.games.length ? `<a class="btn ${liveJob ? "btn-dl" : "btn-watch"}" target="_blank" ` +
       `href="player.html?series=${encodeURIComponent(s.name)}` +
       `&title=${encodeURIComponent(displayName(s))}"` +
-      ` title="replay the finished games from game 1">▶ Watch</a></td>` +
+      ` title="replay the finished games from game 1">▶ Watch</a>` : "") + `</td>` +
       `<td><span class="titlecell"><span class="chev${open ? " open" : ""}">▸</span>` +
       (isT ? `<span class="nmtext">${esc(displayName(s))}</span>`
            : `<span class="nmtext" data-series="${esc(s.name)}" ` +

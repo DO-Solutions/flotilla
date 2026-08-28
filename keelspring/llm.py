@@ -309,10 +309,24 @@ class LLMAdmiral:
             # rung it left is still healthy, so we loop straight back to it
             # (safe: resolve() issues at most one canary per canary window).
             pidx, prov, mapped, canary = lad.resolve(self.model_id)
-            payload["model"] = mapped
+            # per-attempt copy: dialect adjustments must not leak into the
+            # next attempt, which may resolve to a different provider
+            body = dict(payload)
+            body["model"] = mapped
+            if "api.z.ai" in prov.get("base_url", ""):
+                # z.ai speaks the OpenAI reasoning dialect, not vLLM's
+                # chat_template_kwargs (silently ignored there). Its GLM
+                # serving can never fully disable thinking (error 1210:
+                # "always engages in thinking; use low, high, or max") but
+                # honors reasoning_effort — "low" is the closest state to
+                # think-off (measured 2026-08-28: ~4s / ~100 reasoning chars
+                # vs ~35s / ~3k chars at the default effort).
+                body.pop("chat_template_kwargs", None)
+                if not self.think:
+                    body["reasoning_effort"] = "low"
             req = urllib.request.Request(
                 prov["base_url"] + "/chat/completions",
-                data=json.dumps(payload).encode(),
+                data=json.dumps(body).encode(),
                 headers={"Authorization": f"Bearer {prov['key']}",
                          "Content-Type": "application/json"})
             try:
