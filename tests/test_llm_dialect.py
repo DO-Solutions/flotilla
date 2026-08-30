@@ -123,6 +123,20 @@ try:
     ok("reasoning_effort" not in SENT[1] and
        SENT[1].get("chat_template_kwargs") == {"enable_thinking": False},
        "fallback attempt reverted to the vanilla body")
+
+    # 5. think-on parity: every model the OFF branch can silence, the ON
+    #    branch must explicitly wake — deepseek was missing from the ON list
+    #    and silently played direct in a thinking field (2026-08-30)
+    fresh_ladder()
+    SENT.clear()
+    admiral("deepseek-9", think=True)._chat([{"role": "user", "content": "hi"}])
+    ok(SENT[-1].get("chat_template_kwargs") == {"enable_thinking": True},
+       "think-on sends enable_thinking=true for deepseek")
+    fresh_ladder()
+    SENT.clear()
+    admiral("deepseek-9", think=False)._chat([{"role": "user", "content": "hi"}])
+    ok(SENT[-1].get("chat_template_kwargs") == {"enable_thinking": False},
+       "think-off still disables deepseek")
 finally:
     llm.urllib.request.urlopen = _real
     with providers._LADDER_LOCK:
