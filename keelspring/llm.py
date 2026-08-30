@@ -297,9 +297,14 @@ class LLMAdmiral:
                 # ⚠ minimal is a FLOOR, not zero: think-off is a real lobotomy
                 # only for the open models above — why think now defaults ON.
                 payload["reasoning_effort"] = "minimal"
-        elif any(t in self.model_id for t in ("qwen", "kimi", "glm")):
+        elif any(t in self.model_id for t in ("qwen", "deepseek", "kimi", "glm")):
             # think ON: ask for it EXPLICITLY — hybrid models' serving templates
-            # differ on their default, and the fairness story needs determinism
+            # differ on their default, and the fairness story needs determinism.
+            # This list must MATCH the think-off list above: deepseek was
+            # missing here, so in a think-on field it silently played direct
+            # (its serving default) while everyone else reasoned — caught in
+            # the glm53 think A/B, 2026-08-30 (probe: enable_thinking=true is
+            # honored, 69s/reasoning vs 11s/none without the flag).
             payload["chat_template_kwargs"] = {"enable_thinking": True}
         t0 = time.time()
         d = None
