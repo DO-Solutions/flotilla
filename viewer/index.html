@@ -407,7 +407,11 @@
   #parleyfeed .pacts { flex: 0 1 auto; overflow-y: auto; }
   #parleyfeed .pacts:not(:empty) { margin-bottom: 6px; padding-bottom: 2px;
     border-bottom: 1px solid var(--line); }
-  #parleyfeed .pchat { flex: 1 1 120px; min-height: 90px; overflow-y: auto; }
+  /* basis 250px ≈ 4 wrapped messages, shrink 0 so the chat NEVER drops below
+     it — and the basis (not auto) keeps the chat's huge scrollback out of the
+     flex math, so it can't crush the rail either. Rail keeps content size;
+     when rail + 250px genuinely overflow the panel, the rail scrolls. */
+  #parleyfeed .pchat { flex: 1 0 250px; overflow-y: auto; }
   #parleyfeed .msg { font-size: 12px; margin-bottom: 7px; color: #d5deee;
                      border-left: 3px solid var(--mc, var(--dim));
                      padding-left: 7px; }
