@@ -1995,6 +1995,15 @@ def _restore_state():
             for _r in AUX.values():
                 if isinstance(_r, dict):
                     _r["last_seen"] = now
+            # startup reconcile: an AUX record whose job is terminal (or gone)
+            # is a leaked capacity slot — the cancel-from-paused path used to
+            # leave these behind, and len(AUX) IS the capacity gate. Deploying
+            # this sweep also heals records leaked before the fix.
+            with JOBS_LOCK:
+                _live = {j.get("id") for j in JOBS
+                         if j.get("state") in ("queued", "running", "paused")}
+            for _jid in [k for k in AUX if k not in _live]:
+                AUX.pop(_jid, None)
         with POOL_LOCK:
             POOL.update(st.get("pool", {}))
     except Exception:
@@ -3105,6 +3114,13 @@ class H(BaseHTTPRequestHandler):
                     _mark_cancelled(j)
                     shutil.rmtree(os.path.join(LIB, "_work", jid),
                                   ignore_errors=True)
+                    # release the AUX record too — a paused aux job keeps it
+                    # (resume needs the bearer), and this branch used to leave
+                    # it behind forever: three cancels-from-paused pinned the
+                    # fleet at capacity with ZERO droplets running (2026-08-31).
+                    # No droplet exists at this point, so inline is cheap.
+                    if j.get("aux"):
+                        _aux_destroy(jid)
                     _persist_jobs()
                     return self._send(200, {"ok": True, "state": "cancelled"})
                 if j["state"] not in ("queued", "running"):

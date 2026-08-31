@@ -716,6 +716,22 @@ st, r = req("/api/run", {"mode": "match", "seed": 3, "executor": "auxiliary",
                          "bots": ["merchant", "corsair"], "name": "aux-cap"})
 ok(st == 400 and "capacity" in r["error"], "capacity gate refuses over-provision")
 
+# ---- cancel-from-paused releases the AUX slot (2026-08-31 regression) ----
+# The paused branch of /api/cancel dropped the checkpoint but kept the AUX
+# record; len(AUX) is the capacity gate, so three cancelled-paused jobs pinned
+# the fleet "at capacity" with zero droplets running.
+with server.JOBS_LOCK:
+    _jT = next(j for j in server.JOBS if j["id"] == jidT)
+    _jT["state"] = "paused"                 # the checkpoint landed
+with server.AUX_LOCK:
+    ok(jidT in server.AUX, "paused aux job still holds its AUX record")
+st, rc = req("/api/cancel", {"id": jidT})
+ok(st == 200 and rc.get("state") == "cancelled",
+   f"cancel accepts a paused aux job (got {st} {str(rc)[:60]})")
+with server.AUX_LOCK:
+    ok(jidT not in server.AUX,
+       "cancel-from-paused releases the AUX record (capacity slot freed)")
+
 # ---- resume must re-arm the silence clock (2026-08-26 regression) ----
 # _aux_resume re-armed only the age clock; a pause longer than
 # AUX_SILENT_DEAD_S then reaped the resumed job before its fresh worker's
