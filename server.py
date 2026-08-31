@@ -2025,7 +2025,39 @@ def _restore_state():
         live = [j for j in JOBS if j.get("state") in ("queued", "running")]
     for j in live:
         with AUX_LOCK:
-            has_rec = j["id"] in AUX
+            rec = AUX.get(j["id"])
+            has_rec = rec is not None
+            has_worker = bool(rec and rec.get("droplet_id"))
+        if j.get("aux") and aux is not None and has_rec and not has_worker:
+            # the restart hit during the stagger/provisioning gap: the launch
+            # thread died with the old process and no droplet exists, so the
+            # callback watcher would watch a ghost (the silence reaper flags
+            # it 20 min later without fixing anything — field data
+            # 2026-08-31: two of three staggered lanes stranded this way).
+            # Relaunch from the record's config; sweep any droplet whose
+            # create raced the restart first (same name-match as the
+            # provision retry loop) so it can't double-run on a stale bearer.
+            with AUX_LOCK:
+                rec = AUX.pop(j["id"], None)
+            try:
+                ds = _do(aux, "GET",
+                         "/droplets?tag_name=flotilla-aux&per_page=100")
+                for orp in ds.get("droplets", []):
+                    if orp.get("name") == f"flotilla-aux-{j['id']}":
+                        _do(aux, "DELETE", f"/droplets/{orp['id']}")
+                        j.setdefault("log", []).append(
+                            f"swept orphan droplet {orp['id']} from the "
+                            "interrupted launch")
+            except Exception:
+                pass
+            j.setdefault("log", []).append(
+                "flagship restarted mid-launch — auxiliary never "
+                "provisioned; relaunching")
+            _persist_jobs()
+            threading.Thread(target=_run_job_aux,
+                             args=(j, dict((rec or {}).get("config") or {})),
+                             daemon=True).start()
+            continue
         if j.get("aux") and aux is not None and has_rec:
             j.setdefault("log", []).append(
                 "flagship restarted — auxiliary unaffected, callbacks resume")

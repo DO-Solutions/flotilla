@@ -637,6 +637,41 @@ st, _ = req(f"/api/aux/{jid6}/done", {"series": {}},
             headers={"X-Aux-Token": b6})
 ok(st == 200 and server._job(jid6)["state"] == "done", "restored job completes")
 
+# ---- restart during the stagger/provision gap (2026-08-31) ----
+# The launch thread dies with the old process BEFORE a droplet exists. The
+# old restore armed the callback watcher on that ghost (the silence reaper
+# flagged it 20 min later without fixing anything); it must RELAUNCH instead.
+st, r7 = req("/api/run", {"mode": "series", "seed": 9, "executor": "auxiliary",
+                          "bots": ["merchant", "corsair"],
+                          "series": {"games": 1, "memos": False},
+                          "name": "aux-stranded"})
+jid7 = r7["job"]["id"]
+time.sleep(0.8)
+with server.AUX_LOCK:
+    b7 = server.AUX[jid7]["bearer"]
+    server.AUX[jid7]["droplet_id"] = None      # as if the create never ran
+server._persist_jobs()
+server._persist_aux()
+with server.AUX_LOCK:
+    server.AUX.clear()
+with server.JOBS_LOCK:
+    server.JOBS.clear()
+server._restore_state()
+time.sleep(0.8)                                # relaunch thread runs (mock DO)
+j7 = server._job(jid7)
+with server.AUX_LOCK:
+    rec7 = dict(server.AUX.get(jid7) or {})
+ok(j7 is not None and any("relaunching" in x for x in j7.get("log", [])),
+   "mid-launch restart RELAUNCHES instead of watching a ghost")
+ok(bool(rec7.get("droplet_id")),
+   "…and the relaunch actually provisions a droplet")
+ok(rec7.get("bearer") and rec7["bearer"] != b7,
+   "…with a fresh bearer (a raced pre-restart create can't double-run)")
+st, _ = req(f"/api/aux/{jid7}/done", {"series": {}},
+            headers={"X-Aux-Token": rec7.get("bearer", "")})
+ok(st == 200 and server._job(jid7)["state"] == "done",
+   "relaunched job completes through the normal callback flow")
+
 # ---- worker liveness (2026-08-15) ----
 # Before this the flagship had NO liveness signal: a worker that died without
 # posting /fail was indistinguishable from one thinking hard, and sat unnoticed
