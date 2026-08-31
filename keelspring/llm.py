@@ -22,6 +22,7 @@ from . import providers
 # Engine-neutral fallbacks below keep the class usable standalone.
 ADMIRAL_DEFAULTS = {}
 _FALLBACK = dict(temperature=0.2, max_tokens=4000, timeout_s=300, think=True,
+                 think_headroom=24000,
                  history_chars=8000, memo_chars=6000, scratchpad=True,
                  scratchpad_chars=2000, warmup_timeout_s=120, base_prompt="")
 
@@ -52,7 +53,31 @@ PRICES = {
 }
 PRICES.update(json.loads(os.environ.get("FLOTILLA_PRICES", "{}")))
 
-THINK_HEADROOM = 24000       # extra completion budget for in-band reasoning
+THINK_HEADROOM = 24000       # legacy default; live value = admirals.think_headroom
+
+
+def _last_json_blob(text):
+    """The LAST top-level JSON object in text, or None. Used to rescue an
+    answer stranded in a reasoning channel: earlier objects are drafts the
+    model thought through, the final one is what it committed to. Walks
+    FORWARD consuming whole objects so a nested inner {…} is never mistaken
+    for the final answer."""
+    dec = json.JSONDecoder()
+    best, i = None, 0
+    while True:
+        a = text.find("{", i)
+        if a < 0:
+            return best
+        try:
+            obj, end = dec.raw_decode(text[a:])
+        except ValueError:
+            i = a + 1
+            continue
+        if isinstance(obj, dict):
+            best = text[a:a + end]
+            i = a + end
+        else:
+            i = a + 1
 
 
 class TruncatedReply(ValueError):
@@ -169,7 +194,7 @@ class LLMAdmiral:
     # registered after import still wins).
     def __init__(self, model_id, label=None,
                  temperature=None, max_tokens=None,
-                 timeout=None, think=None,
+                 timeout=None, think=None, think_headroom=None,
                  history_chars=None, memo_chars=None,
                  prompt="", scratchpad=None, scratchpad_chars=None,
                  warmup_timeout_s=None, base_prompt=None):
@@ -177,6 +202,8 @@ class LLMAdmiral:
         max_tokens = _d("max_tokens") if max_tokens is None else max_tokens
         timeout = _d("timeout_s") if timeout is None else timeout
         think = _d("think") if think is None else think
+        think_headroom = _d("think_headroom") if think_headroom is None \
+            else think_headroom
         history_chars = _d("history_chars") if history_chars is None \
             else history_chars
         memo_chars = _d("memo_chars") if memo_chars is None else memo_chars
@@ -193,6 +220,7 @@ class LLMAdmiral:
         self.max_tokens = max_tokens
         self.timeout = timeout
         self.think = think
+        self.think_headroom = think_headroom
         self.history_chars = history_chars
         self.memo_chars = memo_chars
         self.custom_prompt = str(prompt or "")[:memo_chars]
@@ -274,13 +302,15 @@ class LLMAdmiral:
         payload = {
             "model": self.model_id, "messages": messages,
             "temperature": self.temperature,
-            # max_tokens caps the VISIBLE ANSWER. Thinking gets a uniform
-            # allowance on top — the counter is dishonest across vendors
-            # (field data: GPT's reasoning never hits the completion count,
-            # Anthropic's and the open models' reasoning ALL lands in it), so a
-            # flat cap silently punished honest accounting. +24k for everyone
-            # when thinking is on; GPT simply never uses it.
-            "max_tokens": self.max_tokens + (THINK_HEADROOM if self.think else 0),
+            # max_tokens caps the VISIBLE ANSWER. Thinking gets an allowance
+            # on top — the counter is dishonest across vendors (field data:
+            # GPT's reasoning never hits the completion count, Anthropic's and
+            # the open models' reasoning ALL lands in it), so a flat cap
+            # silently punished honest accounting. Configurable per run
+            # (admirals.think_headroom): GLM 5.3's full-depth reasoning runs
+            # 17k–28k+ tokens/window, so the old fixed 24k censored it.
+            "max_tokens": self.max_tokens + (self.think_headroom
+                                             if self.think else 0),
         }
         # reasoning models (qwen/deepseek/kimi) burn 15-20s of hidden thinking per
         # call by default — measured 2026-08-05; enable_thinking=false -> ~1.2s.
@@ -398,12 +428,24 @@ class LLMAdmiral:
             # LOUD truncation instead of a mystery "unbalanced JSON" (or, for
             # reasoning models, an empty reply). Carries the partial text so
             # debrief/plan can keep a cut memo rather than lose it.
+            knob = ("admirals.think_headroom (the reasoning consumed the "
+                    "budget)" if self.think else "admirals.max_tokens")
             raise TruncatedReply(
                 f"response hit the token limit "
                 f"(finish_reason=length; visible chars={len(text)}) — raise "
-                "admirals.max_tokens", text,
+                f"{knob}", text,
                 tin=u.get("prompt_tokens", 0),
                 tout=u.get("completion_tokens", 0), ms=ms)
+        # deepseek-style separate reasoning channel: when the visible content
+        # carries no JSON but the reasoning does, the ANSWER is stranded in
+        # the reasoning (field data 2026-08-31: 20-36% of think-mode windows).
+        # Rescue the LAST complete object — drafts appear mid-thought, the
+        # committed answer sits at the end.
+        if "{" not in text:
+            rescue = _last_json_blob(choice["message"].get(
+                "reasoning_content") or "")
+            if rescue:
+                text = (text + "\n" if text else "") + rescue
         return text, u.get("prompt_tokens", 0), u.get("completion_tokens", 0), ms
 
     @staticmethod

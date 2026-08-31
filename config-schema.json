@@ -605,14 +605,24 @@
    "t": "int",
    "lo": 100,
    "hi": 32000,
-   "doc": "Budget for the VISIBLE answer (the JSON reply). When think is on, every model automatically gets a +24k thinking allowance ON TOP \u2014 vendors count reasoning tokens inconsistently (GPT's never appear, Anthropic's and the open models' land in the completion), so capping them together silently handicapped honest reporters. 4000 fits multi-squadron conn programs."
+   "doc": "Budget for the VISIBLE answer (the JSON reply). When think is on, every model also gets think_headroom ON TOP \u2014 vendors count reasoning tokens inconsistently (GPT's never appear, Anthropic's and the open models' land in the completion), so capping them together silently handicapped honest reporters. 4000 fits multi-squadron conn programs."
+  },
+  "think_headroom": {
+   "d": 24000,
+   "t": "int",
+   "lo": 0,
+   "hi": 100000,
+   "show_if": {
+    "think": true
+   },
+   "doc": "Extra completion budget for in-band reasoning when think is on, on top of max_tokens. Size it to the heaviest thinker in the field: GLM 5.3's reasoning ran 17k\u201328k+ tokens per window (2026-08-31) and the old fixed 24k cut it mid-thought on over half its windows (finish_reason=length with zero visible chars = the whole budget went to thinking). Raising this also lengthens calls \u2014 budget/gen-speed seconds \u2014 so raise timeout_s with it."
   },
   "timeout_s": {
    "d": 300,
    "t": "int",
    "lo": 5,
-   "hi": 600,
-   "doc": "Seconds an admiral gets to answer a decision window; slower = orders stand (missed window). Thinking models need REAL headroom \u2014 Kimi's successful thinking calls ran up to 171s in the field and 180s still lost half its windows; pipeline_depth hides the wall-clock cost."
+   "hi": 1800,
+   "doc": "Seconds an admiral gets to answer a decision window; slower = orders stand (missed window). Thinking models need REAL headroom \u2014 Kimi's successful thinking calls ran up to 171s in the field and 180s still lost half its windows; GLM 5.3 at full depth generates ~28k thinking tokens at ~64 tok/s \u2248 450s, and a bigger think_headroom needs proportionally more. pipeline_depth hides the wall-clock cost."
   },
   "think": {
    "d": true,
@@ -657,7 +667,7 @@
    "d": 120,
    "t": "int",
    "lo": 10,
-   "hi": 600,
+   "hi": 1800,
    "show_if": {
     "warmup": true
    },
