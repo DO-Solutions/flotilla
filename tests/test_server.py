@@ -821,6 +821,22 @@ if r.get("job"):
     req("/api/cancel", {"id": r["job"]["id"]})
 server._providers_op({"op": "limits", "limits": {"max_series_cost": 0}})
 
+# provider concurrency op: sets the field, ships to runners via providers_env
+code, _ = server._providers_op({"op": "add", "label": "CapTest",
+                                "base_url": "https://cap.example", "key": "k",
+                                "model_map": {"m": "m"}})
+code, _ = server._providers_op({"op": "concurrency", "id": "captest",
+                                "max_concurrent": 2})
+ok(code == 200, "concurrency op accepted")
+_env = json.loads(server._providers_json())
+_cap = next(p for p in _env["providers"] if p["id"] == "captest")
+ok(_cap.get("max_concurrent") == 2, "max_concurrent ships in providers_env")
+code, _ = server._providers_op({"op": "concurrency", "id": "captest",
+                                "max_concurrent": "x"})
+ok(code == 400, "non-integer concurrency refused")
+server._providers_op({"op": "remove", "id": "captest"})
+
+
 # an unpriced model must SAY so in the job log at submit — every cost field
 # (and the ceiling's pre-flight estimate) silently reads $0 otherwise
 st, r = req("/api/run", {"mode": "series", "seed": 9,

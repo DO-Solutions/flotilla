@@ -338,7 +338,12 @@ class LLMAdmiral:
                 headers={"Authorization": f"Bearer {prov['key']}",
                          "Content-Type": "application/json"})
             try:
-                with urllib.request.urlopen(req, timeout=self.timeout) as r:
+                # providers.slot: queue behind the provider's declared
+                # concurrency instead of 429-spilling down the ladder — a
+                # bounded wait beats a slow fallback or a timeout (see
+                # providers.py). No-op for providers without max_concurrent.
+                with providers.slot(prov), \
+                        urllib.request.urlopen(req, timeout=self.timeout) as r:
                     d = json.loads(r.read())
                 note = lad.report(self.model_id, pidx, canary, "ok")
                 if note:

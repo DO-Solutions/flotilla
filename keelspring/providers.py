@@ -183,3 +183,48 @@ def ladder():
         if _LADDER is None:
             _LADDER = Ladder()
         return _LADDER
+
+
+# ---- client-side per-provider concurrency (THE REMONTOIRE, third hand) ----
+# Some providers hard-cap concurrent requests per key (z.ai: 2). Spilling the
+# excess to a fallback rung traded a short wait for a slow foreign call or a
+# timeout — measured 2026-08-31: three lockstep lanes on a 2-slot provider
+# missed ~50% of that model's windows. A provider entry may declare
+# "max_concurrent": N; calls beyond N QUEUE here until a slot frees instead
+# of 429ing down the ladder. 0/absent = unlimited (old behavior).
+_SLOTS = {}
+_SLOTS_LOCK = threading.Lock()
+
+
+class _Slot:
+    def __init__(self, sem):
+        self._sem = sem
+
+    def __enter__(self):
+        if self._sem is not None:
+            self._sem.acquire()
+        return self
+
+    def __exit__(self, *a):
+        if self._sem is not None:
+            self._sem.release()
+        return False
+
+
+def slot(prov):
+    """Context manager gating one request against the provider's declared
+    concurrency. Blocks until a slot frees — in lockstep a bounded wait is
+    strictly better than a spill-to-fallback timeout; the transport timeout
+    still bounds the call itself, so a slot is always released."""
+    n = 0
+    try:
+        n = int(prov.get("max_concurrent") or 0)
+    except (TypeError, ValueError):
+        n = 0
+    if n <= 0:
+        return _Slot(None)
+    with _SLOTS_LOCK:
+        sem = _SLOTS.get(prov.get("id"))
+        if sem is None:
+            sem = _SLOTS[prov.get("id")] = threading.BoundedSemaphore(n)
+    return _Slot(sem)

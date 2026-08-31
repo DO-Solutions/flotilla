@@ -439,6 +439,18 @@ def _providers_op(d):
             if not p:
                 return 404, {"error": "no such provider"}
             p["enabled"] = bool(d.get("enabled"))
+        elif op == "concurrency":
+            # client-side request cap for a provider whose KEY caps concurrent
+            # calls (z.ai: 2). Runners queue behind it instead of 429-spilling
+            # down the ladder (providers.slot). 0 = unlimited.
+            p = next((x for x in st["providers"]
+                      if x["id"] == d.get("id")), None)
+            if not p:
+                return 404, {"error": "no such provider"}
+            try:
+                p["max_concurrent"] = max(0, int(d.get("max_concurrent", 0)))
+            except (TypeError, ValueError):
+                return 400, {"error": "max_concurrent must be an integer"}
         elif op == "move":
             ids = [p["id"] for p in st["providers"]]
             if d.get("id") not in ids:
