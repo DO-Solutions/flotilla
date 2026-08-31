@@ -397,7 +397,14 @@
   #gamelog b { color: var(--ink); }
   #parleyfeed { background: var(--card); border: 1px solid var(--line);
                 border-radius: var(--radius); padding: 8px 10px;
-                max-height: calc(100vh - 230px); overflow-y: auto; }
+                max-height: calc(100vh - 230px); display: flex;
+                flex-direction: column; overflow: hidden; }
+  /* treaties pinned ABOVE the transcript in their own scroll area — the chat
+     re-pinning to its newest line must never scroll the standing pacts away */
+  #parleyfeed .pacts { flex: 0 1 auto; max-height: 42%; overflow-y: auto; }
+  #parleyfeed .pacts:not(:empty) { margin-bottom: 6px; padding-bottom: 2px;
+    border-bottom: 1px solid var(--line); }
+  #parleyfeed .pchat { flex: 1 1 auto; min-height: 0; overflow-y: auto; }
   #parleyfeed .msg { font-size: 12px; margin-bottom: 7px; color: #d5deee;
                      border-left: 3px solid var(--mc, var(--dim));
                      padding-left: 7px; }
@@ -2460,17 +2467,33 @@ function povHidden(sid, fleetId, fi) {
 }
 
 function updateInspector(fr) {
-  updateInspectorBody(fr);
-  // soft close in the upper-left — clicking empty sea still works, this is
-  // for anyone who'd rather not touch the map
+  // persistent skeleton: the close ✕ lives OUTSIDE the rewritten body so it
+  // survives every repaint — with it inside, the press target was destroyed
+  // before release and the close only worked while paused. Activation is
+  // onpointerdown throughout the inspector for the same reason: it fires on
+  // press, before the next repaint can replace the element under the cursor.
   const ibox = $("inspector");
-  if (ibox.className === "on" && !ibox.querySelector(".iclose")) {
-    ibox.insertAdjacentHTML("afterbegin",
-      `<span class="iclose" title="close" onclick="select(null)">✕</span>`);
+  if (!ibox.querySelector(".ibody")) {
+    ibox.innerHTML = `<span class="iclose" title="close" ` +
+      `onpointerdown="select(null)">✕</span><div class="ibody"></div>`;
   }
+  updateInspectorBody(fr);
 }
 function updateInspectorBody(fr) {
-  const box = $("inspector");
+  const el = $("inspector");
+  const bd = el.querySelector(".ibody") || el;
+  // facade over the real node: className/style/dataset ride the outer box,
+  // innerHTML lands in .ibody and is SKIPPED when unchanged — a stable panel
+  // (program history mid-playback) keeps its scroll position and its rows
+  // stay clickable instead of being rebuilt 30×/s
+  const box = {
+    get className() { return el.className; },
+    set className(v) { el.className = v; },
+    get dataset() { return el.dataset; },
+    style: el.style,
+    querySelector: s => bd.querySelector(s),
+    set innerHTML(h) { if (bd._html !== h) { bd._html = h; bd.innerHTML = h; } },
+  };
   if (S.sel === null) { box.className = ""; return; }
   if (S.sel.k === "f") {                 // flagship + harbor: the fleet's HQ tile
     const fid = S.sel.id;
@@ -2545,7 +2568,7 @@ function updateInspectorBody(fr) {
     if (!picks.length) {
       box.innerHTML = `<h3>⌨ ${classAt(sid, fr.t) || "?"} #${sid}</h3>` +
         `<div class="dim">no conn program was ever delivered to this ship</div>` +
-        `<div class="sqrow" onclick="selShip(${sid})">← back to the ship</div>`;
+        `<div class="sqrow" onpointerdown="selShip(${sid})">← back to the ship</div>`;
       return;
     }
     // which version rides her at the CURRENT frame; -1 = follow playback
@@ -2561,14 +2584,14 @@ function updateInspectorBody(fr) {
         `v${cur + 1} is aboard at this point`}</div>` +
       picks.map((p2, i) =>
         `<div class="sqrow${i === show ? "" : " dead"}" ` +
-        `onclick="selProgVer(${sid},${i})"><b>v${i + 1}</b> · ${fmtTime(p2.t)} · ` +
+        `onpointerdown="selProgVer(${sid},${i})"><b>v${i + 1}</b> · ${fmtTime(p2.t)} · ` +
         `${p2.via === "signal-program" ? "⚑ by signal" : "⚓ at dock"} · ` +
         `squadron ${p2.squad}${i === cur ? " · ⬅ current" : ""}</div>`).join("") +
       (show > 0 ? `<div class="dim" style="margin-top:6px">changes vs v${show}:</div>` : "") +
       progHtml(show > 0 ? picks[show - 1].text : null, pv.text) +
-      `<div class="sqrow" onclick="selCode(${cat.fleet},${JSON.stringify(pv.squad)
+      `<div class="sqrow" onpointerdown="selCode(${cat.fleet},${JSON.stringify(pv.squad)
         .replace(/"/g, "&quot;")})">⌨ full code history of squadron ${pv.squad} →</div>` +
-      `<div class="sqrow" onclick="selShip(${sid})">← back to the ship</div>`;
+      `<div class="sqrow" onpointerdown="selShip(${sid})">← back to the ship</div>`;
     return;
   }
   if (S.sel.k === "code") {              // squadron code history: every write the
@@ -2580,7 +2603,7 @@ function updateInspectorBody(fr) {
     if (!writes.length) {
       box.innerHTML = `<h3>⌨ Squadron ${squad} code</h3>` +
         `<div class="dim">the admiral never wrote a program for this squadron</div>` +
-        `<div class="sqrow" onclick="selSquad(${fleet},${JSON.stringify(squad)
+        `<div class="sqrow" onpointerdown="selSquad(${fleet},${JSON.stringify(squad)
           .replace(/"/g, "&quot;")})">← back to the squadron</div>`;
       return;
     }
@@ -2606,14 +2629,14 @@ function updateInspectorBody(fr) {
       writes.map((e, i) =>
         `<div class="sqrow${i === show ? "" : " dead"}" ` +
         `${i === show ? 'data-cursel="1" ' : ""}` +
-        `onclick="selCodeVer(${fleet},${JSON.stringify(squad)
+        `onpointerdown="selCodeVer(${fleet},${JSON.stringify(squad)
           .replace(/"/g, "&quot;")},${i})"><b>v${i + 1}</b> · ${fmtTime(e.t)}` +
         `${e.cleared ? " · 🗑 cleared" : ""}${i === cur ? " · ⬅ in force" : ""}</div>`)
         .join("") + `</div>` +
       (wv.cleared ? `<div class="dim">program cleared — squadron back on standing orders</div>`
                   : (show > 0 ? `<div class="dim" style="margin-top:6px">v${show + 1} vs v${show}:</div>` : "") +
                     progHtml(prevTxt, wv.text)) +
-      `<div class="sqrow" onclick="selSquad(${fleet},${JSON.stringify(squad)
+      `<div class="sqrow" onpointerdown="selSquad(${fleet},${JSON.stringify(squad)
         .replace(/"/g, "&quot;")})">← back to the squadron</div>`;
     const selRow = box.querySelector('[data-cursel="1"]');
     if (selRow && selRow.scrollIntoView) selRow.scrollIntoView({ block: "nearest" });
@@ -2632,13 +2655,13 @@ function updateInspectorBody(fr) {
       `<h3 style="color:${COLORS[fleet % COLORS.length]}">⚑ Squadron ${squad} · ` +
       `${S.rp.result.names[fleet]}</h3>` +
       `<div>${afloat} afloat / ${members.length} ships — click one to inspect</div>` +
-      `<div class="sqrow" onclick="selCode(${fleet},${JSON.stringify(squad)
+      `<div class="sqrow" onpointerdown="selCode(${fleet},${JSON.stringify(squad)
         .replace(/"/g, "&quot;")})">⌨ code history — how this squadron's program ` +
       `evolved (diffs on the timeline)</div>` +
       members.map(id => {
         const r = S.frameMaps[S.fi].get(id);
         const cls = classAt(id, fr.t) || (S.cat[id] || {}).preset || "?";
-        return `<div class="sqrow${r ? "" : " dead"}" onclick="selShip(${id})">` +
+        return `<div class="sqrow${r ? "" : " dead"}" onpointerdown="selShip(${id})">` +
           `<b>${cls}</b> #${id} — ` +
           (r ? `hull ${r[3]}% · cargo ${r[4]}`
              : `☠ sunk ${fmtTime(S.sinkAt[id] ?? 0)}`) + `</div>`;
@@ -2658,9 +2681,9 @@ function updateInspectorBody(fr) {
     box.className = "on";
     box.innerHTML = `<h3>ship ${sid} — ${escHtml(cat.preset || "?")}</h3>` +
       `<div class="intent">☠ sunk at ${fmtTime(S.sinkAt[sid] ?? 0)}</div>` +
-      (hadProg ? `<div class="sqrow" onclick="selProg(${sid})">⌨ view the conn ` +
+      (hadProg ? `<div class="sqrow" onpointerdown="selProg(${sid})">⌨ view the conn ` +
                  `program she sailed under →</div>` : "") +
-      (cat.squad != null ? `<div class="sqrow" onclick="selSquad(${cat.fleet},` +
+      (cat.squad != null ? `<div class="sqrow" onpointerdown="selSquad(${cat.fleet},` +
         `${escHtml(JSON.stringify(String(cat.squad)))})">⚑ squadron ` +
         `${escHtml(String(cat.squad))} →</div>` : "");
     return;
@@ -2700,10 +2723,10 @@ function updateInspectorBody(fr) {
     e => e.via === "port-program" || e.via === "signal-program");
   box.innerHTML =
     `<h3 style="color:${COLORS[rowFleet % COLORS.length]}">${escHtml(cat.preset || "?")} #${sid}` +
-    ` · <span class="sqlink" onclick="selSquad(${rowFleet},` +
+    ` · <span class="sqlink" onpointerdown="selSquad(${rowFleet},` +
     `${escHtml(JSON.stringify(String(sq || "")))})">` +
     `squadron ${escHtml(String(sq || "?"))}</span> · ${escHtml(fname)}` +
-    (hasProg ? ` · <span class="sqlink" onclick="selProg(${sid})">⌨ program` +
+    (hasProg ? ` · <span class="sqlink" onpointerdown="selProg(${sid})">⌨ program` +
                `</span>` : "") + `</h3>` +
     `<div class="stats">` +
     Object.entries(stats).map(([k, v]) =>
@@ -2715,7 +2738,7 @@ function updateInspectorBody(fr) {
     `${od ? escHtml(JSON.stringify(od.od)) : "(initial standing orders)"}</div>` +
     // the header's small ⌨ link proved easy to miss — a full-width row makes
     // "show me this ship's code" one obvious click
-    (hasProg ? `<div class="sqrow" onclick="selProg(${sid})">⌨ view this ` +
+    (hasProg ? `<div class="sqrow" onpointerdown="selProg(${sid})">⌨ view this ` +
                `ship's conn program (delivery history + diffs) →</div>` : "");
 }
 
@@ -3131,15 +3154,19 @@ function updatePanels(fr) {
   }
   if (S.pmode === "parley") {
     const feed = $("parleyfeed");
-    const seen = (S.parley || []).filter(e => e.t <= fr.t);
-    // treaties in force at the playhead sit as tiles ABOVE the transcript —
-    // standing diplomatic state next to the negotiation that produced it
-    // (this replaced the on-map flagship link line, which covered the board)
+    // two independent scroll areas: treaties PINNED on top, transcript below.
+    // One shared scroller re-pinned to the newest message on every landing,
+    // yanking the pact tiles out of view seconds after you started reading.
+    if (!feed.querySelector(".pchat")) {
+      feed.innerHTML = `<div class="pacts"></div><div class="pchat"></div>`;
+    }
+    const rail = feed.querySelector(".pacts");
+    const chat = feed.querySelector(".pchat");
+    const nm = i => `<b style="color:${COLORS[i % COLORS.length]}">${escHtml(S.rp.result.names[i] || i)}</b>`;
     const pacts = activeTreaties(S.tl, fr.t);
-    const pkey = seen.length + "|" + pacts.map(p => p.t).join(",");
-    if (feed.dataset.n !== pkey) {
-      feed.dataset.n = pkey;
-      const nm = i => `<b style="color:${COLORS[i % COLORS.length]}">${escHtml(S.rp.result.names[i] || i)}</b>`;
+    const rkey = pacts.map(p => `${p.t}:${p.fleet}:${p.other}`).join(",");
+    if (rail.dataset.n !== rkey) {
+      rail.dataset.n = rkey;
       const tiles = pacts.map(p => {
         const what = p.type === "border"
           ? `border — neither fleet crosses ${escHtml(p.axis)}=${escHtml(p.line)}`
@@ -3149,15 +3176,23 @@ function updatePanels(fr) {
         return `<div class="pact">🤝 ${nm(p.fleet)} ⇄ ${nm(p.other)}` +
                `<div class="pnote">${what}</div>${note}</div>`;
       }).join("");
-      const head = tiles
+      rail.innerHTML = tiles
         ? `<div class="pacthead">treaties in force</div>` + tiles : "";
-      feed.innerHTML = head + (seen.length ? seen.map(e => {
+    }
+    const seen = (S.parley || []).filter(e => e.t <= fr.t);
+    if (chat.dataset.n !== String(seen.length)) {
+      chat.dataset.n = String(seen.length);
+      // chat-style stickiness: follow the newest line only if the reader was
+      // already at the bottom; scrolled up = they're reading, hold position
+      const stick = chat.scrollHeight - chat.scrollTop - chat.clientHeight < 40;
+      const keep = chat.scrollTop;
+      chat.innerHTML = seen.length ? seen.map(e => {
         const to = e.to === "all" ? "<b>all</b>" : nm(e.to);
         return `<div class="msg" style="--mc:${COLORS[e.fleet % COLORS.length]}">` +
                `<div class="hd"><span>${fmtTime(e.t)}</span> ${nm(e.fleet)} → ${to}</div>` +
                `${linkify(escHtml(e.text), e.fleet)}</div>`;
-      }).join("") : `<div class="empty">(no parley messages in this match)</div>`);
-      feed.scrollTop = feed.scrollHeight;
+      }).join("") : `<div class="empty">(no parley messages in this match)</div>`;
+      chat.scrollTop = stick ? chat.scrollHeight : keep;
     }
   }
   drawTimeline(fr);
