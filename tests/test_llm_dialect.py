@@ -137,6 +137,78 @@ try:
     admiral("deepseek-9", think=False)._chat([{"role": "user", "content": "hi"}])
     ok(SENT[-1].get("chat_template_kwargs") == {"enable_thinking": False},
        "think-off still disables deepseek")
+
+    # 6. think_headroom is a real knob: the completion budget must follow it,
+    #    and think-off must ignore it (GLM 5.3's full-depth reasoning ran
+    #    17k-28k+ tokens/window and the fixed 24k censored >50% of windows)
+    fresh_ladder()
+    SENT.clear()
+    bt = llm.LLMAdmiral("glm-9", label="T", temperature=0.2, max_tokens=100,
+                        timeout=5, think=True, think_headroom=48000,
+                        history_chars=1000, memo_chars=1000, scratchpad=False,
+                        scratchpad_chars=100, warmup_timeout_s=5,
+                        base_prompt="b")
+    bt._chat([{"role": "user", "content": "hi"}])
+    ok(SENT[-1]["max_tokens"] == 48100,
+       "think-on budget = max_tokens + think_headroom")
+    bt.think = False
+    SENT.clear()
+    bt._chat([{"role": "user", "content": "hi"}])
+    ok(SENT[-1]["max_tokens"] == 100, "think-off ignores think_headroom")
+
+    # 7. _last_json_blob: forward walk over TOP-LEVEL objects — drafts are
+    #    skipped, a nested inner object is never mistaken for the answer
+    blob = llm._last_json_blob(
+        'draft one {"thoughts": "d1"} more musing '
+        '{"thoughts": {"nested": true}, "final": 1} trailing prose')
+    ok(blob is not None and json.loads(blob).get("final") == 1,
+       "_last_json_blob picks the last top-level object")
+    ok(llm._last_json_blob("no json here { broken") is None,
+       "_last_json_blob returns None when nothing parses")
+
+    # 8. reasoning-channel rescue: content with no JSON + the answer in
+    #    reasoning_content (deepseek think mode on DO) must still parse
+    class _RcResp(_Resp):
+        def read(self):
+            return json.dumps({
+                "choices": [{"message": {
+                    "content": "I have decided.",
+                    "reasoning_content": 'try {"thoughts": "draft"} no — '
+                                         'final: {"thoughts": "real"}'},
+                    "finish_reason": "stop"}],
+                "usage": {"prompt_tokens": 1, "completion_tokens": 1}}).encode()
+
+    def rc_urlopen(req, timeout=None):
+        SENT.append(json.loads(req.data))
+        return _RcResp()
+    fresh_ladder()
+    llm.urllib.request.urlopen = rc_urlopen
+    text, _, _, _ = admiral("deepseek-9", think=True)._chat(
+        [{"role": "user", "content": "hi"}])
+    ok(llm.LLMAdmiral._extract_json(text).get("thoughts") == "real",
+       "answer stranded in reasoning_content is rescued (last object wins)")
+    llm.urllib.request.urlopen = fake_urlopen
+
+    # 9. truncation while thinking blames the right knob
+    class _LenResp(_Resp):
+        def read(self):
+            return json.dumps({
+                "choices": [{"message": {"content": ""},
+                             "finish_reason": "length"}],
+                "usage": {"prompt_tokens": 1, "completion_tokens": 9}}).encode()
+
+    def len_urlopen(req, timeout=None):
+        SENT.append(json.loads(req.data))
+        return _LenResp()
+    fresh_ladder()
+    llm.urllib.request.urlopen = len_urlopen
+    try:
+        admiral("glm-9", think=True)._chat([{"role": "user", "content": "hi"}])
+        ok(False, "length finish raises TruncatedReply")
+    except llm.TruncatedReply as e:
+        ok("think_headroom" in str(e),
+           "think-mode truncation points at admirals.think_headroom")
+    llm.urllib.request.urlopen = fake_urlopen
 finally:
     llm.urllib.request.urlopen = _real
     with providers._LADDER_LOCK:

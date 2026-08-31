@@ -73,12 +73,14 @@ def make_bot(spec, adm):
             return BOTS[model]
         a = {**adm, **{k: spec[k] for k in
                        ("temperature", "max_tokens", "timeout_s", "think",
-                        "history_chars", "memo_chars", "scratchpad",
-                        "scratchpad_chars", "warmup_timeout_s", "base_prompt")
+                        "think_headroom", "history_chars", "memo_chars",
+                        "scratchpad", "scratchpad_chars", "warmup_timeout_s",
+                        "base_prompt")
                        if k in spec}}
         return LLMAdmiral(model, label=spec.get("label") or None,
                           temperature=a["temperature"], max_tokens=a["max_tokens"],
                           timeout=a["timeout_s"], think=a["think"],
+                          think_headroom=a.get("think_headroom"),
                           history_chars=a["history_chars"], memo_chars=a["memo_chars"],
                           prompt=str(spec.get("prompt", ""))[:a["memo_chars"]],
                           scratchpad=a["scratchpad"],
@@ -90,6 +92,7 @@ def make_bot(spec, adm):
         return LLMAdmiral(parts[1], label=parts[2] if len(parts) > 2 else None,
                           temperature=adm["temperature"], max_tokens=adm["max_tokens"],
                           timeout=adm["timeout_s"], think=adm["think"],
+                          think_headroom=adm.get("think_headroom"),
                           history_chars=adm["history_chars"],
                           memo_chars=adm["memo_chars"],
                           scratchpad=adm["scratchpad"],
