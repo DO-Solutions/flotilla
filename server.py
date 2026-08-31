@@ -1732,6 +1732,52 @@ def _showcase_job_done(job):
         pass
 
 
+def _showcase_publicize(job):
+    """Flip a RUNNING job public mid-flight. The 🌐 button used to route every
+    series through the static-bundle path, which has nothing to bundle until a
+    game lands — a live series link simply didn't work. This seeds the show/
+    prefix, mirrors any landed games, and backfills the current live stream as
+    chunk 1 so a viewer joining mid-game sees the action immediately; the aux
+    callback keeps appending chunks from there."""
+    if _showcase_cfg() is None:
+        return 400, {"error": "showcase not configured"}
+    job["public"] = True
+    _showcase_job_start(job)
+    roots = {"series": os.path.join(LIB, "series", job["name"]),
+             "tournament": os.path.join(LIB, "tournaments", job["name"])}
+    root = roots.get(job["mode"])
+    if root and os.path.isdir(root):
+        for r, _dirs, files in os.walk(root):
+            for fn in files:
+                if fn.endswith(".json"):
+                    rel = os.path.relpath(os.path.join(r, fn), root)
+                    _showcase_put_file(job, rel, os.path.join(r, fn))
+    try:
+        lf = os.path.join(LIB, "_work", job["id"], "live.jsonl")
+        if job.get("aux") and os.path.isfile(lf) and os.path.getsize(lf):
+            with open(lf, "rb") as fh:
+                _showcase_put(job, "live/00001.jsonl", fh.read(),
+                              "application/json")
+            with AUX_LOCK:
+                rec = AUX.get(job["id"])
+                if rec is not None:
+                    rec["show_chunks"] = max(1, rec.get("show_chunks", 0))
+            _showcase_put(job, "live/state.json", json.dumps(
+                {"chunks": 1, "state": "running",
+                 "game": job["games_done"] + 1,
+                 "games_expected": job.get("games_expected")}).encode(),
+                "application/json")
+    except Exception:
+        pass
+    _persist_jobs()
+    url = _show_url(job, "index.html")
+    entry = {"name": job["name"], "url": url, "bytes": 0,
+             "when": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())}
+    _showcase_list_update(
+        lambda pub: [x for x in pub if x.get("url") != url] + [entry])
+    return 200, {"ok": True, "url": url, "live": True}
+
+
 def _esc(s):
     """HTML-escape — the public hub embeds model-controlled names/winners; a
     raw admiral name was stored XSS on an anonymous-viewer page."""
@@ -3603,6 +3649,21 @@ class H(BaseHTTPRequestHandler):
                                             "SHOWCASE_* env"})
                 d = json.loads(body)
                 title = str(d.get("name") or "").strip()
+                # a LIVE job with this name takes the mid-flight path: flip it
+                # public and stream, instead of bundling games that don't
+                # exist yet (the pre-fix behavior of the 🌐 button on a
+                # running series)
+                nm_live = _san(str(d.get("series") or d.get("tournament")
+                                   or ""))
+                if nm_live:
+                    with JOBS_LOCK:
+                        lj = next((x for x in JOBS
+                                   if x.get("name") == nm_live
+                                   and x.get("state") in ("queued", "running",
+                                                          "paused")), None)
+                    if lj is not None:
+                        code, resp = _showcase_publicize(lj)
+                        return self._send(code, resp)
                 if d.get("tournament"):
                     # a tournament link is a PREFIX, not one file: the
                     # tournament page (as index.html), the player, and every

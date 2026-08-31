@@ -672,6 +672,42 @@ st, _ = req(f"/api/aux/{jid7}/done", {"series": {}},
 ok(st == 200 and server._job(jid7)["state"] == "done",
    "relaunched job completes through the normal callback flow")
 
+# ---- publicize a LIVE series mid-flight (2026-08-31) ----
+# The 🌐 button routed every series through the static-bundle path, which has
+# nothing to bundle before game 1 lands — a live-series link simply didn't
+# work. POST /api/showcase on a live name must flip the job public, seed the
+# show/ prefix, backfill the stream so far, and keep chunk numbering intact.
+st, r8 = req("/api/run", {"mode": "series", "seed": 11, "executor": "auxiliary",
+                          "bots": ["merchant", "corsair"],
+                          "series": {"games": 1, "memos": False},
+                          "name": "aux-golive"})
+jid8 = r8["job"]["id"]
+ok(r8["job"].get("public") is False, "job starts private")
+time.sleep(0.8)
+with server.AUX_LOCK:
+    b8 = server.AUX[jid8]["bearer"]
+st, _ = req(f"/api/aux/{jid8}/live", {"lines": [{"t": 99, "frames": []}]},
+            headers={"X-Aux-Token": b8})
+ok(st == 200, "pre-publicize live lines land (private: not mirrored)")
+ok(not any(k.startswith("show/aux-golive/") for k in PUT_KEYS),
+   "nothing mirrored while private")
+st, pub = req("/api/showcase", {"series": "aux-golive"})
+ok(st == 200 and pub.get("live") is True
+   and pub.get("url", "").endswith("show/aux-golive/index.html"),
+   f"publicize returns the live hub url ({pub.get('url', '?')})")
+ok(server._job(jid8).get("public") is True, "job flipped public")
+ok(any(k == "show/aux-golive/player.html" for k in PUT_KEYS),
+   "show prefix seeded with the player")
+ok(any(k == "show/aux-golive/live/00001.jsonl" for k in PUT_KEYS),
+   "stream so far backfilled as chunk 1")
+st, _ = req(f"/api/aux/{jid8}/live", {"lines": [{"t": 199, "frames": []}]},
+            headers={"X-Aux-Token": b8})
+ok(any(k == "show/aux-golive/live/00002.jsonl" for k in PUT_KEYS),
+   "post-publicize chunks continue from the backfill (00002)")
+st, _ = req(f"/api/aux/{jid8}/done", {"series": {}},
+            headers={"X-Aux-Token": b8})
+ok(st == 200, "publicized job completes")
+
 # ---- worker liveness (2026-08-15) ----
 # Before this the flagship had NO liveness signal: a worker that died without
 # posting /fail was indistinguishable from one thinking hard, and sat unnoticed
