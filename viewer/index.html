@@ -399,12 +399,15 @@
                 border-radius: var(--radius); padding: 8px 10px;
                 max-height: calc(100vh - 230px); display: flex;
                 flex-direction: column; overflow: hidden; }
-  /* treaties pinned ABOVE the transcript in their own scroll area — the chat
-     re-pinning to its newest line must never scroll the standing pacts away */
-  #parleyfeed .pacts { flex: 0 1 auto; max-height: 42%; overflow-y: auto; }
+  /* treaties pinned ABOVE the transcript — the chat re-pinning to its newest
+     line must never scroll the standing pacts away. The rail sizes to show
+     EVERY active pact (a 4-fleet game tops out at 6 tiles); the transcript
+     takes the remainder but keeps a floor, so only a truly overflowing rail
+     ever grows its own scrollbar. */
+  #parleyfeed .pacts { flex: 0 1 auto; overflow-y: auto; }
   #parleyfeed .pacts:not(:empty) { margin-bottom: 6px; padding-bottom: 2px;
     border-bottom: 1px solid var(--line); }
-  #parleyfeed .pchat { flex: 1 1 auto; min-height: 0; overflow-y: auto; }
+  #parleyfeed .pchat { flex: 1 1 120px; min-height: 90px; overflow-y: auto; }
   #parleyfeed .msg { font-size: 12px; margin-bottom: 7px; color: #d5deee;
                      border-left: 3px solid var(--mc, var(--dim));
                      padding-left: 7px; }
