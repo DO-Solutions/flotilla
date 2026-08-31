@@ -1,31 +1,31 @@
 {
  "configs": {
   "conquest": {
-   "match.json": "565c5063b0e7cc5a51165ae45196db29fe1035376724368a6a46d46595b7bb40"
+   "match.json": "a71735053011f8d6673c262dd2f403d8a8bbc7e9a2a53353ac9d7480e72563df"
   },
   "designs-yards": {
-   "match.json": "c126510504973c2b6c3ccc23b28fdc589f6f010be741bccd2423e9a8c133a9b9"
+   "match.json": "d97c1388c53f02b385f7f0a6f1cc8d16f90bf646e123b6bbbbbdcf2eb5000d79"
   },
   "match-basic": {
-   "match.json": "293c483c89ff834f8068181c464d3e6452cb1ebfa6e6f6a8db2df57f9470f569"
+   "match.json": "34d4168ae461ae608df32c0a3d37fb86a75e1aaeb7f4d2176101e6807988504b"
   },
   "series-2g": {
-   "g1.json": "ac59dc270c7dff923e3b5a1dc67ef465151cc90cc335867ed13f2dee663df1b0",
-   "g2.json": "ac59dc270c7dff923e3b5a1dc67ef465151cc90cc335867ed13f2dee663df1b0",
+   "g1.json": "ed1bc9e2e5abbd13d5505e741d35f9b706c77effa6f4a7ffc33c914efce2838a",
+   "g2.json": "ed1bc9e2e5abbd13d5505e741d35f9b706c77effa6f4a7ffc33c914efce2838a",
    "series.json": "a66873f06528b5cfaf78982f473fb6f1ca068815f679ec127a05ab251afb5483"
   },
   "teams-2v2": {
-   "match.json": "7e827ff5002cfb757ceb4f20081775f6907b979beaa76ffcc49166d3b7b74429"
+   "match.json": "3447a6f6e0de3411151811491ae3a72d9b0b6a8c1bb8fcdf18c05292fa1c2f9e"
   },
   "territory-1v1": {
-   "match.json": "dc763cb9556a9fa48ed041a32b507c3e0cfc2ee2f57ce3026a77be9a98e3fbea"
+   "match.json": "67ff2974014aad770a36cf81d5db97a096caa80f0d83c19e724b8375fee0545d"
   },
   "territory-4p": {
-   "match.json": "d6ffdc9a71336a9afeb568271f280880fae75abf8aa33112fc4483915d165752"
+   "match.json": "dda076d841171b7c384e6f757f039643fc4505b70196c8f57b0227c01e02b4b0"
   }
  },
  "perf": {
   "host": "cc-01",
-  "ticks_per_cpu_sec": 2739.7
+  "ticks_per_cpu_sec": 2678.6
  }
 }
