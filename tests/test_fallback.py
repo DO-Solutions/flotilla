@@ -173,5 +173,39 @@ ok(len(lad13.providers) == 1 and lad13.providers[0]["id"] == "digitalocean"
 os.environ.pop("FLOTILLA_PROVIDERS", None)
 os.environ.pop("DO_INFERENCE_KEY", None)
 
+
+
+# ---- per-provider concurrency slots (2026-08-31) ----
+import threading as _th
+import time as _time
+from providers import slot as _slot
+
+_p2 = {"id": "capped", "max_concurrent": 2}
+_active = []
+_peak = [0]
+_lk = _th.Lock()
+
+def _worker():
+    with _slot(_p2):
+        with _lk:
+            _active.append(1)
+            _peak[0] = max(_peak[0], len(_active))
+        _time.sleep(0.15)
+        with _lk:
+            _active.pop()
+
+_threads = [_th.Thread(target=_worker) for _ in range(5)]
+_t0 = _time.time()
+for _x in _threads: _x.start()
+for _x in _threads: _x.join()
+_el = _time.time() - _t0
+ok(_peak[0] <= 2, f"max_concurrent=2 never exceeds 2 in flight (peak {_peak[0]})")
+ok(_el >= 0.4, f"excess callers queued rather than ran (elapsed {_el:.2f}s)")
+_p0 = {"id": "open", "max_concurrent": 0}
+with _slot(_p0):
+    ok(True, "max_concurrent=0 is a no-op slot")
+with _slot({"id": "absent"}):
+    ok(True, "absent field is a no-op slot")
+
 print(f"FAILURES: {len(FAILS)}")
 sys.exit(1 if FAILS else 0)
