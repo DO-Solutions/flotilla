@@ -9,7 +9,7 @@ AttributeError three subsystems deep.
 
     from keelspring import contract
     contract.set_game(contract.Game(
-        name="flotilla",
+        name="mygame",
         engine=core.Engine,            # class: (players, seed=, max_ticks=,
                                        #   scenario=) -> engine; .run(),
                                        #   .replay(result), .freeze()/.thaw()
@@ -38,7 +38,16 @@ _REQUIRED = {
 # simply has no API card to append to prompts
 _OPTIONAL = {"api_reference": None,   # ship-language teaching card
              "presets": {},           # built-in unit classes {name: stats}
-             "ship_stats": ()}        # designer stat names, in display order
+             "ship_stats": (),        # designer stat names, in display order
+             "briefing": None,        # base admiral system prompt — the game's
+                                      # WORLD rules; engine falls back to a
+                                      # neutral minimum (llm.GENERIC_BRIEFING)
+             "moments": None,         # narration vocabulary for Historic
+                                      # Moments: .anchor_kinds (event kinds
+                                      # worth citing), .describe(event, nm) ->
+                                      # line|None, .persona (narrator opener)
+             "memo_style": None}      # game-flavored debrief guidance (the
+                                      # "write patterns, not places" examples)
 
 _game = None
 _binders = []
@@ -81,7 +90,7 @@ def game():
     if _game is None:
         raise RuntimeError(
             "no game registered — import the game's entry module first "
-            "(Flotilla: `import run_config` or `import llm`), or call "
+            "(e.g. `import run_config` or `import llm`), or call "
             "keelspring.contract.set_game() with your own Game")
     return _game
 

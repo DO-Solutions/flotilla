@@ -21,6 +21,7 @@ usage accounting, same "an error is a recorded fact, not a crash" posture —
 narration failing must never take down a finished run.
 """
 import json
+from types import SimpleNamespace
 
 from .llm import LLMAdmiral, TruncatedReply
 
@@ -37,55 +38,30 @@ def _names_map(replay):
 
 
 def _ev_line(e, names):
-    """One anchor line's description — a python cousin of the viewer's
-    describeEvent, kept to the kinds worth citing."""
+    """One anchor line's description — delegated to the game's vocabulary
+    (Game.moments.describe); the engine owns the anchor MACHINERY, the game
+    owns what an event is called."""
     nm = lambda fid: names.get(fid, f"fleet {fid}")   # noqa: E731
-    k = e.get("k")
-    if k == "flag_sunk":
-        by = nm(e["by"]) + " destroyed " if e.get("by") is not None else ""
-        return f"{by}{nm(e['fleet'])}'s flagship" + \
-            ("" if by else " went down") + " — ELIMINATED"
-    if k == "sink":
-        cls = e.get("preset", "ship")
-        if e.get("cause") == "scuttle":
-            return f"{nm(e['fleet'])} scuttled a {cls}"
-        if e.get("by") is not None:
-            return f"{nm(e['by'])} sank {nm(e['fleet'])}'s {cls}"
-        return f"{nm(e['fleet'])} lost a {cls}"
-    if k == "region":
-        if e.get("prev") is None:
-            return f"{nm(e['fleet'])} claimed {e.get('name')}"
-        return f"{nm(e['fleet'])} took {e.get('name')} from {nm(e['prev'])}"
-    if k == "signal":
-        return f"{nm(e['fleet'])} signalled return to port"
-    if k == "parley":
-        to = e.get("to")
-        to = "all" if not isinstance(to, int) else names.get(to, f"fleet {to}")
-        return f"{nm(e['fleet'])} → {to}: {str(e.get('text', ''))[:80]}"
-    if k == "design":
-        return f"{nm(e['fleet'])} designed the {e.get('name')}"
-    if k == "yard_built":
-        return f"{nm(e['fleet'])} opened a yard slot"
-    if k == "treaty":
-        if e.get("type") == "border":
-            return (f"{nm(e['fleet'])} and {nm(e['other'])} agreed a border "
-                    f"at {e.get('axis')}={e.get('line')}")
-        t = str(e.get("terms") or "")[:80]
-        return (f"{nm(e['fleet'])} and {nm(e['other'])} signed a "
-                "non-aggression pact" + (f' — "{t}"' if t else ""))
-    if k == "treaty_end":
-        if e.get("cause") == "aggression":
-            return (f"{nm(e['fleet'])} BROKE the pact with {nm(e['other'])} "
-                    "— sank a ship under it")
-        if e.get("cause") == "border":
-            return (f"{nm(e['fleet'])} crossed the agreed border and "
-                    f"{nm(e['other'])} saw it — treaty void")
-        return f"{nm(e['fleet'])} dissolved the treaty with {nm(e['other'])}"
-    return None
+    return _vocab().describe(e, nm)
 
 
-_ANCHOR_KINDS = ("flag_sunk", "sink", "region", "signal", "parley", "design",
-                 "yard_built", "treaty", "treaty_end")
+_NEUTRAL = SimpleNamespace(
+    anchor_kinds=("parley",),
+    describe=lambda e, nm: (f"{nm(e['fleet'])} sent a message"
+                            if e.get("k") == "parley" else None),
+    persona=("You are the historian for a strategy game played by LLM "
+             "agents. You write one player's TRUE story from the match "
+             "record — a spectator-facing arc with real turning points, "
+             "not a scoreboard recap and not fiction.\n\n"))
+
+
+def _vocab():
+    """The game's narration vocabulary (Game.moments), or the neutral
+    fallback — read at call time, same rule as the briefing."""
+    from . import contract
+    g = contract._game
+    v = getattr(g, "moments", None) if g is not None else None
+    return v or _NEUTRAL
 
 
 def anchors_for(replays):
@@ -95,7 +71,7 @@ def anchors_for(replays):
     keys, lines = set(), []
     for g, rp in enumerate(replays, 1):
         names = _names_map(rp)
-        evs = [e for e in rp.get("events", []) if e.get("k") in _ANCHOR_KINDS]
+        evs = [e for e in rp.get("events", []) if e.get("k") in _vocab().anchor_kinds]
         # keep every big beat; thin the chatter kinds evenly if over budget
         budget = max(10, MAX_ANCHOR_LINES // max(1, len(replays)))
         if len(evs) > budget:
@@ -182,12 +158,7 @@ def validate_beats(beats, anchor_keys, max_beats, extra=None):
     return kept, dropped
 
 
-_SYSTEM = """You are the fleet historian for FLOTILLA, a naval strategy game \
-played by LLM admirals. You write one admiral's TRUE story from the match \
-record — a spectator-facing arc with real turning points, not a scoreboard \
-recap and not fiction.
-
-HARD RULES:
+_RULES = """HARD RULES:
 - Ground every claim in the record you are given. The admiral's quoted \
 thoughts, memos and parley are your only window into what it felt — call it \
 surprised, frustrated, triumphant, resigned ONLY when its own words show it; \
@@ -206,7 +177,7 @@ Reply with ONLY a JSON object:
 def _narrate_one(bot, sys_extra, material, chars, max_beats):
     """One narrator call → parsed JSON, with the same retry/truncation posture
     as debrief(). Returns (obj_or_None, usage_dict)."""
-    msgs = [{"role": "system", "content": _SYSTEM + sys_extra
+    msgs = [{"role": "system", "content": _vocab().persona + _RULES + sys_extra
              + f"\nStory HARD LIMIT: {chars} characters. "
              f"At most {max_beats} beats — pick the ones that matter."},
             {"role": "user", "content": material}]

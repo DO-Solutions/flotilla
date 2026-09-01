@@ -2874,7 +2874,7 @@ class H(BaseHTTPRequestHandler):
             return self._send(200, _load_presets())
         if path == "/api/base-prompt":
             import llm as _llm
-            return self._send(200, {"suggested": _llm.SYSTEM})
+            return self._send(200, {"suggested": _llm._briefing()})
         if path == "/api/showcase":
             return self._send(200, {"enabled": _showcase_cfg() is not None,
                                     "published": _showcase_list()})
