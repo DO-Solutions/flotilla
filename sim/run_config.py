@@ -18,6 +18,7 @@ import bots                                # noqa: E402
 import series                              # noqa: E402
 import config_schema                       # noqa: E402
 import conn                                # noqa: E402
+import vocabulary                          # noqa: E402
 from keelspring import contract                # noqa: E402
 
 contract.set_game(contract.Game(
@@ -29,6 +30,10 @@ contract.set_game(contract.Game(
     api_reference=conn.api_reference,      # the ship-language teaching card
     presets=core.PRESETS,                  # built-in classes (designer/API)
     ship_stats=core.SHIP_STATS,            # designer stat names
+    briefing=vocabulary.BRIEFING,          # the world briefing, narration
+    moments=vocabulary.NARRATION,          # vocabulary, and memo guidance —
+    memo_style=vocabulary.MEMO_STYLE,      # all moved out of the engine in
+                                           # M0 (see sim/vocabulary.py)
 ))
 
 from keelspring import runner as _runner       # noqa: E402
